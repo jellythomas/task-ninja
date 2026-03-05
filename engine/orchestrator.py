@@ -194,6 +194,7 @@ class Orchestrator:
             branch_name=branch_name,
         )
 
+        mcp_cfg = self.config.get("mcp", {})
         worker = Worker(
             ticket_id=ticket_id,
             run_id=self._run_id,
@@ -205,6 +206,7 @@ class Orchestrator:
             claude_flags=claude_cfg.get("flags", ["--print"]),
             skip_permissions=claude_cfg.get("skip_permissions", True),
             execute_command=claude_cfg.get("execute_command", "/execute-jira-task"),
+            jira_status_mapping=mcp_cfg.get("jira_status_mapping", {}),
         )
 
         self._workers[ticket_id] = worker

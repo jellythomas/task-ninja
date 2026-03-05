@@ -4,9 +4,10 @@ import asyncio
 import os
 import signal
 import sys
-from typing import Callable, Optional
+from typing import Optional
 
 from engine.broadcaster import Broadcaster
+from engine.claude_helper import ClaudeHelper
 from engine.state import StateManager
 from models.ticket import TicketState
 
@@ -26,6 +27,7 @@ class Worker:
         claude_flags: list[str] = None,
         skip_permissions: bool = True,
         execute_command: str = "/execute-jira-task",
+        jira_status_mapping: dict = None,
     ):
         self.ticket_id = ticket_id
         self.run_id = run_id
@@ -37,6 +39,8 @@ class Worker:
         self.claude_flags = claude_flags or ["--print"]
         self.skip_permissions = skip_permissions
         self.execute_command = execute_command
+        self.jira_status_mapping = jira_status_mapping or {}
+        self.claude_helper = ClaudeHelper(claude_command, skip_permissions)
         self.process: Optional[asyncio.subprocess.Process] = None
         self._cancelled = False
 
@@ -54,6 +58,7 @@ class Worker:
             await self.broadcaster.broadcast_ticket_update(
                 self.run_id, self.ticket_id, TicketState.PLANNING
             )
+            await self._sync_jira_status("planning")
 
             # Spawn process
             self.process = await asyncio.create_subprocess_exec(
@@ -88,6 +93,7 @@ class Worker:
                     await self.broadcaster.broadcast_ticket_update(
                         self.run_id, self.ticket_id, TicketState.DEVELOPING
                     )
+                    await self._sync_jira_status("developing")
 
             # Wait for process to finish
             await self.process.wait()
@@ -101,6 +107,7 @@ class Worker:
                 await self.broadcaster.broadcast_ticket_update(
                     self.run_id, self.ticket_id, TicketState.REVIEW
                 )
+                await self._sync_jira_status("review")
                 return True
             else:
                 error = f"Claude CLI exited with code {self.process.returncode}"
@@ -148,3 +155,16 @@ class Worker:
         ]
         lower = line.lower()
         return any(s in lower for s in signals)
+
+    async def _sync_jira_status(self, board_state: str) -> None:
+        """Sync ticket status to Jira based on board state mapping."""
+        target = self.jira_status_mapping.get(board_state)
+        if not target:
+            return
+        try:
+            success = await self.claude_helper.transition_jira_issue(self.jira_key, target)
+            if success:
+                print(f"[worker] Synced {self.jira_key} -> {target} on Jira", file=sys.stderr)
+                await self.state.append_log(self.ticket_id, f"[jira] Transitioned to {target}")
+        except Exception as e:
+            print(f"[worker] Jira sync failed for {self.jira_key}: {e}", file=sys.stderr)
