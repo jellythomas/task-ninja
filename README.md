@@ -517,6 +517,7 @@ orchestrator:
 claude:
   command: "claude"                      # path to claude CLI
   flags: ["--print"]                     # headless mode flags
+  skip_permissions: true                 # --dangerously-skip-permissions (toggle in UI settings)
   execute_command: "/execute-jira-task"  # command to run per ticket
   pr_command: "/open-pr --draft"         # command for draft PR
 
@@ -579,6 +580,15 @@ database:
 - **Move back**: Drag a Review card back to Queued to re-implement with PR feedback.
 - **Delete**: Click delete on any card. Confirms, then removes from board.
 - **Switch terminal**: Click ticket tabs in the Live Terminal panel to view different worker outputs.
+
+### Settings (gear icon in config bar)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Max Parallel | 2 | Concurrent Claude workers (1-4) |
+| Skip Permissions | ON | Adds `--dangerously-skip-permissions` to Claude CLI. Turn OFF if you want manual approval per tool call (slower but safer). |
+| Worker Timeout | 30 min | Max time per ticket before auto-kill (0 = unlimited) |
+| Cleanup Worktrees | ON | Remove git worktrees after PR creation |
 
 ---
 

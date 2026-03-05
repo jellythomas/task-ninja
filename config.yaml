@@ -10,6 +10,7 @@ orchestrator:
 claude:
   command: "claude"
   flags: ["--print"]
+  skip_permissions: true                 # adds --dangerously-skip-permissions (toggle off in UI)
   execute_command: "/execute-jira-task"
   pr_command: "/open-pr --draft"
 
