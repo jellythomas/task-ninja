@@ -36,23 +36,49 @@ class Orchestrator:
         await self.state.update_run_status(run_id, RunStatus.RUNNING)
         await self.broadcaster.broadcast_run_status(run_id, RunStatus.RUNNING)
 
+        # Recover stale tickets: planning/developing with no live worker → back to queued
+        await self._recover_stale_tickets(run_id)
+
         print(f"[orchestrator] Started for run {run_id}", file=sys.stderr)
         asyncio.create_task(self._loop())
 
-    async def pause(self) -> None:
+    async def _recover_stale_tickets(self, run_id: str) -> None:
+        """Move orphaned planning/developing tickets back to queued."""
+        import os
+        for st in (TicketState.PLANNING, TicketState.DEVELOPING):
+            tickets = await self.state.get_tickets_by_state(run_id, st)
+            for ticket in tickets:
+                # If we don't have a live worker for this ticket, it's stale
+                if ticket.id not in self._workers:
+                    # Double-check: is the PID actually dead?
+                    if ticket.worker_pid:
+                        try:
+                            os.kill(ticket.worker_pid, 0)
+                            continue  # Process is alive, skip
+                        except OSError:
+                            pass  # Process is dead
+                    print(f"[orchestrator] Recovering stale ticket {ticket.jira_key} ({st}) -> queued", file=sys.stderr)
+                    await self.state.update_ticket_state(ticket.id, TicketState.QUEUED)
+                    await self.broadcaster.broadcast_ticket_update(run_id, ticket.id, TicketState.QUEUED)
+
+    async def pause(self, run_id: str = None) -> None:
         """Stop picking new tickets. Active workers continue."""
         self._running = False
-        if self._run_id:
-            await self.state.update_run_status(self._run_id, RunStatus.PAUSED)
-            await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.PAUSED)
+        rid = run_id or self._run_id
+        if rid:
+            self._run_id = rid
+            await self.state.update_run_status(rid, RunStatus.PAUSED)
+            await self.broadcaster.broadcast_run_status(rid, RunStatus.PAUSED)
         print("[orchestrator] Paused", file=sys.stderr)
 
-    async def resume(self) -> None:
+    async def resume(self, run_id: str = None) -> None:
         """Resume picking new tickets."""
-        if self._run_id:
+        rid = run_id or self._run_id
+        if rid:
+            self._run_id = rid
             self._running = True
-            await self.state.update_run_status(self._run_id, RunStatus.RUNNING)
-            await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.RUNNING)
+            await self.state.update_run_status(rid, RunStatus.RUNNING)
+            await self.broadcaster.broadcast_run_status(rid, RunStatus.RUNNING)
             asyncio.create_task(self._loop())
             print("[orchestrator] Resumed", file=sys.stderr)
 
@@ -152,18 +178,20 @@ class Orchestrator:
                 continue
             await self._spawn_worker(ticket.id, ticket.jira_key, run)
 
-        # Check if all done
-        all_tickets = await self.state.get_tickets_for_run(self._run_id)
-        all_terminal = all(
-            t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED, TicketState.PENDING}
-            for t in all_tickets
-        )
-        active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED} for t in all_tickets)
+        # Check if all done (only auto-complete if run is RUNNING, not PAUSED)
+        run = await self.state.get_run(self._run_id)
+        if run and run.status == RunStatus.RUNNING:
+            all_tickets = await self.state.get_tickets_for_run(self._run_id)
+            all_terminal = all(
+                t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED, TicketState.PENDING}
+                for t in all_tickets
+            )
+            active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED} for t in all_tickets)
 
-        if all_terminal and not active:
-            self._running = False
-            await self.state.update_run_status(self._run_id, RunStatus.COMPLETED)
-            await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.COMPLETED)
+            if all_terminal and not active:
+                self._running = False
+                await self.state.update_run_status(self._run_id, RunStatus.COMPLETED)
+                await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.COMPLETED)
 
     async def _spawn_worker(self, ticket_id: str, jira_key: str, run: object) -> None:
         """Spawn a Claude CLI worker for a ticket."""

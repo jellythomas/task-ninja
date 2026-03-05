@@ -48,6 +48,20 @@ async def lifespan(app: FastAPI):
     db_path = config.get("database", {}).get("path", "autonomous_task.db")
     await init_db(db_path)
     print(f"[server] Database initialized at {db_path}", file=sys.stderr)
+
+    # Restore orchestrator state from DB on startup
+    runs = await state.list_runs()
+    for run in runs:
+        if run.status == RunStatus.RUNNING:
+            print(f"[server] Restoring running state for run {run.id}", file=sys.stderr)
+            await orchestrator.start(run.id)
+            break
+        elif run.status in (RunStatus.PAUSED, RunStatus.COMPLETED):
+            # Restore run_id so pause/resume work after server restart
+            orchestrator._run_id = run.id
+            print(f"[server] Restored run_id {run.id} (status: {run.status})", file=sys.stderr)
+            break
+
     run_scheduler.start()
     await run_scheduler.load_existing_schedules()
     yield
@@ -122,13 +136,13 @@ async def start_run(run_id: str):
 
 @app.post("/api/runs/{run_id}/pause")
 async def pause_run(run_id: str):
-    await orchestrator.pause()
+    await orchestrator.pause(run_id)
     return {"status": "paused"}
 
 
 @app.post("/api/runs/{run_id}/resume")
 async def resume_run(run_id: str):
-    await orchestrator.resume()
+    await orchestrator.resume(run_id)
     return {"status": "resumed"}
 
 
@@ -136,7 +150,7 @@ async def resume_run(run_id: str):
 
 @app.post("/api/runs/{run_id}/load-epic")
 async def load_epic(run_id: str, req: LoadEpicRequest):
-    """Load tickets from a Jira epic via Claude CLI + MCP tools."""
+    """Load tickets from a Jira epic via Claude CLI + MCP tools. Returns data without creating DB records."""
     run = await state.get_run(run_id)
     if not run:
         raise HTTPException(404, "Run not found")
@@ -146,26 +160,26 @@ async def load_epic(run_id: str, req: LoadEpicRequest):
     # Fetch epic children using Claude CLI + mcp-atlassian-with-bitbucket
     children = await claude_helper.fetch_epic_children(req.epic_key)
 
-    # Add discovered tickets as pending (user can cherry-pick in UI)
-    added = []
+    # Return ticket data without persisting — user selects in modal, then add-tickets creates them
+    tickets = []
     for child in children:
         key = child.get("key", "").strip().upper()
         if not key:
             continue
+        # Check if already on the board
         existing = await state.get_ticket_by_jira_key(run_id, key)
-        if existing:
-            continue
-        summary = child.get("summary")
-        ticket = await state.add_ticket(run_id, key, summary=summary, state=TicketState.PENDING)
-        added.append(ticket.model_dump())
-        await broadcaster.broadcast_ticket_update(run_id, ticket.id, TicketState.PENDING)
+        tickets.append({
+            "jira_key": key,
+            "summary": child.get("summary"),
+            "status": child.get("status", "To Do"),
+            "already_added": existing is not None,
+        })
 
     return {
         "status": "epic_loaded",
         "epic_key": req.epic_key,
-        "found": len(children),
-        "added": len(added),
-        "tickets": added,
+        "found": len(tickets),
+        "tickets": tickets,
     }
 
 
@@ -177,6 +191,7 @@ async def add_tickets(run_id: str, req: AddTicketsRequest):
         raise HTTPException(404, "Run not found")
 
     added = []
+    summaries = req.summaries or {}
     for key in req.keys:
         key = key.strip().upper()
         if not key:
@@ -184,7 +199,8 @@ async def add_tickets(run_id: str, req: AddTicketsRequest):
         existing = await state.get_ticket_by_jira_key(run_id, key)
         if existing:
             continue
-        ticket = await state.add_ticket(run_id, key, state=TicketState.QUEUED)
+        summary = summaries.get(key)
+        ticket = await state.add_ticket(run_id, key, summary=summary, state=TicketState.QUEUED)
         added.append(ticket.model_dump())
         await broadcaster.broadcast_ticket_update(run_id, ticket.id, TicketState.QUEUED)
 
@@ -300,4 +316,4 @@ if __name__ == "__main__":
     host = config.get("server", {}).get("host", "127.0.0.1")
     port = config.get("server", {}).get("port", 8420)
     print(f"[server] Starting at http://{host}:{port}", file=sys.stderr)
-    uvicorn.run("server:app", host=host, port=port, reload=True)
+    uvicorn.run("server:app", host=host, port=port, reload=False)

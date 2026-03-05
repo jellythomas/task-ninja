@@ -9,7 +9,7 @@ class GitManager:
     """Creates and cleans up git worktrees for isolated ticket work."""
 
     def __init__(self, project_path: str, worktree_dir: str = ".worktrees", branch_prefix: str = "feat"):
-        self.project_path = Path(project_path)
+        self.project_path = Path(project_path).expanduser().resolve()
         self.worktree_base = self.project_path / worktree_dir
         self.branch_prefix = branch_prefix
 

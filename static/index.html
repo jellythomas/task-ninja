@@ -173,7 +173,7 @@
                      :data-ticket-id="ticket.id"
                      x-data="{ expanded: false }">
                   <!-- Main card -->
-                  <div class="p-3" @click="expanded = !expanded; if(['planning','developing','failed'].includes(ticket.state)) activeTerminal = ticket.id">
+                  <div class="p-3" @click="expanded = !expanded; if(['planning','developing','failed'].includes(ticket.state)) switchTerminal(ticket.id)">
                     <!-- Header -->
                     <div class="flex items-center justify-between mb-1.5">
                       <a :href="'https://mfrlab.atlassian.net/browse/' + ticket.jira_key" target="_blank" @click.stop
@@ -273,7 +273,7 @@
       <div class="flex items-center border-b border-gray-800 px-2 overflow-x-auto">
         <span class="text-xs text-gray-600 px-2 py-2 flex-shrink-0">Terminal</span>
         <template x-for="tab in terminalTabs" :key="tab.id">
-          <button @click="activeTerminal = tab.id" :class="activeTerminal === tab.id ? 'bg-gray-800 text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 hover:text-gray-300'" class="px-3 py-2 text-xs font-mono flex items-center gap-1.5 transition flex-shrink-0">
+          <button @click="switchTerminal(tab.id)" :class="activeTerminal === tab.id ? 'bg-gray-800 text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 hover:text-gray-300'" class="px-3 py-2 text-xs font-mono flex items-center gap-1.5 transition flex-shrink-0">
             <div :class="{
               'bg-emerald-500 animate-pulse-dot': tab.state === 'planning' || tab.state === 'developing',
               'bg-blue-500': tab.state === 'review',
@@ -286,8 +286,8 @@
       </div>
       <!-- Terminal Output -->
       <div class="flex-1 overflow-y-auto p-3 font-mono text-xs scrollbar-thin" id="terminal-output">
-        <template x-for="log in activeTerminalLogs" :key="log.timestamp">
-          <div class="text-gray-400 leading-5"><span class="text-gray-600 select-none" x-text="log.timestamp?.split('T')[1]?.split('.')[0] || ''"></span> <span x-text="log.line"></span></div>
+        <template x-for="(log, idx) in activeTerminalLogs" :key="idx">
+          <div class="text-gray-400 leading-5"><span class="text-gray-600 select-none" x-text="((log.timestamp || '').replace(' ', 'T').split('T')[1] || '').split('.')[0]"></span> <span x-text="log.line"></span></div>
         </template>
         <template x-if="activeTerminalLogs.length === 0">
           <div class="text-gray-600 italic">No output yet. Select a running ticket to view logs.</div>
@@ -323,20 +323,25 @@
           Showing <span class="text-gray-300" x-text="filteredEpicTickets.length"></span>
           of <span class="text-gray-300" x-text="epicTickets.length"></span> tickets
         </span>
-        <span class="text-[11px] text-blue-400" x-text="epicTickets.filter(t => t.selected).length + ' selected'"></span>
+        <span class="text-[11px] text-blue-400" x-text="epicTickets.filter(t => t.selected && !t.alreadyAdded).length + ' selected'"></span>
       </div>
       <div class="flex-1 overflow-y-auto p-4 space-y-1">
         <template x-for="t in filteredEpicTickets" :key="t.key">
-          <label class="flex items-center gap-3 p-2.5 rounded-lg hover:bg-gray-800/50 cursor-pointer transition">
-            <input type="checkbox" x-model="t.selected" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 flex-shrink-0">
+          <label :class="{'opacity-50': t.alreadyAdded}" class="flex items-center gap-3 p-2.5 rounded-lg hover:bg-gray-800/50 cursor-pointer transition">
+            <input type="checkbox" x-model="t.selected" :disabled="t.alreadyAdded" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 flex-shrink-0">
             <span class="text-sm font-mono text-blue-400 flex-shrink-0 w-20" x-text="t.key"></span>
             <span class="text-sm text-gray-300 truncate flex-1" x-text="t.summary"></span>
-            <span :class="{
-              'text-green-400 bg-green-900/30': t.status === 'Done',
-              'text-blue-400 bg-blue-900/30': t.status === 'In Progress' || t.status === 'Pending',
-              'text-gray-400 bg-gray-800': t.status === 'To Do' || t.status === 'Open',
-              'text-amber-400 bg-amber-900/30': t.status === 'In Review',
-            }" class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" x-text="t.status"></span>
+            <template x-if="t.alreadyAdded">
+              <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 text-emerald-400 bg-emerald-900/30">On Board</span>
+            </template>
+            <template x-if="!t.alreadyAdded">
+              <span :class="{
+                'text-green-400 bg-green-900/30': t.status === 'Done',
+                'text-blue-400 bg-blue-900/30': t.status === 'In Progress',
+                'text-gray-400 bg-gray-800': t.status === 'To Do' || t.status === 'Open',
+                'text-amber-400 bg-amber-900/30': t.status === 'In Review',
+              }" class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" x-text="t.status"></span>
+            </template>
           </label>
         </template>
         <template x-if="filteredEpicTickets.length === 0 && epicTickets.length > 0">
@@ -354,7 +359,7 @@
           <button @click="showEpicModal = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Cancel</button>
           <button @click="queueSelectedEpicTickets()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
             Queue Selected
-            <span class="bg-blue-500/50 px-1.5 py-0.5 rounded text-[10px]" x-text="epicTickets.filter(t => t.selected).length"></span>
+            <span class="bg-blue-500/50 px-1.5 py-0.5 rounded text-[10px]" x-text="epicTickets.filter(t => t.selected && !t.alreadyAdded).length"></span>
           </button>
         </div>
       </div>
@@ -407,6 +412,7 @@
         confirmModal: { show: false, title: '', message: '', ticketId: null },
         activeTerminal: null,
         terminalLogs: {},  // ticket_id -> logs[]
+        terminalFetched: {},  // ticket_id -> true if logs loaded from API
         settings: {
           skipPermissions: true,
           workerTimeout: 30,
@@ -432,6 +438,12 @@
             this.currentRun = runs[0];
             await this.loadRunTickets();
             this.connectSSE();
+
+            // Auto-select first active ticket for terminal and load its logs
+            const active = this.tickets.find(t => ['planning', 'developing'].includes(t.state));
+            if (active) {
+              await this.switchTerminal(active.id);
+            }
           }
 
           // Init sortable on each column after DOM ready
@@ -439,6 +451,7 @@
 
           // Update elapsed times every 5 seconds via reactive tick
           setInterval(() => this.tick++, 5000);
+
         },
 
         initSortable() {
@@ -518,6 +531,28 @@
           return this.terminalLogs[this.activeTerminal] || [];
         },
 
+        async fetchLogsForTicket(ticketId, force = false) {
+          if (!ticketId) return;
+          if (!force && this.terminalFetched[ticketId] && (this.terminalLogs[ticketId]?.length > 0)) return;
+          const result = await this.api('GET', `/api/logs/${ticketId}?tail=500`);
+          if (result && result.logs && result.logs.length > 0) {
+            this.terminalFetched[ticketId] = true;
+            const existing = this.terminalLogs[ticketId] || [];
+            const lastApiTs = result.logs[result.logs.length - 1]?.timestamp;
+            const newFromSSE = existing.filter(l => l.timestamp > lastApiTs);
+            // Replace entire object to trigger Alpine.js reactivity
+            this.terminalLogs = { ...this.terminalLogs, [ticketId]: [...result.logs, ...newFromSSE] };
+          }
+        },
+
+
+        async switchTerminal(ticketId) {
+          this.activeTerminal = ticketId;
+          // Always fetch if no logs yet, or force on explicit switch
+          const hasLogs = (this.terminalLogs[ticketId]?.length || 0) > 0;
+          await this.fetchLogsForTicket(ticketId, !hasLogs);
+        },
+
         // API
         async api(method, path, body = null) {
           try {
@@ -566,15 +601,14 @@
           // Fetch epic children via API (uses Claude CLI + MCP tools)
           const result = await this.api('POST', `/api/runs/${this.currentRun.id}/load-epic`, { epic_key: this.epicKey });
           if (result && result.tickets && result.tickets.length > 0) {
-            // Tickets added as pending — user must explicitly select which to queue
+            // Data only — no DB records created. User selects, then add-tickets creates them.
             this.epicTickets = result.tickets.map(t => ({
               key: t.jira_key,
               summary: t.summary || t.jira_key,
-              status: 'Pending',
+              status: t.status || 'To Do',
               selected: false,
-              id: t.id,
+              alreadyAdded: t.already_added || false,
             }));
-            await this.loadRunTickets();
           } else if (result && result.found === 0) {
             this.epicTickets = [
               { key: this.epicKey, summary: 'No tickets found in this epic', status: 'Empty', selected: false }
@@ -600,17 +634,20 @@
         },
 
         async queueSelectedEpicTickets() {
-          const selected = this.epicTickets.filter(t => t.selected && t.id);
+          const selected = this.epicTickets.filter(t => t.selected && !t.alreadyAdded);
           if (selected.length === 0) {
             alert('No tickets selected. Use checkboxes or "Select Visible" to pick tickets.');
             return;
           }
 
-          // Only move selected tickets from pending → queued
-          for (const t of selected) {
-            await this.moveTicket(t.id, 'queued');
+          // Create tickets in DB via add-tickets (only selected ones)
+          const keys = selected.map(t => t.key);
+          const summaries = {};
+          selected.forEach(t => { summaries[t.key] = t.summary; });
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, { keys, summaries });
+          if (result && result.tickets) {
+            this.tickets.push(...result.tickets);
           }
-          // Unselected tickets stay as Pending on the board for later
 
           this.showEpicModal = false;
           this.epicFilter = { search: '', activeTags: [] };
@@ -631,10 +668,10 @@
           if (visibleOnly) {
             const visibleKeys = new Set(this.filteredEpicTickets.map(t => t.key));
             this.epicTickets.forEach(t => {
-              if (visibleKeys.has(t.key)) t.selected = checked;
+              if (visibleKeys.has(t.key) && !t.alreadyAdded) t.selected = checked;
             });
           } else {
-            this.epicTickets.forEach(t => t.selected = checked);
+            this.epicTickets.forEach(t => { if (!t.alreadyAdded) t.selected = checked; });
           }
         },
 
@@ -717,8 +754,25 @@
 
         // SSE
         connectSSE() {
-          if (!this.currentRun || this.eventSource) return;
-          this.eventSource = new EventSource(`/api/stream/${this.currentRun.id}`);
+          if (!this.currentRun) return;
+          // Close existing connection
+          if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+          }
+
+          const runId = this.currentRun.id;
+          this.eventSource = new EventSource(`/api/stream/${runId}`);
+
+          this.eventSource.onopen = () => {
+            console.log('[SSE] Connected');
+            // Reload tickets and logs to catch updates missed during reconnect
+            this.loadRunTickets();
+            if (this.activeTerminal) {
+              this.fetchLogsForTicket(this.activeTerminal, true);
+            }
+          };
+
           this.eventSource.onmessage = (event) => {
             const { event: evtType, data } = JSON.parse(event.data);
 
@@ -727,26 +781,20 @@
               if (idx >= 0) {
                 const updates = { ...data };
                 delete updates.ticket_id;
-                // Only update state if provided
                 if (!updates.state) delete updates.state;
                 this.tickets[idx] = { ...this.tickets[idx], ...updates };
               }
-              // Auto-switch terminal to active ticket
               if (data.state && ['planning', 'developing'].includes(data.state)) {
-                this.activeTerminal = data.ticket_id;
+                this.switchTerminal(data.ticket_id);
               }
             }
 
             if (evtType === 'log') {
-              if (!this.terminalLogs[data.ticket_id]) {
-                this.terminalLogs[data.ticket_id] = [];
-              }
-              this.terminalLogs[data.ticket_id].push({ timestamp: new Date().toISOString(), line: data.line });
-              // Keep last 500 lines
-              if (this.terminalLogs[data.ticket_id].length > 500) {
-                this.terminalLogs[data.ticket_id] = this.terminalLogs[data.ticket_id].slice(-500);
-              }
-              // Auto-scroll terminal
+              const logs = [...(this.terminalLogs[data.ticket_id] || [])];
+              logs.push({ timestamp: new Date().toISOString(), line: data.line });
+              const trimmed = logs.length > 500 ? logs.slice(-500) : logs;
+              // Replace entire object to trigger Alpine.js reactivity
+              this.terminalLogs = { ...this.terminalLogs, [data.ticket_id]: trimmed };
               this.$nextTick(() => {
                 const el = document.getElementById('terminal-output');
                 if (el) el.scrollTop = el.scrollHeight;
@@ -760,6 +808,13 @@
             if (evtType === 'ticket_deleted') {
               this.tickets = this.tickets.filter(t => t.id !== data.ticket_id);
             }
+          };
+
+          this.eventSource.onerror = () => {
+            console.log('[SSE] Disconnected, reconnecting in 3s...');
+            this.eventSource.close();
+            this.eventSource = null;
+            setTimeout(() => this.connectSSE(), 3000);
           };
         },
       };

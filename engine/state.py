@@ -237,6 +237,12 @@ class StateManager:
                 "INSERT INTO logs (ticket_id, line) VALUES (?, ?)",
                 (ticket_id, line),
             )
+            # Auto-trim: keep only last 500 lines per ticket in DB
+            await db.execute(
+                "DELETE FROM logs WHERE ticket_id = ? AND id NOT IN "
+                "(SELECT id FROM logs WHERE ticket_id = ? ORDER BY id DESC LIMIT 500)",
+                (ticket_id, ticket_id),
+            )
             await db.commit()
 
     async def get_logs(self, ticket_id: str, tail: int = 200) -> list[dict]:
