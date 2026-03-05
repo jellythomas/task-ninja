@@ -361,6 +361,34 @@
     </div>
   </div>
 
+  <!-- Confirm Delete Modal -->
+  <div x-show="confirmModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="confirmModal.show = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm mx-4 overflow-hidden">
+      <div class="px-5 py-4">
+        <h3 class="text-base font-semibold text-white" x-text="confirmModal.title"></h3>
+        <p class="text-sm text-gray-400 mt-2" x-text="confirmModal.message"></p>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
+        <button @click="confirmModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition rounded-lg">Cancel</button>
+        <button @click="confirmDelete()" class="bg-red-600 hover:bg-red-700 px-4 py-1.5 text-sm rounded-lg font-medium transition text-white">Remove</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Delete Modal -->
+  <div x-show="confirmModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="confirmModal.show = false" @keydown.escape.window="confirmModal.show = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm mx-4 overflow-hidden">
+      <div class="px-5 py-4">
+        <h3 class="text-base font-semibold text-white" x-text="confirmModal.title"></h3>
+        <p class="text-sm text-gray-400 mt-2" x-text="confirmModal.message"></p>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
+        <button @click="confirmModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition rounded-lg">Cancel</button>
+        <button @click="confirmDelete()" class="bg-red-600 hover:bg-red-700 px-4 py-1.5 text-sm rounded-lg font-medium transition text-white">Remove</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     function app() {
       return {
@@ -376,6 +404,7 @@
         epicTickets: [],
         epicFilter: { search: '', activeTags: [] },
         boardFilter: '',
+        confirmModal: { show: false, title: '', message: '', ticketId: null },
         activeTerminal: null,
         terminalLogs: {},  // ticket_id -> logs[]
         settings: {
@@ -628,8 +657,24 @@
           await this.loadRunTickets();
         },
 
-        async deleteTicket(ticketId) {
-          if (!confirm('Remove this ticket from the board?')) return;
+        deleteTicket(ticketId) {
+          const ticket = this.tickets.find(t => t.id === ticketId);
+          const key = ticket ? ticket.jira_key : ticketId;
+          const isActive = ticket && ['planning', 'developing'].includes(ticket.state);
+          this.confirmModal = {
+            show: true,
+            title: `Remove ${key}?`,
+            message: isActive
+              ? `This will kill the running worker and remove ${key} from the board. This cannot be undone.`
+              : `Remove ${key} from the board? You can re-add it later.`,
+            ticketId,
+          };
+        },
+
+        async confirmDelete() {
+          const ticketId = this.confirmModal.ticketId;
+          this.confirmModal.show = false;
+          if (!ticketId) return;
           await this.api('DELETE', `/api/tickets/${ticketId}`);
           this.tickets = this.tickets.filter(t => t.id !== ticketId);
         },

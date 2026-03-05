@@ -20,6 +20,16 @@ class GitManager:
 
         self.worktree_base.mkdir(parents=True, exist_ok=True)
 
+        # Clean up existing worktree if it exists (from a previous failed run)
+        if worktree_path.exists():
+            try:
+                await self._run_git("worktree", "remove", str(worktree_path), "--force")
+            except RuntimeError:
+                # If git worktree remove fails, force-remove the directory
+                import shutil
+                shutil.rmtree(str(worktree_path), ignore_errors=True)
+            await self._run_git("worktree", "prune")
+
         # Check if branch exists
         proc = await asyncio.create_subprocess_exec(
             "git", "branch", "--list", branch_name,
