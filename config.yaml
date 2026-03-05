@@ -1,0 +1,29 @@
+server:
+  host: "127.0.0.1"
+  port: 8420
+
+orchestrator:
+  max_parallel: 2
+  poll_interval: 5
+  worker_timeout: 1800  # 30 min, 0 = unlimited
+
+claude:
+  command: "claude"
+  flags: ["--print"]
+  execute_command: "/execute-jira-task"
+  pr_command: "/open-pr --draft"
+
+jira:
+  status_mapping:
+    planning: "In Progress"
+    developing: "In Progress"
+    review: "In Review"
+    done: "Done"
+
+git:
+  worktree_dir: ".worktrees"
+  branch_prefix: "feat"
+  cleanup_worktrees: true
+
+database:
+  path: "autonomous_task.db"
