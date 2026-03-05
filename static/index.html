@@ -537,12 +537,12 @@
           // Fetch epic children via API (uses Claude CLI + MCP tools)
           const result = await this.api('POST', `/api/runs/${this.currentRun.id}/load-epic`, { epic_key: this.epicKey });
           if (result && result.tickets && result.tickets.length > 0) {
-            // Tickets were added as pending — show them for confirmation
+            // Tickets added as pending — user must explicitly select which to queue
             this.epicTickets = result.tickets.map(t => ({
               key: t.jira_key,
               summary: t.summary || t.jira_key,
               status: 'Pending',
-              selected: true,
+              selected: false,
               id: t.id,
             }));
             await this.loadRunTickets();
@@ -571,23 +571,20 @@
         },
 
         async queueSelectedEpicTickets() {
-          const selected = this.epicTickets.filter(t => t.selected);
-          if (selected.length === 0) return;
+          const selected = this.epicTickets.filter(t => t.selected && t.id);
+          if (selected.length === 0) {
+            alert('No tickets selected. Use checkboxes or "Select Visible" to pick tickets.');
+            return;
+          }
 
-          // Move selected pending tickets to queued
+          // Only move selected tickets from pending → queued
           for (const t of selected) {
-            if (t.id) {
-              await this.moveTicket(t.id, 'queued');
-            }
+            await this.moveTicket(t.id, 'queued');
           }
-          // Remove unselected pending tickets
-          const unselected = this.epicTickets.filter(t => !t.selected && t.id);
-          for (const t of unselected) {
-            await this.api('DELETE', `/api/tickets/${t.id}`);
-            this.tickets = this.tickets.filter(tk => tk.id !== t.id);
-          }
+          // Unselected tickets stay as Pending on the board for later
 
           this.showEpicModal = false;
+          this.epicFilter = { search: '', activeTags: [] };
           await this.loadRunTickets();
           this.$nextTick(() => this.initSortable());
         },
