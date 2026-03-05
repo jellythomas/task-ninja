@@ -27,7 +27,7 @@ class RunStatus(str, Enum):
 # Valid state transitions
 VALID_TRANSITIONS = {
     TicketState.PENDING: {TicketState.QUEUED, TicketState.PENDING},
-    TicketState.QUEUED: {TicketState.PLANNING, TicketState.PENDING, TicketState.QUEUED},
+    TicketState.QUEUED: {TicketState.PLANNING, TicketState.PENDING, TicketState.QUEUED, TicketState.FAILED},
     TicketState.PLANNING: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.FAILED, TicketState.PENDING},
     TicketState.DEVELOPING: {TicketState.REVIEW, TicketState.QUEUED, TicketState.FAILED, TicketState.PENDING},
     TicketState.REVIEW: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.DONE, TicketState.PENDING},
