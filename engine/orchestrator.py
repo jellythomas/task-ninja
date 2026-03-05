@@ -207,6 +207,8 @@ class Orchestrator:
             skip_permissions=claude_cfg.get("skip_permissions", True),
             execute_command=claude_cfg.get("execute_command", "/execute-jira-task"),
             jira_status_mapping=mcp_cfg.get("jira_status_mapping", {}),
+            auto_create_pr=claude_cfg.get("auto_create_pr", True),
+            pr_base_branch=git_cfg.get("base_branch", "master"),
         )
 
         self._workers[ticket_id] = worker

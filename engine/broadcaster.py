@@ -30,13 +30,12 @@ class Broadcaster:
         for queue in self._subscribers.get(run_id, []):
             await queue.put(message)
 
-    async def broadcast_ticket_update(self, run_id: str, ticket_id: str, state: str, **extra) -> None:
-        """Broadcast a ticket state change."""
-        await self.broadcast(run_id, "ticket_update", {
-            "ticket_id": ticket_id,
-            "state": state,
-            **extra,
-        })
+    async def broadcast_ticket_update(self, run_id: str, ticket_id: str, state: str = None, **extra) -> None:
+        """Broadcast a ticket update (state change, PR URL, etc)."""
+        data = {"ticket_id": ticket_id, **extra}
+        if state is not None:
+            data["state"] = state
+        await self.broadcast(run_id, "ticket_update", data)
 
     async def broadcast_log(self, run_id: str, ticket_id: str, line: str) -> None:
         """Broadcast a log line from a worker."""

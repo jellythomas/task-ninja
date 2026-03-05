@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import signal
 import sys
 from typing import Optional
@@ -28,6 +29,8 @@ class Worker:
         skip_permissions: bool = True,
         execute_command: str = "/execute-jira-task",
         jira_status_mapping: dict = None,
+        auto_create_pr: bool = True,
+        pr_base_branch: str = "master",
     ):
         self.ticket_id = ticket_id
         self.run_id = run_id
@@ -40,9 +43,12 @@ class Worker:
         self.skip_permissions = skip_permissions
         self.execute_command = execute_command
         self.jira_status_mapping = jira_status_mapping or {}
+        self.auto_create_pr = auto_create_pr
+        self.pr_base_branch = pr_base_branch
         self.claude_helper = ClaudeHelper(claude_command, skip_permissions)
         self.process: Optional[asyncio.subprocess.Process] = None
         self._cancelled = False
+        self._detected_pr_url: Optional[str] = None
 
     async def run(self) -> bool:
         """Execute the ticket. Returns True if successful."""
@@ -86,6 +92,15 @@ class Worker:
                 await self.state.append_log(self.ticket_id, line)
                 await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, line)
 
+                # Detect PR URL in output
+                pr_url = self._extract_pr_url(line)
+                if pr_url:
+                    self._detected_pr_url = pr_url
+                    await self.state.update_ticket(self.ticket_id, pr_url=pr_url)
+                    await self.broadcaster.broadcast_ticket_update(
+                        self.run_id, self.ticket_id, None, pr_url=pr_url
+                    )
+
                 # Detect phase transition to developing
                 if not moved_to_developing and self._is_developing_signal(line):
                     moved_to_developing = True
@@ -102,6 +117,10 @@ class Worker:
                 return False
 
             if self.process.returncode == 0:
+                # Auto-create draft PR if not already detected from output
+                if self.auto_create_pr and not self._detected_pr_url:
+                    await self._create_draft_pr()
+
                 # Move to review
                 await self.state.update_ticket_state(self.ticket_id, TicketState.REVIEW)
                 await self.broadcaster.broadcast_ticket_update(
@@ -155,6 +174,49 @@ class Worker:
         ]
         lower = line.lower()
         return any(s in lower for s in signals)
+
+    def _extract_pr_url(self, line: str) -> Optional[str]:
+        """Extract PR/pull-request URL from output line."""
+        patterns = [
+            r'(https?://bitbucket\.org/[^\s]+/pull-requests/\d+)',
+            r'(https?://github\.com/[^\s]+/pull/\d+)',
+            r'(https?://[^\s]*pull[_-]?request[^\s]*\d+)',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                return match.group(1)
+        return None
+
+    async def _create_draft_pr(self) -> None:
+        """Create a draft PR after successful execution."""
+        try:
+            ticket = await self.state.get_ticket(self.ticket_id)
+            if not ticket or not ticket.branch_name:
+                return
+
+            await self.state.append_log(self.ticket_id, "[pr] Creating draft pull request...")
+            await self.broadcaster.broadcast_log(
+                self.run_id, self.ticket_id, "[pr] Creating draft pull request..."
+            )
+
+            result = await self.claude_helper.create_draft_pr(
+                self.jira_key, ticket.branch_name, self.worktree_path, self.pr_base_branch
+            )
+            if result and result.get("url"):
+                pr_url = result["url"]
+                pr_id = result.get("id")
+                await self.state.update_ticket(self.ticket_id, pr_url=pr_url, pr_number=pr_id)
+                await self.broadcaster.broadcast_ticket_update(
+                    self.run_id, self.ticket_id, None, pr_url=pr_url
+                )
+                await self.state.append_log(self.ticket_id, f"[pr] Draft PR created: {pr_url}")
+                print(f"[worker] Draft PR created for {self.jira_key}: {pr_url}", file=sys.stderr)
+            else:
+                await self.state.append_log(self.ticket_id, "[pr] Failed to create draft PR")
+        except Exception as e:
+            print(f"[worker] PR creation failed for {self.jira_key}: {e}", file=sys.stderr)
+            await self.state.append_log(self.ticket_id, f"[pr] Error: {e}")
 
     async def _sync_jira_status(self, board_state: str) -> None:
         """Sync ticket status to Jira based on board state mapping."""
