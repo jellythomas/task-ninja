@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autonomous Atlassian Task</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: { 50: '#f8fafc', 100: '#f1f5f9', 800: '#1e293b', 900: '#0f172a', 950: '#020617' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .sortable-ghost { opacity: 0.4; }
+    .sortable-drag { transform: rotate(2deg); }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+  </style>
+</head>
+<body class="h-full text-gray-200" x-data="app()" x-init="init()">
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">AT</div>
+      <h1 class="text-lg font-semibold text-white">Autonomous Atlassian Task</h1>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="text-xs text-gray-500" x-text="currentRun ? `Run: ${currentRun.name}` : 'No active run'"></span>
+      <button @click="showSettings = !showSettings" class="p-2 hover:bg-gray-800 rounded-lg transition">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex flex-col h-[calc(100vh-56px)]">
+
+    <!-- Config Bar -->
+    <div class="bg-gray-900/50 border-b border-gray-800 px-6 py-3">
+      <div class="flex flex-wrap items-center gap-4">
+
+        <!-- Input Mode Tabs -->
+        <div class="flex bg-gray-800 rounded-lg p-0.5">
+          <button @click="inputMode = 'epic'" :class="inputMode === 'epic' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'" class="px-3 py-1.5 text-sm rounded-md transition font-medium">Epic</button>
+          <button @click="inputMode = 'tickets'" :class="inputMode === 'tickets' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'" class="px-3 py-1.5 text-sm rounded-md transition font-medium">Tickets</button>
+        </div>
+
+        <!-- Epic Input -->
+        <template x-if="inputMode === 'epic'">
+          <div class="flex items-center gap-2">
+            <input x-model="epicKey" type="text" placeholder="MC-9056" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-32 focus:border-blue-500 focus:outline-none">
+            <button @click="loadEpic()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Load</button>
+          </div>
+        </template>
+
+        <!-- Ticket Input -->
+        <template x-if="inputMode === 'tickets'">
+          <div class="flex items-center gap-2">
+            <input x-model="ticketInput" type="text" placeholder="MC-9173, MC-9174, MC-9177" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-72 focus:border-blue-500 focus:outline-none">
+            <button @click="addTickets()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Queue</button>
+          </div>
+        </template>
+
+        <div class="h-6 w-px bg-gray-700"></div>
+
+        <!-- Parallel Config -->
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">Parallel:</span>
+          <div class="flex gap-1">
+            <template x-for="n in [1,2,3,4]">
+              <button @click="setMaxParallel(n)" :class="maxParallel >= n ? 'bg-blue-600' : 'bg-gray-700'" class="w-6 h-6 rounded text-xs font-bold transition" x-text="n"></button>
+            </template>
+          </div>
+        </div>
+
+        <div class="h-6 w-px bg-gray-700"></div>
+
+        <!-- Run Controls -->
+        <div class="flex items-center gap-2">
+          <template x-if="!currentRun || currentRun.status === 'idle' || currentRun.status === 'completed'">
+            <button @click="startRun()" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
+              Start
+            </button>
+          </template>
+          <template x-if="currentRun && currentRun.status === 'running'">
+            <button @click="pauseRun()" class="bg-amber-600 hover:bg-amber-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z"/></svg>
+              Pause
+            </button>
+          </template>
+          <template x-if="currentRun && currentRun.status === 'paused'">
+            <button @click="resumeRun()" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
+              Resume
+            </button>
+          </template>
+        </div>
+
+        <!-- Status Badge -->
+        <template x-if="currentRun">
+          <span :class="{
+            'bg-emerald-900/50 text-emerald-400 border-emerald-800': currentRun.status === 'running',
+            'bg-amber-900/50 text-amber-400 border-amber-800': currentRun.status === 'paused',
+            'bg-gray-800 text-gray-400 border-gray-700': currentRun.status === 'idle',
+            'bg-blue-900/50 text-blue-400 border-blue-800': currentRun.status === 'completed',
+          }" class="px-2.5 py-0.5 text-xs font-medium rounded-full border" x-text="currentRun.status.toUpperCase()"></span>
+        </template>
+      </div>
+    </div>
+
+    <!-- Settings Panel (collapsible) -->
+    <div x-show="showSettings" x-transition class="bg-gray-900/80 border-b border-gray-800 px-6 py-4">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl">
+        <label class="flex items-center gap-2">
+          <input type="checkbox" x-model="settings.skipPermissions" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+          <span class="text-sm text-gray-300">Skip Permissions</span>
+        </label>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">Worker Timeout (min)</label>
+          <input type="number" x-model.number="settings.workerTimeout" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-20">
+        </div>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" x-model="settings.cleanupWorktrees" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+          <span class="text-sm text-gray-300">Cleanup Worktrees</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Kanban Board -->
+    <div class="flex-1 overflow-x-auto p-4">
+      <div class="flex gap-3 h-full min-w-max">
+        <template x-for="col in columns" :key="col.id">
+          <div class="w-64 flex-shrink-0 flex flex-col bg-gray-900/50 rounded-xl border border-gray-800">
+            <!-- Column Header -->
+            <div class="px-3 py-2.5 border-b border-gray-800 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <div :class="col.dotColor" class="w-2.5 h-2.5 rounded-full"></div>
+                <span class="text-sm font-semibold text-gray-300" x-text="col.label"></span>
+              </div>
+              <span class="bg-gray-800 text-gray-500 text-xs font-medium px-1.5 py-0.5 rounded" x-text="ticketsInColumn(col.id).length"></span>
+            </div>
+            <!-- Cards -->
+            <div :id="'col-' + col.id" class="flex-1 p-2 space-y-2 overflow-y-auto scrollbar-thin min-h-[100px]">
+              <template x-for="ticket in ticketsInColumn(col.id)" :key="ticket.id">
+                <div class="bg-gray-800 rounded-lg p-3 border border-gray-700 hover:border-gray-600 transition cursor-grab group"
+                     :data-ticket-id="ticket.id">
+                  <!-- Header -->
+                  <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-xs font-bold text-blue-400" x-text="ticket.jira_key"></span>
+                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                      <!-- Pause/Resume -->
+                      <template x-if="ticket.state === 'planning' || ticket.state === 'developing'">
+                        <button @click.stop="pauseTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Pause">
+                          <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 20 20"><path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z"/></svg>
+                        </button>
+                      </template>
+                      <template x-if="ticket.paused">
+                        <button @click.stop="resumeTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Resume">
+                          <svg class="w-3.5 h-3.5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
+                        </button>
+                      </template>
+                      <!-- Delete -->
+                      <button @click.stop="deleteTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Delete">
+                        <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <!-- Summary -->
+                  <p class="text-xs text-gray-400 line-clamp-2 mb-2" x-text="ticket.summary || ticket.jira_key"></p>
+                  <!-- Status indicators -->
+                  <div class="flex items-center justify-between">
+                    <template x-if="ticket.state === 'planning' || ticket.state === 'developing'">
+                      <div class="flex items-center gap-1.5">
+                        <div :class="ticket.paused ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse-dot'" class="w-1.5 h-1.5 rounded-full"></div>
+                        <span class="text-[10px] text-gray-500" x-text="ticket.paused ? 'Paused' : 'Active'"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.pr_url">
+                      <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-blue-400 hover:underline">PR #<span x-text="ticket.pr_number"></span></a>
+                    </template>
+                    <template x-if="ticket.branch_name">
+                      <span class="text-[10px] text-gray-600 font-mono truncate max-w-[120px]" x-text="ticket.branch_name"></span>
+                    </template>
+                    <template x-if="ticket.error">
+                      <span class="text-[10px] text-red-400 truncate max-w-[150px]" x-text="ticket.error"></span>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Terminal Panel -->
+    <div class="h-56 bg-gray-950 border-t border-gray-800 flex flex-col">
+      <!-- Terminal Tabs -->
+      <div class="flex items-center border-b border-gray-800 px-2 overflow-x-auto">
+        <span class="text-xs text-gray-600 px-2 py-2 flex-shrink-0">Terminal</span>
+        <template x-for="tab in terminalTabs" :key="tab.id">
+          <button @click="activeTerminal = tab.id" :class="activeTerminal === tab.id ? 'bg-gray-800 text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 hover:text-gray-300'" class="px-3 py-2 text-xs font-mono flex items-center gap-1.5 transition flex-shrink-0">
+            <div :class="{
+              'bg-emerald-500 animate-pulse-dot': tab.state === 'planning' || tab.state === 'developing',
+              'bg-blue-500': tab.state === 'review',
+              'bg-red-500': tab.state === 'failed',
+              'bg-gray-500': tab.state === 'done',
+            }" class="w-1.5 h-1.5 rounded-full"></div>
+            <span x-text="tab.jira_key"></span>
+          </button>
+        </template>
+      </div>
+      <!-- Terminal Output -->
+      <div class="flex-1 overflow-y-auto p-3 font-mono text-xs scrollbar-thin" id="terminal-output">
+        <template x-for="log in activeTerminalLogs" :key="log.timestamp">
+          <div class="text-gray-400 leading-5"><span class="text-gray-600 select-none" x-text="log.timestamp?.split('T')[1]?.split('.')[0] || ''"></span> <span x-text="log.line"></span></div>
+        </template>
+        <template x-if="activeTerminalLogs.length === 0">
+          <div class="text-gray-600 italic">No output yet. Select a running ticket to view logs.</div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- Epic Ticket Selector Modal -->
+  <div x-show="showEpicModal" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="showEpicModal = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4 max-h-[70vh] flex flex-col">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h2 class="text-lg font-semibold text-white">Select Tickets from <span class="text-blue-400" x-text="epicKey"></span></h2>
+        <p class="text-xs text-gray-500 mt-1">Check the tickets you want to queue for execution.</p>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 space-y-1.5">
+        <template x-for="t in epicTickets" :key="t.key">
+          <label class="flex items-center gap-3 p-2.5 rounded-lg hover:bg-gray-800/50 cursor-pointer transition">
+            <input type="checkbox" x-model="t.selected" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+            <span class="text-sm font-mono text-blue-400 flex-shrink-0" x-text="t.key"></span>
+            <span class="text-sm text-gray-300 truncate" x-text="t.summary"></span>
+            <span :class="{
+              'text-green-400 bg-green-900/30': t.status === 'Done',
+              'text-blue-400 bg-blue-900/30': t.status === 'In Progress',
+              'text-gray-400 bg-gray-800': t.status === 'To Do',
+            }" class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ml-auto" x-text="t.status"></span>
+          </label>
+        </template>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex items-center justify-between">
+        <label class="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+          <input type="checkbox" @change="toggleAllEpicTickets($event.target.checked)" class="rounded bg-gray-700 border-gray-600 text-blue-600">
+          Select All
+        </label>
+        <div class="flex gap-2">
+          <button @click="showEpicModal = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Cancel</button>
+          <button @click="queueSelectedEpicTickets()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Queue Selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function app() {
+      return {
+        // State
+        currentRun: null,
+        tickets: [],
+        inputMode: 'epic',
+        epicKey: '',
+        ticketInput: '',
+        maxParallel: 2,
+        showSettings: false,
+        showEpicModal: false,
+        epicTickets: [],
+        activeTerminal: null,
+        terminalLogs: {},  // ticket_id -> logs[]
+        settings: {
+          skipPermissions: true,
+          workerTimeout: 30,
+          cleanupWorktrees: true,
+        },
+        eventSource: null,
+
+        columns: [
+          { id: 'pending', label: 'Pending', dotColor: 'bg-gray-500' },
+          { id: 'queued', label: 'Queued', dotColor: 'bg-yellow-500' },
+          { id: 'planning', label: 'Planning', dotColor: 'bg-cyan-500' },
+          { id: 'developing', label: 'Developing', dotColor: 'bg-blue-500' },
+          { id: 'review', label: 'Review', dotColor: 'bg-purple-500' },
+          { id: 'done', label: 'Done', dotColor: 'bg-emerald-500' },
+        ],
+
+        async init() {
+          // Load existing runs
+          const runs = await this.api('GET', '/api/runs');
+          if (runs && runs.length > 0) {
+            this.currentRun = runs[0];
+            await this.loadRunTickets();
+            this.connectSSE();
+          }
+
+          // Init sortable on each column after DOM ready
+          this.$nextTick(() => this.initSortable());
+        },
+
+        initSortable() {
+          this.columns.forEach(col => {
+            const el = document.getElementById('col-' + col.id);
+            if (!el) return;
+            Sortable.create(el, {
+              group: 'kanban',
+              animation: 150,
+              ghostClass: 'sortable-ghost',
+              dragClass: 'sortable-drag',
+              filter: '.no-drag',
+              onEnd: async (evt) => {
+                const ticketId = evt.item.dataset.ticketId;
+                const newState = evt.to.id.replace('col-', '');
+                if (ticketId && newState) {
+                  await this.moveTicket(ticketId, newState);
+                }
+              },
+            });
+          });
+        },
+
+        // Computed
+        ticketsInColumn(state) {
+          return this.tickets.filter(t => t.state === state).sort((a, b) => a.rank - b.rank);
+        },
+
+        get terminalTabs() {
+          return this.tickets.filter(t =>
+            ['planning', 'developing', 'review', 'failed', 'done'].includes(t.state)
+          );
+        },
+
+        get activeTerminalLogs() {
+          return this.terminalLogs[this.activeTerminal] || [];
+        },
+
+        // API
+        async api(method, path, body = null) {
+          try {
+            const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) opts.body = JSON.stringify(body);
+            const res = await fetch(path, opts);
+            return await res.json();
+          } catch (e) {
+            console.error(`API ${method} ${path} failed:`, e);
+            return null;
+          }
+        },
+
+        async ensureRun() {
+          if (!this.currentRun) {
+            const projectPath = prompt('Enter the project path (e.g., /Users/you/project):');
+            if (!projectPath) return false;
+            const name = this.epicKey || 'Manual Run';
+            this.currentRun = await this.api('POST', '/api/runs', { name, project_path: projectPath, max_parallel: this.maxParallel });
+            this.connectSSE();
+          }
+          return true;
+        },
+
+        async loadRunTickets() {
+          if (!this.currentRun) return;
+          const data = await this.api('GET', `/api/runs/${this.currentRun.id}`);
+          if (data) {
+            this.currentRun = { ...this.currentRun, ...data };
+            this.tickets = data.tickets || [];
+            this.maxParallel = data.max_parallel || 2;
+          }
+        },
+
+        // Actions
+        async loadEpic() {
+          if (!this.epicKey) return;
+          if (!(await this.ensureRun())) return;
+
+          // For now, show a modal with placeholder — in production, this calls the MCP tool
+          // to fetch epic children
+          this.epicTickets = [
+            { key: this.epicKey, summary: 'Loading tickets from Jira...', status: 'Loading', selected: false }
+          ];
+          this.showEpicModal = true;
+
+          // Load from API
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/load-epic`, { epic_key: this.epicKey });
+          // TODO: Replace with actual Jira response when MCP client is integrated
+        },
+
+        async addTickets() {
+          if (!this.ticketInput) return;
+          if (!(await this.ensureRun())) return;
+
+          const keys = this.ticketInput.split(/[,\n\s]+/).filter(k => k.trim());
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, { keys });
+          if (result && result.tickets) {
+            this.tickets.push(...result.tickets);
+            this.ticketInput = '';
+            this.$nextTick(() => this.initSortable());
+          }
+        },
+
+        async queueSelectedEpicTickets() {
+          const keys = this.epicTickets.filter(t => t.selected).map(t => t.key);
+          if (keys.length === 0) return;
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, { keys });
+          if (result && result.tickets) {
+            this.tickets.push(...result.tickets);
+          }
+          this.showEpicModal = false;
+          this.$nextTick(() => this.initSortable());
+        },
+
+        toggleAllEpicTickets(checked) {
+          this.epicTickets.forEach(t => t.selected = checked);
+        },
+
+        async moveTicket(ticketId, newState) {
+          const result = await this.api('PUT', `/api/tickets/${ticketId}/state`, { state: newState });
+          if (result) {
+            const idx = this.tickets.findIndex(t => t.id === ticketId);
+            if (idx >= 0) this.tickets[idx] = { ...this.tickets[idx], ...result };
+          }
+        },
+
+        async pauseTicket(ticketId) {
+          await this.api('POST', `/api/tickets/${ticketId}/pause`);
+          const idx = this.tickets.findIndex(t => t.id === ticketId);
+          if (idx >= 0) this.tickets[idx].paused = true;
+        },
+
+        async resumeTicket(ticketId) {
+          await this.api('POST', `/api/tickets/${ticketId}/resume`);
+          await this.loadRunTickets();
+        },
+
+        async deleteTicket(ticketId) {
+          if (!confirm('Remove this ticket from the board?')) return;
+          await this.api('DELETE', `/api/tickets/${ticketId}`);
+          this.tickets = this.tickets.filter(t => t.id !== ticketId);
+        },
+
+        async setMaxParallel(n) {
+          this.maxParallel = n;
+          if (this.currentRun) {
+            await this.api('PUT', `/api/runs/${this.currentRun.id}/config`, { max_parallel: n });
+          }
+        },
+
+        async startRun() {
+          if (!(await this.ensureRun())) return;
+          await this.api('POST', `/api/runs/${this.currentRun.id}/start`);
+          this.currentRun.status = 'running';
+        },
+
+        async pauseRun() {
+          if (!this.currentRun) return;
+          await this.api('POST', `/api/runs/${this.currentRun.id}/pause`);
+          this.currentRun.status = 'paused';
+        },
+
+        async resumeRun() {
+          if (!this.currentRun) return;
+          await this.api('POST', `/api/runs/${this.currentRun.id}/resume`);
+          this.currentRun.status = 'running';
+        },
+
+        // SSE
+        connectSSE() {
+          if (!this.currentRun || this.eventSource) return;
+          this.eventSource = new EventSource(`/api/stream/${this.currentRun.id}`);
+          this.eventSource.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            const { event: evtType, data } = JSON.parse(msg);
+
+            if (evtType === 'ticket_update') {
+              const idx = this.tickets.findIndex(t => t.id === data.ticket_id);
+              if (idx >= 0) {
+                this.tickets[idx] = { ...this.tickets[idx], state: data.state, ...data };
+              }
+              // Auto-switch terminal to active ticket
+              if (['planning', 'developing'].includes(data.state)) {
+                this.activeTerminal = data.ticket_id;
+              }
+            }
+
+            if (evtType === 'log') {
+              if (!this.terminalLogs[data.ticket_id]) {
+                this.terminalLogs[data.ticket_id] = [];
+              }
+              this.terminalLogs[data.ticket_id].push({ timestamp: new Date().toISOString(), line: data.line });
+              // Keep last 500 lines
+              if (this.terminalLogs[data.ticket_id].length > 500) {
+                this.terminalLogs[data.ticket_id] = this.terminalLogs[data.ticket_id].slice(-500);
+              }
+              // Auto-scroll terminal
+              this.$nextTick(() => {
+                const el = document.getElementById('terminal-output');
+                if (el) el.scrollTop = el.scrollHeight;
+              });
+            }
+
+            if (evtType === 'run_status') {
+              this.currentRun.status = data.status;
+            }
+
+            if (evtType === 'ticket_deleted') {
+              this.tickets = this.tickets.filter(t => t.id !== data.ticket_id);
+            }
+          };
+        },
+      };
+    }
+  </script>
+</body>
+</html>
