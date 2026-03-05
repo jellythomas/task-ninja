@@ -220,19 +220,32 @@ Pending -----> Queued -----> Planning -----> Developing -----> Review -----> Don
 |---------|---------|---------|
 | `fastapi` | >= 0.115 | HTTP API server |
 | `uvicorn[standard]` | >= 0.34 | ASGI server for FastAPI |
-| `mcp[cli]` | >= 1.0 | MCP server SDK (FastMCP) |
-| `httpx` | >= 0.27 | HTTP client for Jira API |
+| `mcp[cli]` | >= 1.0 | MCP SDK — used as both server (exposes tools) and client (calls mcp-atlassian-with-bitbucket) |
 | `aiosqlite` | >= 0.20 | Async SQLite access |
 | `apscheduler` | >= 3.10 | Job scheduling (cron, one-time) |
 | `sse-starlette` | >= 2.0 | Server-Sent Events for FastAPI |
 | `pydantic` | >= 2.0 | Data validation (comes with FastAPI) |
+| `pyyaml` | >= 6.0 | Config file parsing |
 
 ### MCP Servers (Required)
 
-| MCP Server | Purpose |
-|------------|---------|
-| `mcp-atlassian` | Jira ticket read/write, status transitions |
-| `gchat-mcp` (optional) | Google Chat notifications for PR reviews |
+This project depends entirely on `mcp-atlassian-with-bitbucket` for all Jira and Bitbucket operations. Both the orchestrator and Claude workers use MCP tools — no direct REST API calls.
+
+| MCP Server | Required | Used By | Purpose |
+|------------|----------|---------|---------|
+| `mcp-atlassian-with-bitbucket` | **Yes** | Orchestrator + Workers | Load epics (`jira_search`), read tickets (`jira_get_issue`), transition statuses (`jira_transition_issue`), create PRs (`bitbucket_create_pull_request`), read dependencies (`jira_get_issue` with links) |
+| `gchat-mcp` | Optional | Workers | Google Chat notifications for draft PR reviews |
+
+**How the orchestrator calls MCP tools:**
+
+The FastAPI server communicates with `mcp-atlassian-with-bitbucket` as an MCP client, calling tools like:
+- `jira_search` — load tickets from epic (`"Epic Link" = MC-9056`)
+- `jira_get_issue` — read ticket details and issue links for dependencies
+- `jira_get_transitions` — get available status transitions
+- `jira_transition_issue` — move tickets through lifecycle states
+- `bitbucket_create_pull_request` — open draft PRs
+
+**Claude CLI workers** inherit MCP server config from `~/.claude/settings.json` and use the same tools during `/execute-jira-task`.
 
 ### Frontend (CDN, no build step)
 
@@ -259,7 +272,7 @@ autonomous-atlassian-task/
 |   |-- orchestrator.py        # Worker pool manager, main loop
 |   |-- worker.py              # Claude CLI process spawner
 |   |-- scheduler.py           # APScheduler integration
-|   |-- jira_client.py         # Jira API client (REST, not MCP)
+|   |-- mcp_client.py          # MCP client for mcp-atlassian-with-bitbucket
 |   |-- git_manager.py         # Git worktree create/cleanup
 |   |-- dependency.py          # Dependency graph resolver
 |   |-- blast_radius.py        # Smart test scope detection
@@ -421,23 +434,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Step 3: Configure Jira credentials
+### Step 3: Verify mcp-atlassian-with-bitbucket is configured
 
-The server uses the same Jira credentials as your `mcp-atlassian` MCP server. Set these environment variables:
+The orchestrator connects to `mcp-atlassian-with-bitbucket` as an MCP client. Ensure it's configured in your Claude Code settings:
 
 ```bash
-# Option A: Environment variables
-export JIRA_URL="https://yourcompany.atlassian.net"
-export JIRA_USERNAME="your.email@company.com"
-export JIRA_API_TOKEN="your-api-token"
-
-# Option B: .env file in the project root
-cat > .env << 'EOF'
-JIRA_URL=https://jurnal.atlassian.net
-JIRA_USERNAME=your.email@mekari.com
-JIRA_API_TOKEN=your-api-token
-EOF
+# Check it's in your MCP settings
+cat ~/.claude/settings.json | grep -A5 "mcp-atlassian"
 ```
+
+If not configured, add it to `~/.claude/settings.json` under `mcpServers`. The orchestrator reads this config to connect to the MCP server.
 
 ### Step 4: Verify Claude CLI is available
 
@@ -514,11 +520,9 @@ claude:
   execute_command: "/execute-jira-task"  # command to run per ticket
   pr_command: "/open-pr --draft"         # command for draft PR
 
-jira:
-  url: "${JIRA_URL}"
-  username: "${JIRA_USERNAME}"
-  api_token: "${JIRA_API_TOKEN}"
-  status_mapping:
+mcp:
+  atlassian_server: "mcp-atlassian-with-bitbucket"  # MCP server name
+  jira_status_mapping:                   # board state -> Jira transition
     planning: "In Progress"
     developing: "In Progress"
     review: "In Review"

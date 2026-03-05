@@ -13,8 +13,12 @@ claude:
   execute_command: "/execute-jira-task"
   pr_command: "/open-pr --draft"
 
-jira:
-  status_mapping:
+mcp:
+  # The orchestrator connects to mcp-atlassian-with-bitbucket as an MCP client
+  # It reads the server config from Claude Code settings automatically
+  atlassian_server: "mcp-atlassian-with-bitbucket"
+  # Jira status mapping: board state -> Jira transition name
+  jira_status_mapping:
     planning: "In Progress"
     developing: "In Progress"
     review: "In Review"
