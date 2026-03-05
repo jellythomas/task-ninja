@@ -169,61 +169,94 @@
             <!-- Cards -->
             <div :id="'col-' + col.id" class="flex-1 p-2 space-y-2 overflow-y-auto scrollbar-thin min-h-[100px]">
               <template x-for="ticket in ticketsInColumn(col.id)" :key="ticket.id">
-                <div class="bg-gray-800 rounded-lg p-3 border border-gray-700 hover:border-gray-600 transition cursor-grab group"
+                <div class="bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition cursor-grab group relative"
                      :data-ticket-id="ticket.id"
-                     @click="(ticket.state === 'planning' || ticket.state === 'developing' || ticket.state === 'failed') && (activeTerminal = ticket.id)">
-                  <!-- Header -->
-                  <div class="flex items-center justify-between mb-1.5">
-                    <a :href="'https://mfrlab.atlassian.net/browse/' + ticket.jira_key" target="_blank" @click.stop
-                       class="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline" x-text="ticket.jira_key"></a>
-                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                      <!-- Pause/Resume -->
-                      <template x-if="(ticket.state === 'planning' || ticket.state === 'developing') && !ticket.paused">
-                        <button @click.stop="pauseTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Pause">
-                          <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 20 20"><path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z"/></svg>
+                     x-data="{ expanded: false }">
+                  <!-- Main card -->
+                  <div class="p-3" @click="expanded = !expanded; if(['planning','developing','failed'].includes(ticket.state)) activeTerminal = ticket.id">
+                    <!-- Header -->
+                    <div class="flex items-center justify-between mb-1.5">
+                      <a :href="'https://mfrlab.atlassian.net/browse/' + ticket.jira_key" target="_blank" @click.stop
+                         class="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline" x-text="ticket.jira_key"></a>
+                      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <template x-if="(ticket.state === 'planning' || ticket.state === 'developing') && !ticket.paused">
+                          <button @click.stop="pauseTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Pause">
+                            <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 20 20"><path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z"/></svg>
+                          </button>
+                        </template>
+                        <template x-if="ticket.paused">
+                          <button @click.stop="resumeTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Resume">
+                            <svg class="w-3.5 h-3.5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
+                          </button>
+                        </template>
+                        <template x-if="ticket.state === 'failed'">
+                          <button @click.stop="moveTicket(ticket.id, 'queued')" class="p-1 hover:bg-gray-700 rounded" title="Retry">
+                            <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                          </button>
+                        </template>
+                        <button @click.stop="deleteTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Delete">
+                          <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                         </button>
+                      </div>
+                    </div>
+                    <!-- Summary -->
+                    <p class="text-xs text-gray-400 mb-1.5" :class="expanded ? '' : 'line-clamp-2'" x-text="ticket.summary || 'No summary'"></p>
+                    <!-- Inline indicators -->
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <template x-if="ticket.state === 'planning' || ticket.state === 'developing'">
+                        <div class="flex items-center gap-1.5">
+                          <div :class="ticket.paused ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse-dot'" class="w-1.5 h-1.5 rounded-full"></div>
+                          <span class="text-[10px] text-gray-500" x-text="ticket.paused ? 'Paused' : (tick, elapsedTime(ticket.started_at))"></span>
+                        </div>
                       </template>
-                      <template x-if="ticket.paused">
-                        <button @click.stop="resumeTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Resume">
-                          <svg class="w-3.5 h-3.5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-                        </button>
+                      <template x-if="ticket.error && !expanded">
+                        <span class="text-[10px] text-red-400 truncate max-w-[180px]" x-text="ticket.error"></span>
                       </template>
-                      <!-- Retry (failed) -->
-                      <template x-if="ticket.state === 'failed'">
-                        <button @click.stop="moveTicket(ticket.id, 'queued')" class="p-1 hover:bg-gray-700 rounded" title="Retry">
-                          <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                        </button>
+                      <template x-if="ticket.pr_url">
+                        <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400 hover:text-purple-300 hover:underline flex items-center gap-1">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                          <span x-text="ticket.pr_number ? 'PR #' + ticket.pr_number : 'Draft PR'"></span>
+                        </a>
                       </template>
-                      <!-- Delete -->
-                      <button @click.stop="deleteTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Delete">
-                        <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                      </button>
                     </div>
                   </div>
-                  <!-- Summary -->
-                  <p class="text-xs text-gray-400 line-clamp-2 mb-2" x-text="ticket.summary || 'No summary'"></p>
-                  <!-- Status indicators -->
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <template x-if="ticket.state === 'planning' || ticket.state === 'developing'">
-                      <div class="flex items-center gap-1.5">
-                        <div :class="ticket.paused ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse-dot'" class="w-1.5 h-1.5 rounded-full"></div>
-                        <span class="text-[10px] text-gray-500" x-text="ticket.paused ? 'Paused' : (tick, elapsedTime(ticket.started_at))"></span>
+                  <!-- Expanded detail panel -->
+                  <div x-show="expanded" x-transition class="border-t border-gray-700 px-3 py-2 space-y-1.5 text-[11px] bg-gray-850">
+                    <template x-if="ticket.error">
+                      <div>
+                        <span class="text-gray-500">Error:</span>
+                        <p class="text-red-400 mt-0.5 break-all" x-text="ticket.error"></p>
                       </div>
                     </template>
-                    <template x-if="ticket.pr_url">
-                      <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400 hover:text-purple-300 hover:underline flex items-center gap-1">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                        <span x-text="ticket.pr_number ? 'PR #' + ticket.pr_number : 'Draft PR'"></span>
-                      </a>
+                    <template x-if="ticket.branch_name">
+                      <div>
+                        <span class="text-gray-500">Branch:</span>
+                        <span class="text-gray-300 font-mono ml-1" x-text="ticket.branch_name"></span>
+                      </div>
                     </template>
-                  </div>
-                  <!-- Branch / Error row -->
-                  <div class="mt-1.5">
-                    <template x-if="ticket.error">
-                      <span class="text-[10px] text-red-400 line-clamp-1" x-text="ticket.error" :title="ticket.error"></span>
+                    <template x-if="ticket.worktree_path">
+                      <div>
+                        <span class="text-gray-500">Worktree:</span>
+                        <span class="text-gray-400 font-mono ml-1 break-all" x-text="ticket.worktree_path"></span>
+                      </div>
                     </template>
-                    <template x-if="ticket.branch_name && !ticket.error">
-                      <span class="text-[10px] text-gray-600 font-mono truncate block max-w-full" x-text="ticket.branch_name"></span>
+                    <template x-if="ticket.started_at">
+                      <div>
+                        <span class="text-gray-500">Started:</span>
+                        <span class="text-gray-300 ml-1" x-text="new Date(ticket.started_at).toLocaleString()"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.completed_at">
+                      <div>
+                        <span class="text-gray-500">Completed:</span>
+                        <span class="text-gray-300 ml-1" x-text="new Date(ticket.completed_at).toLocaleString()"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.worker_pid">
+                      <div>
+                        <span class="text-gray-500">PID:</span>
+                        <span class="text-gray-300 font-mono ml-1" x-text="ticket.worker_pid"></span>
+                      </div>
                     </template>
                   </div>
                 </div>
@@ -645,8 +678,7 @@
           if (!this.currentRun || this.eventSource) return;
           this.eventSource = new EventSource(`/api/stream/${this.currentRun.id}`);
           this.eventSource.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-            const { event: evtType, data } = JSON.parse(msg);
+            const { event: evtType, data } = JSON.parse(event.data);
 
             if (evtType === 'ticket_update') {
               const idx = this.tickets.findIndex(t => t.id === data.ticket_id);
