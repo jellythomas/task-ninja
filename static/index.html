@@ -92,16 +92,10 @@
           <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
                  class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
         </div>
-        <div x-data="{ showToken: false }">
+        <div>
           <label class="text-xs text-gray-400 block mb-1">API Token</label>
-          <div class="relative">
-            <input x-model="jiraSetup.token" :type="showToken ? 'text' : 'password'" placeholder="Your Jira API token"
-                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none pr-10">
-            <button type="button" @click="showToken = !showToken" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 p-1">
-              <svg x-show="!showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-              <svg x-show="showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
-            </button>
-          </div>
+          <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
         </div>
         <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
         <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
@@ -551,16 +545,10 @@
                 <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
                        class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
               </div>
-              <div x-data="{ showToken: false }">
+              <div>
                 <label class="text-xs text-gray-400 block mb-1">API Token</label>
-                <div class="relative">
-                  <input x-model="jiraSetup.token" :type="showToken ? 'text' : 'password'" placeholder="Your Jira API token"
-                         class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none pr-10">
-                  <button type="button" @click="showToken = !showToken" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 p-1">
-                    <svg x-show="!showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                    <svg x-show="showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
-                  </button>
-                </div>
+                <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
               </div>
               <div class="flex gap-2 pt-1">
                 <button @click="testJiraConnection()" class="px-4 py-2 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test Connection</button>
@@ -680,9 +668,9 @@
                   <div class="bg-gray-900 rounded-lg p-3 space-y-2">
                     <span class="text-xs text-gray-500 block">Access from your phone:</span>
                     <div class="flex items-center gap-2">
-                      <code class="text-sm bg-gray-950 px-3 py-1.5 rounded text-emerald-400 flex-1 select-all" x-text="tailscale.url"></code>
+                      <code class="text-xs bg-gray-950 px-3 py-1.5 rounded text-emerald-400 flex-1 select-all truncate block overflow-hidden" x-text="tailscale.url"></code>
                       <button @click="navigator.clipboard.writeText(tailscale.url); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
-                              class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1.5 rounded transition">Copy</button>
+                              class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1.5 rounded transition flex-shrink-0">Copy</button>
                     </div>
                     <p class="text-xs text-gray-500">Open this URL on any device connected to your Tailscale network.</p>
                   </div>
@@ -1275,7 +1263,10 @@
           if (envConfig) {
             this.jiraSetup.url = envConfig.JIRA_BASE_URL || '';
             this.jiraSetup.email = envConfig.JIRA_EMAIL || '';
-            // Token is masked in response, don't overwrite
+            // Load masked token so user sees it's configured
+            if (envConfig.JIRA_API_TOKEN && !this.jiraSetup.token) {
+              this.jiraSetup.token = envConfig.JIRA_API_TOKEN;
+            }
             this.remoteAccess.enabled = (envConfig.TASK_NINJA_REMOTE_ACCESS || '').toLowerCase() === 'true';
             this.remoteAccess.hasToken = !!(envConfig.TASK_NINJA_SECRET_HASH);
             if (this.remoteAccess.enabled) this.checkTailscale();
@@ -1694,12 +1685,15 @@
         async testJiraConnection() {
           this.jiraSetup.error = '';
           this.jiraSetup.success = '';
-          // Save to .env first, then test
-          await this.api('PUT', '/api/env', {
+          // Save to .env first, then test (skip token if masked)
+          const envUpdate = {
             JIRA_BASE_URL: this.jiraSetup.url,
             JIRA_EMAIL: this.jiraSetup.email,
-            JIRA_API_TOKEN: this.jiraSetup.token,
-          });
+          };
+          if (this.jiraSetup.token && !this.jiraSetup.token.includes('****')) {
+            envUpdate.JIRA_API_TOKEN = this.jiraSetup.token;
+          }
+          await this.api('PUT', '/api/env', envUpdate);
           const result = await this.api('POST', '/api/settings/test-jira');
           if (result && result.status === 'connected') {
             this.jiraSetup.success = `Connected as ${result.user}`;
@@ -1715,11 +1709,15 @@
             this.jiraSetup.error = 'All fields are required';
             return;
           }
-          await this.api('PUT', '/api/env', {
+          const envUpdate = {
             JIRA_BASE_URL: this.jiraSetup.url,
             JIRA_EMAIL: this.jiraSetup.email,
-            JIRA_API_TOKEN: this.jiraSetup.token,
-          });
+          };
+          // Only send token if user entered a new one (not the masked value)
+          if (!this.jiraSetup.token.includes('****')) {
+            envUpdate.JIRA_API_TOKEN = this.jiraSetup.token;
+          }
+          await this.api('PUT', '/api/env', envUpdate);
           this.showJiraSetup = false;
           this.jiraSetup.success = 'Saved';
         },
