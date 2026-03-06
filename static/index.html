@@ -22,6 +22,8 @@
     }
   </script>
   <style>
+    .scrollbar-hide::-webkit-scrollbar { display: none; }
+    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
     .sortable-ghost { opacity: 0.4; }
     .sortable-drag { transform: rotate(2deg); }
     .scrollbar-thin::-webkit-scrollbar { width: 6px; }
@@ -122,7 +124,7 @@
           <input x-model="newRepo.path" type="text" placeholder="/Users/you/projects/mekari_credit"
                  class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
         </div>
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label class="text-xs text-gray-400 block mb-1">Default Branch</label>
             <input x-model="newRepo.default_branch" type="text" placeholder="main"
@@ -182,7 +184,7 @@
         <details class="group">
           <summary class="text-xs text-blue-400 hover:text-blue-300 cursor-pointer py-1">+ Add custom agent profile</summary>
           <div class="mt-2 space-y-2 bg-gray-800/30 rounded-lg p-3 border border-gray-800 border-dashed">
-            <div class="grid grid-cols-2 gap-2">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
                 <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
                 <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
@@ -372,9 +374,28 @@
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>
-      <div class="flex flex-1 overflow-hidden">
-        <!-- Sidebar Menu -->
-        <div class="w-44 border-r border-gray-800 py-3 flex-shrink-0">
+      <div class="flex flex-col sm:flex-row flex-1 overflow-hidden">
+        <!-- Mobile: Horizontal scrollable tab strip -->
+        <div class="sm:hidden flex-shrink-0 border-b border-gray-800">
+          <div class="flex overflow-x-auto px-2 py-2 gap-1 scrollbar-hide">
+            <template x-for="tab in settingsTabs" :key="tab.id">
+              <button @click="activeSettingsTab = tab.id"
+                      :class="activeSettingsTab === tab.id ? 'bg-blue-600/10 text-blue-400 border-blue-500 border' : 'text-gray-400 hover:text-gray-200 border-transparent border'"
+                      class="px-3 py-1.5 text-xs rounded-lg transition flex items-center gap-1.5 whitespace-nowrap flex-shrink-0">
+                <!-- Icons for each tab (mobile) -->
+                <template x-if="tab.id === 'general'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg></template>
+                <template x-if="tab.id === 'repositories'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></template>
+                <template x-if="tab.id === 'profiles'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg></template>
+                <template x-if="tab.id === 'jira'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg></template>
+                <template x-if="tab.id === 'notifications'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg></template>
+                <template x-if="tab.id === 'remote'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></template>
+                <span x-text="tab.label"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+        <!-- Desktop: Vertical sidebar -->
+        <div class="hidden sm:block w-44 border-r border-gray-800 py-3 flex-shrink-0">
           <template x-for="tab in settingsTabs" :key="tab.id">
             <button @click="activeSettingsTab = tab.id"
                     :class="activeSettingsTab === tab.id ? 'bg-blue-600/10 text-blue-400 border-r-2 border-blue-500' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'"
@@ -403,7 +424,7 @@
           </template>
         </div>
         <!-- Content Area -->
-        <div class="flex-1 overflow-y-auto p-5">
+        <div class="flex-1 overflow-y-auto p-4 sm:p-5">
           <!-- General -->
           <div x-show="activeSettingsTab === 'general'" class="space-y-4">
             <h3 class="text-sm font-medium text-gray-300 mb-3">General Settings</h3>
@@ -451,7 +472,7 @@
             </div>
             <div class="bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
               <span class="text-xs text-gray-500 font-medium">Add Repository</span>
-              <div class="grid grid-cols-2 gap-2">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
                   <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
                   <input x-model="newRepo.name" type="text" placeholder="mekari_credit" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
@@ -504,7 +525,7 @@
             </div>
             <div class="bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
               <span class="text-xs text-gray-500 font-medium">Add Profile</span>
-              <div class="grid grid-cols-2 gap-2">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
                   <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
                   <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
