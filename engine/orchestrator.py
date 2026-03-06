@@ -27,6 +27,7 @@ class Orchestrator:
         self._running = False
         self._run_id: Optional[str] = None
         self.jira_client = JiraClient()
+        self.notifier = None  # Set by server.py after construction
         self.watchdog = TicketWatchdog(state, broadcaster)
         self.watchdog.set_callbacks(requeue_cb=self._watchdog_requeue)
 
@@ -171,8 +172,14 @@ class Orchestrator:
             ticket = await self.state.get_ticket(tid)
             if ticket and ticket.state == TicketState.FAILED:
                 self.watchdog.on_ticket_failed(tid)
+                if self.notifier:
+                    await self.notifier.notify_ticket_failed(
+                        ticket.jira_key, tid, ticket.error or ""
+                    )
             elif ticket and ticket.state in (TicketState.DONE, TicketState.REVIEW):
                 self.watchdog.on_ticket_completed(tid)
+                if self.notifier:
+                    await self.notifier.notify_ticket_completed(ticket.jira_key, tid)
 
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
@@ -206,6 +213,8 @@ class Orchestrator:
                 self._running = False
                 await self.state.update_run_status(self._run_id, RunStatus.COMPLETED)
                 await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.COMPLETED)
+                if self.notifier:
+                    await self.notifier.notify_run_completed(run.name or self._run_id)
 
     async def _spawn_worker(self, ticket_id: str, jira_key: str, run: object) -> None:
         """Spawn a CLI worker for a ticket."""

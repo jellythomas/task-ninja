@@ -18,6 +18,7 @@ from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
 from engine.env_manager import load_env, get_env, update_env, get_public_env
 from engine.jira_client import JiraClient
+from engine.notifier import Notifier
 from engine.orchestrator import Orchestrator
 from engine.scheduler import RunScheduler
 from engine.state import StateManager, init_db
@@ -56,6 +57,8 @@ claude_cfg = config.get("claude", {})
 claude_helper = ClaudeHelper(claude_cfg.get("command", "claude"), claude_cfg.get("skip_permissions", True))
 jira_client = JiraClient()
 terminal_manager = TerminalManager()
+notifier = Notifier(state)
+orchestrator.notifier = notifier
 run_scheduler = RunScheduler(state, orchestrator.start)
 
 
@@ -551,6 +554,35 @@ async def update_settings(req: UpdateSettingsRequest):
 async def watchdog_status():
     """Get watchdog status (active timers, retries, working hours)."""
     return orchestrator.watchdog.get_status()
+
+
+# --- Notifications ---
+
+@app.get("/api/notifications/vapid-key")
+async def get_vapid_key():
+    """Get VAPID public key for Web Push subscription."""
+    key = notifier.get_vapid_public_key()
+    return {"key": key, "enabled": notifier.is_enabled()}
+
+
+@app.post("/api/notifications/subscribe")
+async def subscribe_push(req: dict):
+    """Store a Web Push subscription."""
+    subscription = req.get("subscription")
+    if not subscription:
+        raise HTTPException(400, "Missing subscription object")
+    await notifier.store_subscription(subscription)
+    return {"status": "subscribed"}
+
+
+@app.delete("/api/notifications/subscribe")
+async def unsubscribe_push(req: dict):
+    """Remove a Web Push subscription."""
+    endpoint = req.get("endpoint", "")
+    if not endpoint:
+        raise HTTPException(400, "Missing endpoint")
+    await notifier.remove_subscription(endpoint)
+    return {"status": "unsubscribed"}
 
 
 @app.get("/api/settings/jira-status")

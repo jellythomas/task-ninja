@@ -92,10 +92,16 @@
           <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
                  class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
         </div>
-        <div>
+        <div x-data="{ showToken: false }">
           <label class="text-xs text-gray-400 block mb-1">API Token</label>
-          <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
-                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+          <div class="relative">
+            <input x-model="jiraSetup.token" :type="showToken ? 'text' : 'password'" placeholder="Your Jira API token"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none pr-10">
+            <button type="button" @click="showToken = !showToken" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 p-1">
+              <svg x-show="!showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+              <svg x-show="showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+            </button>
+          </div>
         </div>
         <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
         <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
@@ -230,6 +236,9 @@
       <h1 class="text-lg font-semibold text-white hidden sm:block">Task Ninja</h1>
     </div>
     <div class="flex items-center gap-2">
+      <button @click="openSetupWizard()" class="p-2 hover:bg-gray-800 rounded-lg transition text-gray-400" title="Setup Wizard">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+      </button>
       <button @click="showSettings = !showSettings" :class="showSettings ? 'bg-gray-700 text-white' : 'text-gray-400'" class="p-2 hover:bg-gray-800 rounded-lg transition" title="Settings">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
@@ -389,6 +398,12 @@
               <template x-if="tab.id === 'jira'">
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
               </template>
+              <template x-if="tab.id === 'notifications'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+              </template>
+              <template x-if="tab.id === 'remote'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </template>
               <span x-text="tab.label"></span>
             </button>
           </template>
@@ -398,13 +413,6 @@
           <!-- General -->
           <div x-show="activeSettingsTab === 'general'" class="space-y-4">
             <h3 class="text-sm font-medium text-gray-300 mb-3">General Settings</h3>
-            <label class="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg hover:bg-gray-800 transition cursor-pointer">
-              <input type="checkbox" x-model="settings.skipPermissions" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
-              <div>
-                <span class="text-sm text-gray-200 block">Skip Permissions</span>
-                <span class="text-xs text-gray-500">Auto-approve tool permissions during execution</span>
-              </div>
-            </label>
             <label class="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg hover:bg-gray-800 transition cursor-pointer">
               <input type="checkbox" x-model="settings.cleanupWorktrees" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
               <div>
@@ -543,10 +551,16 @@
                 <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
                        class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
               </div>
-              <div>
+              <div x-data="{ showToken: false }">
                 <label class="text-xs text-gray-400 block mb-1">API Token</label>
-                <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
-                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+                <div class="relative">
+                  <input x-model="jiraSetup.token" :type="showToken ? 'text' : 'password'" placeholder="Your Jira API token"
+                         class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none pr-10">
+                  <button type="button" @click="showToken = !showToken" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 p-1">
+                    <svg x-show="!showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                    <svg x-show="showToken" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                  </button>
+                </div>
               </div>
               <div class="flex gap-2 pt-1">
                 <button @click="testJiraConnection()" class="px-4 py-2 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test Connection</button>
@@ -554,6 +568,140 @@
               </div>
               <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
               <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
+            </div>
+          </div>
+
+          <!-- Notifications -->
+          <div x-show="activeSettingsTab === 'notifications'" class="space-y-4">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Push Notifications</h3>
+            <p class="text-xs text-gray-500 mb-4">Get notified when tickets complete, fail, or when a run finishes.</p>
+
+            <!-- Browser permission status -->
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <div class="flex items-center justify-between">
+                <div>
+                  <span class="text-sm text-gray-200 block">Browser Notifications</span>
+                  <span class="text-xs text-gray-500" x-text="notificationState.permission === 'granted' ? 'Notifications are enabled' : notificationState.permission === 'denied' ? 'Notifications are blocked — check browser settings' : 'Click to enable browser notifications'"></span>
+                </div>
+                <template x-if="notificationState.permission === 'granted'">
+                  <span class="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full font-medium">Enabled</span>
+                </template>
+                <template x-if="notificationState.permission === 'denied'">
+                  <span class="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded-full font-medium">Blocked</span>
+                </template>
+                <template x-if="notificationState.permission === 'default'">
+                  <button @click="requestNotificationPermission()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-xs rounded-lg font-medium transition">Enable</button>
+                </template>
+              </div>
+            </div>
+
+            <!-- Server-side toggle -->
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" :checked="notificationState.enabled"
+                       @change="toggleServerNotifications($event.target.checked)"
+                       class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+                <div>
+                  <span class="text-sm text-gray-200 block">Server Notifications</span>
+                  <span class="text-xs text-gray-500">Enable notification events from the server (.env NOTIFICATIONS_ENABLED)</span>
+                </div>
+              </label>
+            </div>
+
+            <!-- Web Push (VAPID) info -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-2">
+              <span class="text-sm text-gray-200 block">Web Push (Optional)</span>
+              <p class="text-xs text-gray-500">For notifications even when the tab is closed, configure VAPID keys in your .env file. Without VAPID keys, notifications only work while the tab is open.</p>
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full" :class="notificationState.vapidKey ? 'bg-emerald-500' : 'bg-gray-600'"></div>
+                <span class="text-xs" :class="notificationState.vapidKey ? 'text-emerald-400' : 'text-gray-500'" x-text="notificationState.vapidKey ? 'VAPID keys configured' : 'VAPID keys not configured'"></span>
+              </div>
+              <template x-if="notificationState.vapidKey && notificationState.permission === 'granted'">
+                <button @click="subscribePush()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-xs rounded-lg font-medium transition mt-1">Subscribe to Push</button>
+              </template>
+            </div>
+
+            <!-- Test notification -->
+            <template x-if="notificationState.permission === 'granted'">
+              <button @click="testNotification()" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg px-4 py-2 transition w-full">Send Test Notification</button>
+            </template>
+          </div>
+
+          <!-- Remote Access -->
+          <div x-show="activeSettingsTab === 'remote'" class="space-y-4">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Remote Access</h3>
+            <p class="text-xs text-gray-500 mb-4">Access Task Ninja from your phone or another device, even when running locally.</p>
+
+            <!-- Enable toggle -->
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" x-model="remoteAccess.enabled"
+                       @change="toggleRemoteAccess($event.target.checked)"
+                       class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+                <div>
+                  <span class="text-sm text-gray-200 block">Enable Remote Access</span>
+                  <span class="text-xs text-gray-500">Bind to 0.0.0.0 and require auth token (restart required)</span>
+                </div>
+              </label>
+            </div>
+
+            <!-- Auth token display -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-2" x-show="remoteAccess.enabled" x-data="{ showSecret: false }">
+              <span class="text-sm text-gray-200 block">Auth Token</span>
+              <div class="flex items-center gap-2">
+                <code class="text-xs bg-gray-900 px-3 py-1.5 rounded font-mono text-amber-400 flex-1 truncate" x-text="showSecret ? (remoteAccess.secret || '****') : (remoteAccess.secret ? remoteAccess.secret.slice(0, 4) + '••••••••' : '****')"></code>
+                <button type="button" @click="showSecret = !showSecret" class="text-gray-500 hover:text-gray-300 p-1">
+                  <svg x-show="!showSecret" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                  <svg x-show="showSecret" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                </button>
+                <button @click="copyToken()" class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded px-2 py-1.5 transition">Copy</button>
+              </div>
+              <p class="text-xs text-gray-600">This is TASK_NINJA_SECRET from your .env file. Use it to log in from your phone.</p>
+            </div>
+
+            <!-- Tunneling guide -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-3" x-show="remoteAccess.enabled">
+              <span class="text-sm text-gray-200 block">Connect from your phone</span>
+              <p class="text-xs text-gray-500">Choose one tunneling method to expose your local server:</p>
+
+              <!-- Tailscale -->
+              <div class="bg-gray-900/70 rounded-lg p-3 space-y-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span class="text-sm font-medium text-white">Tailscale</span>
+                  <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full">Recommended</span>
+                </div>
+                <p class="text-xs text-gray-500">Install Tailscale on both your computer and phone. Access via Tailscale IP.</p>
+                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400">tailscale ip -4  # Get your Tailscale IP</code>
+                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400">http://100.x.x.x:8420  # Open on phone</code>
+              </div>
+
+              <!-- ngrok -->
+              <div class="bg-gray-900/70 rounded-lg p-3 space-y-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                  <span class="text-sm font-medium text-white">ngrok</span>
+                  <span class="text-[10px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded-full">No install on phone</span>
+                </div>
+                <p class="text-xs text-gray-500">Creates a public URL tunneled to your local server.</p>
+                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400">ngrok http 8420</code>
+                <p class="text-xs text-gray-600">Free tier available at ngrok.com. Copy the https URL to your phone.</p>
+              </div>
+
+              <!-- Cloudflare Tunnel -->
+              <div class="bg-gray-900/70 rounded-lg p-3 space-y-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                  <span class="text-sm font-medium text-white">Cloudflare Tunnel</span>
+                  <span class="text-[10px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded-full">Requires domain</span>
+                </div>
+                <p class="text-xs text-gray-500">Route through Cloudflare with your own domain.</p>
+                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400">cloudflared tunnel --url http://localhost:8420</code>
+              </div>
+            </div>
+
+            <div x-show="remoteAccess.enabled" class="p-3 bg-amber-900/20 border border-amber-800/30 rounded-lg">
+              <p class="text-xs text-amber-400">After toggling remote access, restart the server for changes to take effect.</p>
             </div>
           </div>
         </div>
@@ -583,7 +731,7 @@
                   <div class="p-3" @click="expanded = !expanded; if(['planning','developing','failed'].includes(ticket.state)) switchTerminal(ticket.id)">
                     <!-- Header -->
                     <div class="flex items-center justify-between mb-1.5">
-                      <a :href="'https://mfrlab.atlassian.net/browse/' + ticket.jira_key" target="_blank" @click.stop
+                      <a :href="(jiraSetup.url || 'https://yourcompany.atlassian.net').replace(/\/$/, '') + '/browse/' + ticket.jira_key" target="_blank" @click.stop
                          class="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline" x-text="ticket.jira_key"></a>
                       <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                         <template x-if="(ticket.state === 'planning' || ticket.state === 'developing') && !ticket.paused">
@@ -718,7 +866,7 @@
             <template x-for="ticket in ticketsInColumn(col.id)" :key="ticket.id">
               <div class="bg-gray-800 rounded-lg border border-gray-700 p-3" @click="switchTerminal(ticket.id)">
                 <div class="flex items-center justify-between mb-1">
-                  <a :href="'https://mfrlab.atlassian.net/browse/' + ticket.jira_key" target="_blank" @click.stop
+                  <a :href="(jiraSetup.url || 'https://yourcompany.atlassian.net').replace(/\/$/, '') + '/browse/' + ticket.jira_key" target="_blank" @click.stop
                      class="text-xs font-bold text-blue-400" x-text="ticket.jira_key"></a>
                   <div class="flex items-center gap-2">
                     <template x-if="ticket.state === 'planning' || ticket.state === 'developing'">
@@ -1007,7 +1155,6 @@
         terminalLogs: {},
         terminalFetched: {},
         settings: {
-          skipPermissions: true,
           workerTimeout: 30,
           cleanupWorktrees: true,
         },
@@ -1016,12 +1163,16 @@
         newProfile: { name: '', command: '', args_template: '', log_format: 'plain-text' },
         eventSource: null,
         tick: 0,
+        notificationState: { permission: typeof Notification !== 'undefined' ? Notification.permission : 'denied', enabled: false, vapidKey: null },
+        remoteAccess: { enabled: false, secret: '' },
 
         settingsTabs: [
           { id: 'general', label: 'General' },
           { id: 'repositories', label: 'Repositories' },
           { id: 'profiles', label: 'Agent Profiles' },
           { id: 'jira', label: 'Jira Credentials' },
+          { id: 'notifications', label: 'Notifications' },
+          { id: 'remote', label: 'Remote Access' },
         ],
 
         columns: [
@@ -1059,11 +1210,13 @@
             this.showJiraSetup = true;
           }
 
-          // Load Jira settings from .env for the settings/wizard forms
+          // Load settings from .env for forms
           if (envConfig) {
             this.jiraSetup.url = envConfig.JIRA_BASE_URL || '';
             this.jiraSetup.email = envConfig.JIRA_EMAIL || '';
             // Token is masked in response, don't overwrite
+            this.remoteAccess.enabled = (envConfig.TASK_NINJA_REMOTE_ACCESS || '').toLowerCase() === 'true';
+            this.remoteAccess.secret = envConfig.TASK_NINJA_SECRET || '';
           }
 
           if (runs && runs.length > 0) {
@@ -1074,6 +1227,7 @@
             if (active) await this.switchTerminal(active.id);
           }
 
+          await this.initNotifications();
           this.$nextTick(() => this.initSortable());
           setInterval(() => this.tick++, 5000);
         },
@@ -1198,6 +1352,10 @@
           this.activeTerminal = ticketId;
           const hasLogs = (this.terminalLogs[ticketId]?.length || 0) > 0;
           await this.fetchLogsForTicket(ticketId, !hasLogs);
+          this.$nextTick(() => {
+            const el = document.getElementById('terminal-output');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
         },
 
         // API
@@ -1504,6 +1662,88 @@
           this.jiraSetup.success = 'Saved';
         },
 
+        // Notifications
+        async initNotifications() {
+          if (typeof Notification !== 'undefined') {
+            this.notificationState.permission = Notification.permission;
+          }
+          const info = await this.api('GET', '/api/notifications/vapid-key');
+          if (info) {
+            this.notificationState.vapidKey = info.key;
+            this.notificationState.enabled = info.enabled;
+          }
+        },
+
+        async requestNotificationPermission() {
+          if (typeof Notification === 'undefined') return;
+          const result = await Notification.requestPermission();
+          this.notificationState.permission = result;
+          if (result === 'granted' && this.notificationState.vapidKey) {
+            await this.subscribePush();
+          }
+        },
+
+        async toggleServerNotifications(enabled) {
+          await this.api('PUT', '/api/env', { NOTIFICATIONS_ENABLED: enabled ? 'true' : 'false' });
+          this.notificationState.enabled = enabled;
+        },
+
+        async subscribePush() {
+          if (!this.notificationState.vapidKey || !('serviceWorker' in navigator)) return;
+          try {
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: this._urlBase64ToUint8Array(this.notificationState.vapidKey),
+            });
+            await this.api('POST', '/api/notifications/subscribe', { subscription: sub.toJSON() });
+          } catch (e) {
+            console.error('[notifications] Push subscribe failed:', e);
+          }
+        },
+
+        _urlBase64ToUint8Array(base64String) {
+          const padding = '='.repeat((4 - base64String.length % 4) % 4);
+          const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+          const raw = window.atob(base64);
+          const arr = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+          return arr;
+        },
+
+        testNotification() {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification('Task Ninja', { body: 'Notifications are working!' });
+          }
+        },
+
+        // Setup Wizard
+        openSetupWizard() {
+          this.setupStep = 1;
+          // Prefill from existing data
+          // Jira is already loaded from .env in init()
+          // If a repo exists, prefill newRepo for reference
+          if (this.repositories.length > 0 && !this.newRepo.name) {
+            // Leave empty so user can add another, but show existing below
+          }
+          this.showJiraSetup = true;
+        },
+
+        // Remote Access
+        async toggleRemoteAccess(enabled) {
+          await this.api('PUT', '/api/env', { TASK_NINJA_REMOTE_ACCESS: enabled ? 'true' : 'false' });
+          this.remoteAccess.enabled = enabled;
+        },
+
+        async copyToken() {
+          // Fetch full token (not masked) is not possible via API — tell user to check .env
+          try {
+            await navigator.clipboard.writeText(this.remoteAccess.secret);
+          } catch {
+            // Fallback: select text
+          }
+        },
+
         // Actions
         async loadEpic() {
           if (!this.epicKey) return;
@@ -1697,6 +1937,8 @@
 
             if (evtType === 'ticket_update') {
               const idx = this.tickets.findIndex(t => t.id === data.ticket_id);
+              const ticket = idx >= 0 ? this.tickets[idx] : null;
+              const prevState = ticket?.state;
               if (idx >= 0) {
                 const updates = { ...data };
                 delete updates.ticket_id;
@@ -1705,6 +1947,15 @@
               }
               if (data.state && ['planning', 'developing'].includes(data.state)) {
                 this.switchTerminal(data.ticket_id);
+              }
+              // In-tab notification for terminal state changes
+              if (data.state && data.state !== prevState && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                const key = ticket?.jira_key || data.ticket_id;
+                if (data.state === 'done' || data.state === 'review') {
+                  new Notification('Task Ninja', { body: `${key} completed`, tag: `ticket-${data.ticket_id}` });
+                } else if (data.state === 'failed') {
+                  new Notification('Task Ninja', { body: `${key} failed`, tag: `ticket-${data.ticket_id}` });
+                }
               }
             }
 
@@ -1721,6 +1972,9 @@
 
             if (evtType === 'run_status') {
               this.currentRun.status = data.status;
+              if (data.status === 'completed' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                new Notification('Task Ninja', { body: 'All tickets in this run have finished.', tag: 'run-completed' });
+              }
             }
 
             if (evtType === 'ticket_deleted') {
