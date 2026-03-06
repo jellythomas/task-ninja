@@ -136,12 +136,21 @@ class FetchTicketsRequest(BaseModel):
     keys: list[str]
 
 
-class AddTicketsRequest(BaseModel):
-    keys: list[str]
-    summaries: Optional[dict[str, str]] = None  # jira_key -> summary
+class TicketAssignment(BaseModel):
     repository_id: Optional[int] = None
     parent_branch: Optional[str] = None
     profile_id: Optional[int] = None
+
+
+class AddTicketsRequest(BaseModel):
+    keys: list[str]
+    summaries: Optional[dict[str, str]] = None  # jira_key -> summary
+    # Global fallback fields
+    repository_id: Optional[int] = None
+    parent_branch: Optional[str] = None
+    profile_id: Optional[int] = None
+    # Per-ticket overrides (takes precedence over global)
+    assignments: Optional[dict[str, TicketAssignment]] = None
 
 
 class MoveTicketRequest(BaseModel):

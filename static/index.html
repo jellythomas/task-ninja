@@ -1050,28 +1050,121 @@
         </span>
         <span class="text-[11px] text-blue-400" x-text="epicTickets.filter(t => t.selected && !t.alreadyAdded).length + ' selected'"></span>
       </div>
-      <div class="flex-1 overflow-y-auto p-4 space-y-1">
-        <template x-for="t in filteredEpicTickets" :key="t.key">
-          <label :class="{'opacity-50': t.alreadyAdded}" class="flex items-center gap-3 p-2.5 rounded-lg hover:bg-gray-800/50 cursor-pointer transition">
-            <input type="checkbox" x-model="t.selected" :disabled="t.alreadyAdded" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 flex-shrink-0">
-            <span class="text-sm font-mono text-blue-400 flex-shrink-0 w-20" x-text="t.key"></span>
-            <span class="text-sm text-gray-300 truncate flex-1" x-text="t.summary"></span>
-            <!-- Matched repo -->
-            <template x-if="t.matchedRepo">
-              <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500 flex-shrink-0" x-text="t.matchedRepo"></span>
+      <div class="flex-1 overflow-y-auto p-4 space-y-3">
+        <template x-for="group in epicGroups" :key="group.prefix">
+          <div class="border border-gray-800 rounded-lg overflow-hidden">
+            <!-- Group header -->
+            <div class="bg-gray-800/60 px-3 py-2 flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xs font-bold font-mono text-violet-400" x-text="group.prefix"></span>
+                <span class="text-[10px] text-gray-500" x-text="group.tickets.length + ' ticket' + (group.tickets.length !== 1 ? 's' : '')"></span>
+                <template x-if="group.repoName">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 truncate max-w-[120px]" x-text="group.repoName"></span>
+                </template>
+                <template x-if="group.branch">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-gray-500 font-mono" x-text="group.branch"></span>
+                </template>
+              </div>
+              <button @click="group.expanded = !group.expanded; if(group.expanded && !epicGroupOverrides[group.prefix]) epicGroupOverrides[group.prefix] = { repoId: group.repoId, branch: group.branch, profileId: group.profileId }"
+                      class="text-[10px] px-2 py-0.5 rounded border transition flex-shrink-0"
+                      :class="group.expanded ? 'border-blue-500 text-blue-400' : 'border-gray-700 text-gray-500 hover:border-gray-500'">
+                <span x-text="group.expanded ? 'Close' : 'Override'"></span>
+              </button>
+            </div>
+            <!-- Group override config (collapsible) -->
+            <template x-if="group.expanded">
+              <div class="bg-gray-800/30 px-3 py-2 border-t border-gray-800 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <div class="flex items-center gap-1.5">
+                  <label class="text-[10px] text-gray-500">Repo:</label>
+                  <select x-model="epicGroupOverrides[group.prefix].repoId"
+                          @change="epicGroupOverrides[group.prefix].branch = (repositories.find(r => r.id == epicGroupOverrides[group.prefix].repoId) || {}).default_branch || ''"
+                          class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] focus:border-blue-500 focus:outline-none">
+                    <option :value="null">None</option>
+                    <template x-for="r in repositories" :key="r.id">
+                      <option :value="r.id" x-text="r.name" :selected="r.id == epicGroupOverrides[group.prefix]?.repoId"></option>
+                    </template>
+                  </select>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <label class="text-[10px] text-gray-500">Branch:</label>
+                  <input x-model="epicGroupOverrides[group.prefix].branch" type="text" placeholder="main"
+                         class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] w-24 focus:border-blue-500 focus:outline-none">
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <label class="text-[10px] text-gray-500">Agent:</label>
+                  <select x-model="epicGroupOverrides[group.prefix].profileId"
+                          class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] focus:border-blue-500 focus:outline-none">
+                    <option :value="null">Global default</option>
+                    <template x-for="p in agentProfiles" :key="p.id">
+                      <option :value="p.id" x-text="p.name"></option>
+                    </template>
+                  </select>
+                </div>
+              </div>
             </template>
-            <template x-if="t.alreadyAdded">
-              <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 text-emerald-400 bg-emerald-900/30">On Board</span>
-            </template>
-            <template x-if="!t.alreadyAdded">
-              <span :class="{
-                'text-green-400 bg-green-900/30': t.status === 'Done',
-                'text-blue-400 bg-blue-900/30': t.status === 'In Progress',
-                'text-gray-400 bg-gray-800': t.status === 'To Do' || t.status === 'Open',
-                'text-amber-400 bg-amber-900/30': t.status === 'In Review',
-              }" class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" x-text="t.status"></span>
-            </template>
-          </label>
+            <!-- Tickets in this group -->
+            <div class="divide-y divide-gray-800/50">
+              <template x-for="t in group.tickets" :key="t.key">
+                <div>
+                  <label :class="{'opacity-50': t.alreadyAdded}" class="flex items-center gap-3 px-3 py-2 hover:bg-gray-800/50 cursor-pointer transition">
+                    <input type="checkbox" x-model="t.selected" :disabled="t.alreadyAdded" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 flex-shrink-0">
+                    <span class="text-sm font-mono text-blue-400 flex-shrink-0 w-20" x-text="t.key"></span>
+                    <span class="text-sm text-gray-300 truncate flex-1" x-text="t.summary"></span>
+                    <template x-if="epicTicketOverrides[t.key]">
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Has override"></span>
+                    </template>
+                    <template x-if="t.alreadyAdded">
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 text-emerald-400 bg-emerald-900/30">On Board</span>
+                    </template>
+                    <template x-if="!t.alreadyAdded">
+                      <span :class="{
+                        'text-green-400 bg-green-900/30': t.status === 'Done',
+                        'text-blue-400 bg-blue-900/30': t.status === 'In Progress',
+                        'text-gray-400 bg-gray-800': t.status === 'To Do' || t.status === 'Open',
+                        'text-amber-400 bg-amber-900/30': t.status === 'In Review',
+                      }" class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" x-text="t.status"></span>
+                    </template>
+                    <button @click.prevent.stop="epicEditingTicket = epicEditingTicket === t.key ? null : t.key; if(epicEditingTicket && !epicTicketOverrides[t.key]) { const a = resolveTicketAssignment(t); epicTicketOverrides[t.key] = { repoId: a.repository_id, branch: a.parent_branch, profileId: a.profile_id }; }"
+                            class="text-[10px] text-gray-600 hover:text-gray-300 flex-shrink-0 p-0.5" title="Override">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                    </button>
+                  </label>
+                  <!-- Per-ticket override row -->
+                  <template x-if="epicEditingTicket === t.key">
+                    <div class="bg-gray-800/40 px-3 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-gray-800/50">
+                      <div class="flex items-center gap-1.5">
+                        <label class="text-[10px] text-gray-500">Repo:</label>
+                        <select x-model="epicTicketOverrides[t.key].repoId"
+                                class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] focus:border-blue-500 focus:outline-none">
+                          <option :value="null">Group default</option>
+                          <template x-for="r in repositories" :key="r.id">
+                            <option :value="r.id" x-text="r.name"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <label class="text-[10px] text-gray-500">Branch:</label>
+                        <input x-model="epicTicketOverrides[t.key].branch" type="text" placeholder="inherit"
+                               class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] w-20 focus:border-blue-500 focus:outline-none">
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <label class="text-[10px] text-gray-500">Agent:</label>
+                        <select x-model="epicTicketOverrides[t.key].profileId"
+                                class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] focus:border-blue-500 focus:outline-none">
+                          <option :value="null">Group default</option>
+                          <template x-for="p in agentProfiles" :key="p.id">
+                            <option :value="p.id" x-text="p.name"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <button @click="delete epicTicketOverrides[t.key]; epicEditingTicket = null"
+                              class="text-[10px] text-red-400 hover:text-red-300 ml-auto">Clear</button>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
         </template>
         <template x-if="filteredEpicTickets.length === 0 && epicTickets.length > 0">
           <div class="text-center py-6 text-gray-500 text-sm">No tickets match your filter.</div>
@@ -1224,6 +1317,9 @@
         showJiraSetup: false,
         setupStep: 1,
         epicTickets: [],
+        epicGroupOverrides: {},   // prefix -> { repoId, branch, profileId }
+        epicTicketOverrides: {},  // jira_key -> { repoId, branch, profileId }
+        epicEditingTicket: null,  // jira_key of ticket being edited
         epicFilter: { search: '', activeTags: [] },
         boardFilter: '',
         confirmModal: { show: false, title: '', message: '', ticketId: null },
@@ -1392,6 +1488,43 @@
             if (this.epicTickets.some(t => (t.summary || '').includes(d))) tags.add(d);
           });
           return [...tags].sort();
+        },
+
+        get epicGroups() {
+          const groups = {};
+          for (const t of this.filteredEpicTickets) {
+            const prefix = t.key.split('-')[0] || 'OTHER';
+            if (!groups[prefix]) {
+              // Auto-fill from matched repo
+              const matchedRepo = this.repositories.find(r => r.jira_label && r.jira_label.toUpperCase() === prefix);
+              groups[prefix] = {
+                prefix,
+                repoId: matchedRepo?.id || null,
+                repoName: matchedRepo?.name || null,
+                branch: matchedRepo?.default_branch || '',
+                profileId: null,
+                expanded: false,
+                tickets: [],
+              };
+            }
+            groups[prefix].tickets.push(t);
+          }
+          // Apply group overrides
+          for (const [prefix, override] of Object.entries(this.epicGroupOverrides)) {
+            if (groups[prefix]) Object.assign(groups[prefix], override);
+          }
+          return Object.values(groups);
+        },
+
+        resolveTicketAssignment(ticket) {
+          const prefix = ticket.key.split('-')[0] || 'OTHER';
+          const group = this.epicGroups.find(g => g.prefix === prefix) || {};
+          const override = this.epicTicketOverrides[ticket.key] || {};
+          return {
+            repository_id: override.repoId || group.repoId || null,
+            parent_branch: override.branch || group.branch || this.epicParentBranch || null,
+            profile_id: override.profileId || group.profileId || this.epicProfileId || null,
+          };
         },
 
         get filteredEpicTickets() {
@@ -1966,13 +2099,24 @@
           const keys = selected.map(t => t.key);
           const summaries = {};
           selected.forEach(t => { summaries[t.key] = t.summary; });
+
+          // Build per-ticket assignments via 3-tier cascade
+          const assignments = {};
+          for (const t of selected) {
+            const resolved = this.resolveTicketAssignment(t);
+            // Only include if at least one field is set
+            if (resolved.repository_id || resolved.parent_branch || resolved.profile_id) {
+              assignments[t.key] = resolved;
+            }
+          }
+
           const body = { keys, summaries };
+          // Global fallbacks
           if (this.epicParentBranch) body.parent_branch = this.epicParentBranch;
           if (this.epicProfileId) body.profile_id = this.epicProfileId;
-          // Use matched repo if all selected share the same one, otherwise use active tab
-          const repoIds = [...new Set(selected.map(t => t.matchedRepoId).filter(Boolean))];
-          if (repoIds.length === 1) body.repository_id = repoIds[0];
-          else if (this.activeRepoId) body.repository_id = this.activeRepoId;
+          if (this.activeRepoId) body.repository_id = this.activeRepoId;
+          // Per-ticket overrides
+          if (Object.keys(assignments).length > 0) body.assignments = assignments;
 
           const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, body);
           if (result && result.tickets) {
@@ -1983,6 +2127,9 @@
           this.epicFilter = { search: '', activeTags: [] };
           this.epicParentBranch = '';
           this.epicProfileId = null;
+          this.epicGroupOverrides = {};
+          this.epicTicketOverrides = {};
+          this.epicEditingTicket = null;
           await this.loadRunTickets();
           this.$nextTick(() => this.initSortable());
         },

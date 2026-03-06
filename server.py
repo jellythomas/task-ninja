@@ -480,14 +480,18 @@ async def add_tickets(run_id: str, req: AddTicketsRequest):
             continue
         summary = summaries.get(key)
         ticket = await state.add_ticket(run_id, key, summary=summary, state=TicketState.QUEUED)
-        # Apply optional assignment fields
+        # Resolve assignment: per-ticket override > global fallback
+        per_ticket = (req.assignments or {}).get(key)
         assignment = {}
-        if req.repository_id:
-            assignment["repository_id"] = req.repository_id
-        if req.parent_branch:
-            assignment["parent_branch"] = req.parent_branch
-        if req.profile_id:
-            assignment["profile_id"] = req.profile_id
+        repo_id = (per_ticket.repository_id if per_ticket else None) or req.repository_id
+        branch = (per_ticket.parent_branch if per_ticket else None) or req.parent_branch
+        profile = (per_ticket.profile_id if per_ticket else None) or req.profile_id
+        if repo_id:
+            assignment["repository_id"] = repo_id
+        if branch:
+            assignment["parent_branch"] = branch
+        if profile:
+            assignment["profile_id"] = profile
         if assignment:
             await state.update_ticket(ticket.id, **assignment)
             ticket = await state.get_ticket(ticket.id)
