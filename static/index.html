@@ -1009,11 +1009,23 @@
       <div class="px-5 py-4 border-b border-gray-800">
         <h2 class="text-lg font-semibold text-white">Select Tickets from <span class="text-blue-400" x-text="epicKey"></span></h2>
         <p class="text-xs text-gray-500 mt-1">Filter and pick the tickets you want to queue for execution.</p>
-        <!-- Parent Branch for this epic -->
-        <div class="mt-2 flex items-center gap-2">
-          <label class="text-xs text-gray-500">Parent Branch:</label>
-          <input x-model="epicParentBranch" type="text" placeholder="main (default)"
-                 class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-48 focus:border-blue-500 focus:outline-none">
+        <!-- Parent Branch + Agent Profile -->
+        <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Parent Branch:</label>
+            <input x-model="epicParentBranch" type="text" placeholder="main (default)"
+                   class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-36 focus:border-blue-500 focus:outline-none">
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Agent:</label>
+            <select x-model="epicProfileId"
+                    class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+              <option :value="null">Default</option>
+              <template x-for="p in agentProfiles" :key="p.id">
+                <option :value="p.id" x-text="p.name + (p.is_default ? ' ★' : '')"></option>
+              </template>
+            </select>
+          </div>
         </div>
         <!-- Search + Quick Filters -->
         <div class="mt-3 flex flex-col gap-2">
@@ -1203,6 +1215,7 @@
         inputMode: 'epic',
         epicKey: '',
         epicParentBranch: '',
+        epicProfileId: null,
         ticketInput: '',
         maxParallel: 2,
         showSettings: false,
@@ -1888,6 +1901,19 @@
               matchedRepo: t.matched_repository_name || null,
               matchedRepoId: t.matched_repository_id || null,
             }));
+            // Auto-fill parent branch from first matched repo's default_branch
+            if (!this.epicParentBranch) {
+              const firstRepoId = result.tickets.find(t => t.matched_repository_id)?.matched_repository_id;
+              if (firstRepoId) {
+                const repo = this.repositories.find(r => r.id === firstRepoId);
+                if (repo) this.epicParentBranch = repo.default_branch || '';
+              }
+            }
+            // Auto-select default agent profile
+            if (!this.epicProfileId) {
+              const defaultProfile = this.agentProfiles.find(p => p.is_default);
+              if (defaultProfile) this.epicProfileId = defaultProfile.id;
+            }
           } else if (result && result.found === 0) {
             this.epicTickets = [
               { key: this.epicKey, summary: 'No tickets found in this epic', status: 'Empty', selected: false }
@@ -1942,6 +1968,7 @@
           selected.forEach(t => { summaries[t.key] = t.summary; });
           const body = { keys, summaries };
           if (this.epicParentBranch) body.parent_branch = this.epicParentBranch;
+          if (this.epicProfileId) body.profile_id = this.epicProfileId;
           // Use matched repo if all selected share the same one, otherwise use active tab
           const repoIds = [...new Set(selected.map(t => t.matchedRepoId).filter(Boolean))];
           if (repoIds.length === 1) body.repository_id = repoIds[0];
@@ -1955,6 +1982,7 @@
           this.showEpicModal = false;
           this.epicFilter = { search: '', activeTags: [] };
           this.epicParentBranch = '';
+          this.epicProfileId = null;
           await this.loadRunTickets();
           this.$nextTick(() => this.initSortable());
         },
