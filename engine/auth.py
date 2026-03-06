@@ -2,7 +2,7 @@
 
 from fastapi import Request, WebSocket, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
-from engine.env_manager import get_env
+from engine.env_manager import get_env, verify_token
 
 # Paths that don't require auth
 PUBLIC_PATHS = {"/", "/login", "/favicon.ico"}
@@ -13,16 +13,9 @@ def _is_remote_access_enabled() -> bool:
     return get_env("TASK_NINJA_REMOTE_ACCESS", "false").lower() == "true"
 
 
-def _get_secret() -> str:
-    return get_env("TASK_NINJA_SECRET", "")
-
-
 def _check_token(token: str) -> bool:
-    """Validate bearer token against the secret."""
-    secret = _get_secret()
-    if not secret:
-        return True  # No secret configured = no auth
-    return token == secret
+    """Validate bearer token against the stored hash."""
+    return verify_token(token)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

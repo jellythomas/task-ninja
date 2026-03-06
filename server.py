@@ -16,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from engine.auth import AuthMiddleware, verify_ws_token
 from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
-from engine.env_manager import load_env, get_env, update_env, get_public_env
+from engine.env_manager import load_env, get_env, update_env, get_public_env, verify_token, generate_token
 from engine.jira_client import JiraClient
 from engine.notifier import Notifier
 from engine.orchestrator import Orchestrator
@@ -99,8 +99,7 @@ app.add_middleware(AuthMiddleware)
 async def auth_login(req: dict):
     """Validate token and return success."""
     token = req.get("token", "")
-    secret = get_env("TASK_NINJA_SECRET", "")
-    if not secret or token == secret:
+    if verify_token(token):
         return {"status": "ok"}
     raise HTTPException(401, "Invalid token")
 
@@ -738,6 +737,19 @@ async def open_external_terminal(ticket_id: str):
 # --- Entry point ---
 
 if __name__ == "__main__":
+    # Handle --regenerate-token before anything else
+    if "--regenerate-token" in sys.argv:
+        raw_token = generate_token()
+        print(f"")
+        print(f"  New auth token generated:")
+        print(f"")
+        print(f"    {raw_token}")
+        print(f"")
+        print(f"  Save this token — it is shown once and never stored on disk.")
+        print(f"  The hash has been written to .env.")
+        print(f"")
+        sys.exit(0)
+
     # .env takes precedence, then config.yaml, then defaults
     remote = get_env("TASK_NINJA_REMOTE_ACCESS", "false").lower() == "true"
     host = get_env("TASK_NINJA_HOST") or config.get("server", {}).get("host", "127.0.0.1")
@@ -746,6 +758,6 @@ if __name__ == "__main__":
     port = int(get_env("TASK_NINJA_PORT") or config.get("server", {}).get("port", 8420))
     if remote:
         print(f"[server] Remote access ENABLED — auth required", file=sys.stderr)
-        print(f"[server] Auth token: {get_env('TASK_NINJA_SECRET')[:8]}...", file=sys.stderr)
+        print(f"[server] Token is hashed — use your saved token to log in", file=sys.stderr)
     print(f"[server] Starting at http://{host}:{port}", file=sys.stderr)
     uvicorn.run("server:app", host=host, port=port, reload=False)

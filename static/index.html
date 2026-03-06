@@ -53,7 +53,7 @@
       <div x-show="loginError" class="text-xs text-red-400 mb-3" x-text="loginError"></div>
       <button @click="loginError = await doLogin(loginToken) || ''"
               class="bg-blue-600 hover:bg-blue-700 px-4 py-2.5 text-sm rounded-lg font-medium transition w-full">Sign In</button>
-      <p class="text-xs text-gray-600 mt-4">Token is found in your .env file as TASK_NINJA_SECRET</p>
+      <p class="text-xs text-gray-600 mt-4">Token was shown once at first run. Regenerate: <code>python server.py --regenerate-token</code></p>
     </div>
   </div>
 
@@ -645,18 +645,16 @@
               </label>
             </div>
 
-            <!-- Auth token display -->
-            <div class="p-3 bg-gray-800/50 rounded-lg space-y-2" x-show="remoteAccess.enabled" x-data="{ showSecret: false }">
+            <!-- Auth token info -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-2" x-show="remoteAccess.enabled">
               <span class="text-sm text-gray-200 block">Auth Token</span>
               <div class="flex items-center gap-2">
-                <code class="text-xs bg-gray-900 px-3 py-1.5 rounded font-mono text-amber-400 flex-1 truncate" x-text="showSecret ? (remoteAccess.secret || '****') : (remoteAccess.secret ? remoteAccess.secret.slice(0, 4) + '••••••••' : '****')"></code>
-                <button type="button" @click="showSecret = !showSecret" class="text-gray-500 hover:text-gray-300 p-1">
-                  <svg x-show="!showSecret" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                  <svg x-show="showSecret" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
-                </button>
-                <button @click="copyToken()" class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded px-2 py-1.5 transition">Copy</button>
+                <div class="w-2 h-2 rounded-full" :class="remoteAccess.hasToken ? 'bg-emerald-500' : 'bg-red-500'"></div>
+                <span class="text-xs" :class="remoteAccess.hasToken ? 'text-emerald-400' : 'text-red-400'" x-text="remoteAccess.hasToken ? 'Token hash configured' : 'No token configured'"></span>
               </div>
-              <p class="text-xs text-gray-600">This is TASK_NINJA_SECRET from your .env file. Use it to log in from your phone.</p>
+              <p class="text-xs text-gray-500">The raw token was shown once at generation and is never stored on disk. Only a salted SHA-256 hash is saved in <code>.env</code>.</p>
+              <p class="text-xs text-gray-500">Lost your token? Regenerate:</p>
+              <code class="text-xs bg-gray-900 px-3 py-1.5 rounded block text-gray-400">python server.py --regenerate-token</code>
             </div>
 
             <!-- Tunneling guide -->
@@ -1164,7 +1162,7 @@
         eventSource: null,
         tick: 0,
         notificationState: { permission: typeof Notification !== 'undefined' ? Notification.permission : 'denied', enabled: false, vapidKey: null },
-        remoteAccess: { enabled: false, secret: '' },
+        remoteAccess: { enabled: false, hasToken: false },
 
         settingsTabs: [
           { id: 'general', label: 'General' },
@@ -1216,7 +1214,7 @@
             this.jiraSetup.email = envConfig.JIRA_EMAIL || '';
             // Token is masked in response, don't overwrite
             this.remoteAccess.enabled = (envConfig.TASK_NINJA_REMOTE_ACCESS || '').toLowerCase() === 'true';
-            this.remoteAccess.secret = envConfig.TASK_NINJA_SECRET || '';
+            this.remoteAccess.hasToken = !!(envConfig.TASK_NINJA_SECRET_HASH);
           }
 
           if (runs && runs.length > 0) {
@@ -1735,14 +1733,6 @@
           this.remoteAccess.enabled = enabled;
         },
 
-        async copyToken() {
-          // Fetch full token (not masked) is not possible via API — tell user to check .env
-          try {
-            await navigator.clipboard.writeText(this.remoteAccess.secret);
-          } catch {
-            // Fallback: select text
-          }
-        },
 
         // Actions
         async loadEpic() {
