@@ -42,7 +42,7 @@ class JiraClient:
         jql = f'"Epic Link" = {epic_key} OR parent = {epic_key} ORDER BY rank ASC'
         try:
             resp = await self._request(
-                "GET", "/rest/api/3/search",
+                "GET", "/rest/api/3/search/jql",
                 params={"jql": jql, "maxResults": 100, "fields": "summary,status,assignee,labels,components"},
             )
             data = resp.json()
