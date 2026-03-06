@@ -1071,11 +1071,9 @@
                 <template x-if="group.repoName">
                   <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 truncate max-w-[120px]" x-text="group.repoName"></span>
                 </template>
-                <template x-if="group.branch">
-                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-gray-500 font-mono" x-text="group.branch"></span>
-                </template>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-gray-500 font-mono" x-text="effectiveGroupBranch(group)"></span>
               </div>
-              <button @click="epicExpandedGroups[group.prefix] = !epicExpandedGroups[group.prefix]; if(epicExpandedGroups[group.prefix] && !epicGroupOverrides[group.prefix]) epicGroupOverrides[group.prefix] = { repoId: group.repoId, branch: group.branch, profileId: group.profileId }"
+              <button @click="epicExpandedGroups[group.prefix] = !epicExpandedGroups[group.prefix]; if(epicExpandedGroups[group.prefix] && !epicGroupOverrides[group.prefix]) epicGroupOverrides[group.prefix] = { repoId: group.repoId, branch: '', profileId: group.profileId }"
                       class="text-[10px] px-2 py-0.5 rounded border transition flex-shrink-0"
                       :class="epicExpandedGroups[group.prefix] ? 'border-blue-500 text-blue-400' : 'border-gray-700 text-gray-500 hover:border-gray-500'">
                 <span x-text="epicExpandedGroups[group.prefix] ? 'Close' : 'Override'"></span>
@@ -1097,7 +1095,7 @@
                 </div>
                 <div class="flex items-center gap-1.5">
                   <label class="text-[10px] text-gray-500">Branch:</label>
-                  <input x-model="epicGroupOverrides[group.prefix].branch" type="text" placeholder="main"
+                  <input x-model="epicGroupOverrides[group.prefix].branch" type="text" :placeholder="epicParentBranch || group.repoBranch || 'inherit from global'"
                          class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] w-24 focus:border-blue-500 focus:outline-none">
                 </div>
                 <div class="flex items-center gap-1.5">
@@ -1533,8 +1531,9 @@
                 prefix: groupKey,
                 repoId: matchedRepo?.id || null,
                 repoName: matchedRepo?.name || null,
-                branch: matchedRepo?.default_branch || '',
-                profileId: null,
+                repoBranch: matchedRepo?.default_branch || '',  // repo's configured default (display only)
+                branch: '',      // explicit override (empty = inherit from global)
+                profileId: null, // explicit override (null = inherit from global)
                 tickets: [],
               };
             }
@@ -1552,6 +1551,11 @@
           });
         },
 
+        // Effective branch for display on group header
+        effectiveGroupBranch(group) {
+          return group.branch || this.epicParentBranch || group.repoBranch || 'HEAD';
+        },
+
         resolveTicketAssignment(ticket) {
           const matchedRepo = this._matchTicketRepo(ticket);
           const groupKey = matchedRepo ? matchedRepo.name : 'Others';
@@ -1559,7 +1563,8 @@
           const override = this.epicTicketOverrides[ticket.key] || {};
           return {
             repository_id: override.repoId || group.repoId || null,
-            parent_branch: override.branch || group.branch || this.epicParentBranch || null,
+            // Cascade: ticket > group explicit > global > repo default
+            parent_branch: override.branch || group.branch || this.epicParentBranch || group.repoBranch || null,
             profile_id: override.profileId || group.profileId || this.epicProfileId || null,
           };
         },
