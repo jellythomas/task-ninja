@@ -132,6 +132,10 @@ class LoadEpicRequest(BaseModel):
     epic_key: str
 
 
+class FetchTicketsRequest(BaseModel):
+    keys: list[str]
+
+
 class AddTicketsRequest(BaseModel):
     keys: list[str]
     summaries: Optional[dict[str, str]] = None  # jira_key -> summary

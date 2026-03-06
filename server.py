@@ -30,6 +30,7 @@ from models.ticket import (
     CreateRepositoryRequest,
     CreateRunRequest,
     CreateScheduleRequest,
+    FetchTicketsRequest,
     LoadEpicRequest,
     MoveTicketRequest,
     RunStatus,
@@ -384,19 +385,87 @@ async def load_epic(run_id: str, req: LoadEpicRequest):
     }
 
 
+@app.post("/api/runs/{run_id}/fetch-tickets")
+async def fetch_tickets(run_id: str, req: FetchTicketsRequest):
+    """Fetch ticket details from Jira for the selection modal."""
+    import re
+    run = await state.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    # Parse keys — extract from URLs like https://jurnal.atlassian.net/browse/BRO-9173
+    parsed_keys = []
+    for raw in req.keys:
+        raw = raw.strip()
+        if not raw:
+            continue
+        # Extract key from Jira URL
+        m = re.search(r'/browse/([A-Z][A-Z0-9]+-\d+)', raw, re.IGNORECASE)
+        if m:
+            parsed_keys.append(m.group(1).upper())
+        else:
+            parsed_keys.append(raw.upper())
+
+    repos = await state.list_repositories()
+    label_to_repo = {}
+    repo_map = {r.id: r for r in repos}
+    for r in repos:
+        if r.jira_label:
+            label_to_repo[r.jira_label.lower()] = r.id
+
+    tickets = []
+    for key in parsed_keys:
+        existing = await state.get_ticket_by_jira_key(run_id, key)
+        # Fetch from Jira
+        issue = None
+        if await jira_client.is_configured():
+            issue = await jira_client.get_issue(key)
+
+        # Auto-detect repository
+        matched_repo_id = None
+        key_prefix = key.split("-")[0].lower() if "-" in key else ""
+        if key_prefix and key_prefix in label_to_repo:
+            matched_repo_id = label_to_repo[key_prefix]
+
+        ticket_data = {
+            "jira_key": key,
+            "summary": issue.get("summary", "") if issue else None,
+            "status": issue.get("status", "To Do") if issue else "Unknown",
+            "already_added": existing is not None,
+            "labels": issue.get("labels", []) if issue else [],
+            "components": issue.get("components", []) if issue else [],
+        }
+        if matched_repo_id:
+            repo = repo_map.get(matched_repo_id)
+            ticket_data["matched_repository_id"] = matched_repo_id
+            ticket_data["matched_repository_name"] = repo.name if repo else None
+
+        tickets.append(ticket_data)
+
+    return {
+        "status": "tickets_fetched",
+        "found": len(tickets),
+        "tickets": tickets,
+    }
+
+
 @app.post("/api/runs/{run_id}/add-tickets")
 async def add_tickets(run_id: str, req: AddTicketsRequest):
     """Add tickets by Jira keys. Goes directly to Queued."""
+    import re
     run = await state.get_run(run_id)
     if not run:
         raise HTTPException(404, "Run not found")
 
     added = []
     summaries = req.summaries or {}
-    for key in req.keys:
-        key = key.strip().upper()
-        if not key:
+    for raw_key in req.keys:
+        raw_key = raw_key.strip()
+        if not raw_key:
             continue
+        # Extract key from Jira URL if needed
+        m = re.search(r'/browse/([A-Z][A-Z0-9]+-\d+)', raw_key, re.IGNORECASE)
+        key = m.group(1).upper() if m else raw_key.upper()
         existing = await state.get_ticket_by_jira_key(run_id, key)
         if existing:
             continue

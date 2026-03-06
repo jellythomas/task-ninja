@@ -296,7 +296,7 @@
         <template x-if="inputMode === 'tickets'">
           <div class="flex items-center gap-2">
             <input x-model="ticketInput" type="text" placeholder="MC-9173, MC-9174" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-48 sm:w-72 focus:border-blue-500 focus:outline-none">
-            <button @click="addTickets()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Queue</button>
+            <button @click="addTickets()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Load</button>
           </div>
         </template>
 
@@ -1902,14 +1902,30 @@
           if (!(await this.ensureRun())) return;
 
           const keys = this.ticketInput.split(/[,\n\s]+/).filter(k => k.trim());
-          const body = { keys };
-          if (this.activeRepoId) body.repository_id = this.activeRepoId;
-          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, body);
-          if (result && result.tickets) {
-            this.tickets.push(...result.tickets);
-            this.ticketInput = '';
-            this.$nextTick(() => this.initSortable());
+
+          // Show modal with loading state
+          this.epicTickets = [
+            { key: '...', summary: 'Fetching ticket details from Jira...', status: 'Loading', selected: false }
+          ];
+          this.showEpicModal = true;
+
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/fetch-tickets`, { keys });
+          if (result && result.tickets && result.tickets.length > 0) {
+            this.epicTickets = result.tickets.map(t => ({
+              key: t.jira_key,
+              summary: t.summary || t.jira_key,
+              status: t.status || 'Unknown',
+              selected: !t.already_added,
+              alreadyAdded: t.already_added || false,
+              matchedRepo: t.matched_repository_name || null,
+              matchedRepoId: t.matched_repository_id || null,
+            }));
+          } else {
+            this.epicTickets = [
+              { key: '-', summary: 'No tickets found. Check keys and Jira credentials.', status: 'Error', selected: false }
+            ];
           }
+          this.ticketInput = '';
         },
 
         async queueSelectedEpicTickets() {
