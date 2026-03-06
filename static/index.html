@@ -1876,6 +1876,8 @@
           this.showEpicModal = true;
 
           const result = await this.api('POST', `/api/runs/${this.currentRun.id}/load-epic`, { epic_key: this.epicKey });
+          // Update epicKey with cleaned key from backend (handles URL parsing)
+          if (result && result.epic_key) this.epicKey = result.epic_key;
           if (result && result.tickets && result.tickets.length > 0) {
             this.epicTickets = result.tickets.map(t => ({
               key: t.jira_key,

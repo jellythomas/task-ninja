@@ -312,17 +312,26 @@ async def resume_run(run_id: str):
 @app.post("/api/runs/{run_id}/load-epic")
 async def load_epic(run_id: str, req: LoadEpicRequest):
     """Load tickets from a Jira epic. Uses direct API if configured, falls back to Claude CLI."""
+    import re
     run = await state.get_run(run_id)
     if not run:
         raise HTTPException(404, "Run not found")
 
-    await state.update_run_config(run_id, epic_key=req.epic_key)
+    # Parse epic key from Jira URL if needed
+    epic_key = req.epic_key.strip()
+    m = re.search(r'/browse/([A-Z][A-Z0-9]+-\d+)', epic_key, re.IGNORECASE)
+    if m:
+        epic_key = m.group(1).upper()
+    else:
+        epic_key = epic_key.upper()
+
+    await state.update_run_config(run_id, epic_key=epic_key)
 
     # Try direct Jira API first, fall back to Claude CLI + MCP
     if await jira_client.is_configured():
-        children = await jira_client.fetch_epic_children(req.epic_key)
+        children = await jira_client.fetch_epic_children(epic_key)
     else:
-        children = await claude_helper.fetch_epic_children(req.epic_key)
+        children = await claude_helper.fetch_epic_children(epic_key)
 
     # Load repositories for auto-assigning by jira_label
     repos = await state.list_repositories()
@@ -379,7 +388,7 @@ async def load_epic(run_id: str, req: LoadEpicRequest):
 
     return {
         "status": "epic_loaded",
-        "epic_key": req.epic_key,
+        "epic_key": epic_key,
         "found": len(tickets),
         "tickets": tickets,
     }
