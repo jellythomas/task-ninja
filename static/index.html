@@ -83,10 +83,9 @@
       <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">TN</div>
       <h1 class="text-lg font-semibold text-white hidden sm:block">Task Ninja</h1>
     </div>
-    <div class="flex items-center gap-3">
-      <span class="text-xs text-gray-500 hidden sm:inline" x-text="currentRun ? `Run: ${currentRun.name}` : 'No active run'"></span>
-      <button @click="showSettings = !showSettings" :class="showSettings ? 'bg-gray-800' : ''" class="p-2 hover:bg-gray-800 rounded-lg transition">
-        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div class="flex items-center gap-2">
+      <button @click="showSettings = !showSettings" :class="showSettings ? 'bg-gray-700 text-white' : 'text-gray-400'" class="p-2 hover:bg-gray-800 rounded-lg transition" title="Settings">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
         </svg>
@@ -210,148 +209,207 @@
       </div>
     </div>
 
-    <!-- Settings Panel (collapsible, tabbed) -->
-    <div x-show="showSettings" x-transition class="bg-gray-900/80 border-b border-gray-800 px-4 sm:px-6 py-4">
-      <!-- Settings Tabs -->
-      <div class="flex gap-1 mb-4 overflow-x-auto">
-        <template x-for="tab in settingsTabs" :key="tab.id">
-          <button @click="activeSettingsTab = tab.id"
-                  :class="activeSettingsTab === tab.id ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'"
-                  class="px-3 py-1 text-xs rounded-md transition font-medium flex-shrink-0" x-text="tab.label"></button>
-        </template>
+    <!-- Settings Drawer (slide-out from right) -->
+    <div x-show="showSettings" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+         class="fixed inset-0 bg-black/50 z-40" @click="showSettings = false"></div>
+    <div x-show="showSettings" x-transition:enter="transition ease-out duration-300 transform" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+         x-transition:leave="transition ease-in duration-200 transform" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
+         class="fixed top-0 right-0 h-full w-full sm:w-[480px] bg-gray-900 border-l border-gray-800 z-50 flex flex-col shadow-2xl">
+      <!-- Drawer Header -->
+      <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
+        <h2 class="text-base font-semibold text-white">Settings</h2>
+        <button @click="showSettings = false" class="p-1.5 hover:bg-gray-800 rounded-lg transition text-gray-400 hover:text-white">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
       </div>
-
-      <!-- General -->
-      <div x-show="activeSettingsTab === 'general'" class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl">
-        <label class="flex items-center gap-2">
-          <input type="checkbox" x-model="settings.skipPermissions" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
-          <span class="text-sm text-gray-300">Skip Permissions</span>
-        </label>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">Worker Timeout (min)</label>
-          <input type="number" x-model.number="settings.workerTimeout" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-20">
-        </div>
-        <label class="flex items-center gap-2">
-          <input type="checkbox" x-model="settings.cleanupWorktrees" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
-          <span class="text-sm text-gray-300">Cleanup Worktrees</span>
-        </label>
-      </div>
-
-      <!-- Repositories -->
-      <div x-show="activeSettingsTab === 'repositories'" class="max-w-3xl">
-        <p class="text-xs text-gray-500 mb-3">Register repositories and their Jira key prefix for auto-matching tickets (e.g., MC, CKYC).</p>
-        <div class="space-y-2 mb-3">
-          <template x-for="repo in repositories" :key="repo.id">
-            <div class="flex items-center gap-3 bg-gray-800 rounded-lg px-3 py-2">
-              <span class="text-sm font-medium text-white w-32 truncate" x-text="repo.name"></span>
-              <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 w-16 text-center" x-text="repo.jira_label || '—'" :class="repo.jira_label ? '' : 'text-gray-600'"></span>
-              <span class="text-xs text-gray-400 font-mono flex-1 truncate" x-text="repo.path"></span>
-              <span class="text-xs text-gray-500 w-16" x-text="repo.default_branch"></span>
-              <button @click="editRepo(repo)" class="text-gray-500 hover:text-blue-400 transition p-1">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-              </button>
-              <button @click="removeRepo(repo.id)" class="text-gray-500 hover:text-red-400 transition p-1">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-              </button>
-            </div>
+      <div class="flex flex-1 overflow-hidden">
+        <!-- Sidebar Menu -->
+        <div class="w-44 border-r border-gray-800 py-3 flex-shrink-0">
+          <template x-for="tab in settingsTabs" :key="tab.id">
+            <button @click="activeSettingsTab = tab.id"
+                    :class="activeSettingsTab === tab.id ? 'bg-blue-600/10 text-blue-400 border-r-2 border-blue-500' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'"
+                    class="w-full text-left px-4 py-2.5 text-sm transition flex items-center gap-2.5">
+              <!-- Icons for each tab -->
+              <template x-if="tab.id === 'general'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+              </template>
+              <template x-if="tab.id === 'repositories'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+              </template>
+              <template x-if="tab.id === 'profiles'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+              </template>
+              <template x-if="tab.id === 'jira'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+              </template>
+              <span x-text="tab.label"></span>
+            </button>
           </template>
         </div>
-        <div class="flex flex-wrap items-end gap-2 bg-gray-800/50 rounded-lg p-3">
-          <div>
-            <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
-            <input x-model="newRepo.name" type="text" placeholder="mekari_credit" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-36">
-          </div>
-          <div>
-            <label class="text-[10px] text-gray-500 block mb-0.5">Jira Prefix</label>
-            <input x-model="newRepo.jira_label" type="text" placeholder="MC" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-20">
-          </div>
-          <div class="flex-1 min-w-[200px]">
-            <label class="text-[10px] text-gray-500 block mb-0.5">Path</label>
-            <input x-model="newRepo.path" type="text" placeholder="/Users/you/mekari_credit" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full">
-          </div>
-          <div>
-            <label class="text-[10px] text-gray-500 block mb-0.5">Default Branch</label>
-            <input x-model="newRepo.default_branch" type="text" placeholder="main" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-24">
-          </div>
-          <button @click="addRepo()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 text-sm rounded font-medium transition">Add</button>
-        </div>
-      </div>
-
-      <!-- Agent Profiles -->
-      <div x-show="activeSettingsTab === 'profiles'" class="max-w-3xl">
-        <div class="space-y-2 mb-3">
-          <template x-for="p in agentProfiles" :key="p.id">
-            <div class="bg-gray-800 rounded-lg px-3 py-2">
-              <div class="flex items-center gap-3">
-                <span class="text-sm font-medium text-white" x-text="p.name"></span>
-                <template x-if="p.is_default">
-                  <span class="text-[10px] bg-blue-900/50 text-blue-400 px-1.5 py-0.5 rounded-full">Default</span>
-                </template>
-                <div class="flex-1"></div>
-                <span class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400" x-text="p.log_format"></span>
-                <button x-show="!p.is_default" @click="setDefaultProfile(p.id)" class="text-xs text-gray-500 hover:text-blue-400 transition">Set Default</button>
-                <button @click="editProfile(p)" class="text-gray-500 hover:text-blue-400 transition p-1">
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                </button>
-                <button @click="removeProfile(p.id)" class="text-gray-500 hover:text-red-400 transition p-1">
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                </button>
+        <!-- Content Area -->
+        <div class="flex-1 overflow-y-auto p-5">
+          <!-- General -->
+          <div x-show="activeSettingsTab === 'general'" class="space-y-4">
+            <h3 class="text-sm font-medium text-gray-300 mb-3">General Settings</h3>
+            <label class="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg hover:bg-gray-800 transition cursor-pointer">
+              <input type="checkbox" x-model="settings.skipPermissions" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+              <div>
+                <span class="text-sm text-gray-200 block">Skip Permissions</span>
+                <span class="text-xs text-gray-500">Auto-approve tool permissions during execution</span>
               </div>
-              <div class="mt-1 text-xs font-mono text-gray-500 truncate" x-text="p.command + ' ' + p.args_template"></div>
-            </div>
-          </template>
-        </div>
-        <div class="bg-gray-800/50 rounded-lg p-3 space-y-2">
-          <div class="flex flex-wrap gap-2">
-            <div>
-              <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
-              <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-32">
-            </div>
-            <div>
-              <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
-              <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-28">
-            </div>
-            <div>
-              <label class="text-[10px] text-gray-500 block mb-0.5">Log Format</label>
-              <select x-model="newProfile.log_format" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm">
-                <option value="plain-text">plain-text</option>
-                <option value="stream-json">stream-json</option>
-              </select>
+            </label>
+            <label class="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg hover:bg-gray-800 transition cursor-pointer">
+              <input type="checkbox" x-model="settings.cleanupWorktrees" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+              <div>
+                <span class="text-sm text-gray-200 block">Cleanup Worktrees</span>
+                <span class="text-xs text-gray-500">Remove git worktrees after ticket completion</span>
+              </div>
+            </label>
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <label class="text-sm text-gray-200 block mb-1.5">Worker Timeout</label>
+              <div class="flex items-center gap-2">
+                <input type="number" x-model.number="settings.workerTimeout" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-24 focus:border-blue-500 focus:outline-none">
+                <span class="text-xs text-gray-500">minutes</span>
+              </div>
             </div>
           </div>
-          <div>
-            <label class="text-[10px] text-gray-500 block mb-0.5">Args Template <span class="text-gray-600">({JIRA_KEY}, {BRANCH_NAME}, {WORKTREE_PATH}, {PARENT_BRANCH}, {PROJECT_PATH}, {JIRA_SUMMARY})</span></label>
-            <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"'
-                   class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full">
-          </div>
-          <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 text-sm rounded font-medium transition">Add Profile</button>
-        </div>
-      </div>
 
-      <!-- Jira Credentials -->
-      <div x-show="activeSettingsTab === 'jira'" class="max-w-lg">
-        <div class="space-y-3">
-          <div>
-            <label class="text-xs text-gray-400 block mb-1">Jira Base URL</label>
-            <input x-model="jiraSetup.url" type="text" placeholder="https://yourcompany.atlassian.net"
-                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+          <!-- Repositories -->
+          <div x-show="activeSettingsTab === 'repositories'">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Repositories</h3>
+            <p class="text-xs text-gray-500 mb-4">Register repositories and their Jira key prefix for auto-matching tickets.</p>
+            <div class="space-y-2 mb-4">
+              <template x-for="repo in repositories" :key="repo.id">
+                <div class="bg-gray-800/70 rounded-lg px-4 py-3 hover:bg-gray-800 transition">
+                  <div class="flex items-center gap-3">
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-2 mb-0.5">
+                        <span class="text-sm font-medium text-white" x-text="repo.name"></span>
+                        <span x-show="repo.jira_label" class="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 font-semibold" x-text="repo.jira_label"></span>
+                      </div>
+                      <div class="text-xs text-gray-500 font-mono truncate" x-text="repo.path"></div>
+                    </div>
+                    <span class="text-xs text-gray-600 px-2 py-0.5 rounded bg-gray-800 border border-gray-700" x-text="repo.default_branch"></span>
+                    <button @click="editRepo(repo)" class="text-gray-500 hover:text-blue-400 transition p-1">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                    </button>
+                    <button @click="removeRepo(repo.id)" class="text-gray-500 hover:text-red-400 transition p-1">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div class="bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
+              <span class="text-xs text-gray-500 font-medium">Add Repository</span>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+                  <input x-model="newRepo.name" type="text" placeholder="mekari_credit" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Jira Prefix</label>
+                  <input x-model="newRepo.jira_label" type="text" placeholder="MC" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Path</label>
+                <input x-model="newRepo.path" type="text" placeholder="/Users/you/mekari_credit" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Default Branch</label>
+                <input x-model="newRepo.default_branch" type="text" placeholder="main" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-32 focus:border-blue-500 focus:outline-none">
+              </div>
+              <button @click="addRepo()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition w-full">Add Repository</button>
+            </div>
           </div>
-          <div>
-            <label class="text-xs text-gray-400 block mb-1">Email</label>
-            <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
-                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+
+          <!-- Agent Profiles -->
+          <div x-show="activeSettingsTab === 'profiles'">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Agent Profiles</h3>
+            <p class="text-xs text-gray-500 mb-4">Configure AI agents (Claude Code, Gemini CLI, etc.) for task execution.</p>
+            <div class="space-y-2 mb-4">
+              <template x-for="p in agentProfiles" :key="p.id">
+                <div class="bg-gray-800/70 rounded-lg px-4 py-3 hover:bg-gray-800 transition">
+                  <div class="flex items-center gap-3">
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-2 mb-0.5">
+                        <span class="text-sm font-medium text-white" x-text="p.name"></span>
+                        <template x-if="p.is_default">
+                          <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full font-medium">Default</span>
+                        </template>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500" x-text="p.log_format"></span>
+                      </div>
+                      <div class="text-xs text-gray-500 font-mono truncate" x-text="p.command + ' ' + p.args_template"></div>
+                    </div>
+                    <button x-show="!p.is_default" @click="setDefaultProfile(p.id)" class="text-xs text-gray-500 hover:text-blue-400 transition px-2 py-1 rounded hover:bg-gray-700">Set Default</button>
+                    <button @click="editProfile(p)" class="text-gray-500 hover:text-blue-400 transition p-1">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                    </button>
+                    <button @click="removeProfile(p.id)" class="text-gray-500 hover:text-red-400 transition p-1">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div class="bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
+              <span class="text-xs text-gray-500 font-medium">Add Profile</span>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+                  <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
+                  <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Log Format</label>
+                <select x-model="newProfile.log_format" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
+                  <option value="plain-text">plain-text</option>
+                  <option value="stream-json">stream-json</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Args Template <span class="text-gray-600">({JIRA_KEY}, {BRANCH_NAME}, {WORKTREE_PATH}, {PARENT_BRANCH}, {PROJECT_PATH}, {JIRA_SUMMARY})</span></label>
+                <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"'
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition w-full">Add Profile</button>
+            </div>
           </div>
-          <div>
-            <label class="text-xs text-gray-400 block mb-1">API Token</label>
-            <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
-                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+
+          <!-- Jira Credentials -->
+          <div x-show="activeSettingsTab === 'jira'">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Jira Connection</h3>
+            <p class="text-xs text-gray-500 mb-4">Connect your Jira account to fetch epics and sync ticket status.</p>
+            <div class="space-y-3">
+              <div>
+                <label class="text-xs text-gray-400 block mb-1">Jira Base URL</label>
+                <input x-model="jiraSetup.url" type="text" placeholder="https://yourcompany.atlassian.net"
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-xs text-gray-400 block mb-1">Email</label>
+                <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-xs text-gray-400 block mb-1">API Token</label>
+                <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div class="flex gap-2 pt-1">
+                <button @click="testJiraConnection()" class="px-4 py-2 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test Connection</button>
+                <button @click="saveJiraCredentials()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 text-sm rounded-lg font-medium transition">Save</button>
+              </div>
+              <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
+              <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
+            </div>
           </div>
-          <div class="flex gap-2">
-            <button @click="testJiraConnection()" class="px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test Connection</button>
-            <button @click="saveJiraCredentials()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
-          </div>
-          <div x-show="jiraSetup.error" class="text-xs text-red-400" x-text="jiraSetup.error"></div>
-          <div x-show="jiraSetup.success" class="text-xs text-emerald-400" x-text="jiraSetup.success"></div>
         </div>
       </div>
     </div>
@@ -423,7 +481,14 @@
                       </template>
                       <!-- Repo badge -->
                       <template x-if="ticket.repository_id && repoNameById(ticket.repository_id)">
-                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500" x-text="repoNameById(ticket.repository_id)"></span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium" x-text="repoNameById(ticket.repository_id)"></span>
+                      </template>
+                      <!-- Live terminal shortcut for active tickets -->
+                      <template x-if="isTicketActive(ticket)">
+                        <button @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 transition flex items-center gap-1" title="Attach to live process">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                          Terminal
+                        </button>
                       </template>
                     </div>
                   </div>
@@ -522,13 +587,16 @@
                   </div>
                 </div>
                 <p class="text-xs text-gray-400 line-clamp-2" x-text="ticket.summary || 'No summary'"></p>
-                <div class="flex items-center gap-3 mt-1.5">
-                  <template x-if="ticket.pr_url">
-                    <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400">View PR</a>
+                <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <template x-if="ticket.repository_id && repoNameById(ticket.repository_id)">
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium" x-text="repoNameById(ticket.repository_id)"></span>
                   </template>
-                  <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] text-cyan-400 flex items-center gap-1">
+                  <template x-if="ticket.pr_url">
+                    <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400 hover:text-purple-300">View PR</a>
+                  </template>
+                  <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 transition flex items-center gap-1">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    Live Terminal
+                    Terminal
                   </button>
                 </div>
               </div>
