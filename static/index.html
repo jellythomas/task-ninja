@@ -1491,15 +1491,35 @@
           return [...tags].sort();
         },
 
+        // Match a ticket to a repo by checking summary tags against repo jira_label and name
+        _matchTicketRepo(ticket) {
+          // Extract bracket tags from summary: [Flex], [MOBILE], [BE], etc.
+          const tags = (ticket.summary || '').match(/\[([A-Za-z0-9_-]+)\]/g) || [];
+          const tagValues = tags.map(t => t.slice(1, -1).toLowerCase());
+          // Also check key prefix (e.g., MC, CKYC)
+          const keyPrefix = (ticket.key.split('-')[0] || '').toLowerCase();
+
+          for (const repo of this.repositories) {
+            const label = (repo.jira_label || '').toLowerCase();
+            const name = (repo.name || '').toLowerCase();
+            if (!label && !name) continue;
+            // Match against summary tags
+            if (label && tagValues.includes(label)) return repo;
+            if (name && tagValues.includes(name)) return repo;
+            // Match against key prefix
+            if (label && label === keyPrefix) return repo;
+          }
+          return null;
+        },
+
         get epicGroups() {
           const groups = {};
           for (const t of this.filteredEpicTickets) {
-            const prefix = t.key.split('-')[0] || 'OTHER';
-            if (!groups[prefix]) {
-              // Auto-fill from matched repo
-              const matchedRepo = this.repositories.find(r => r.jira_label && r.jira_label.toUpperCase() === prefix);
-              groups[prefix] = {
-                prefix,
+            const matchedRepo = this._matchTicketRepo(t);
+            const groupKey = matchedRepo ? matchedRepo.name : 'Others';
+            if (!groups[groupKey]) {
+              groups[groupKey] = {
+                prefix: groupKey,
                 repoId: matchedRepo?.id || null,
                 repoName: matchedRepo?.name || null,
                 branch: matchedRepo?.default_branch || '',
@@ -1507,18 +1527,24 @@
                 tickets: [],
               };
             }
-            groups[prefix].tickets.push(t);
+            groups[groupKey].tickets.push(t);
           }
           // Apply group overrides
-          for (const [prefix, override] of Object.entries(this.epicGroupOverrides)) {
-            if (groups[prefix]) Object.assign(groups[prefix], override);
+          for (const [key, override] of Object.entries(this.epicGroupOverrides)) {
+            if (groups[key]) Object.assign(groups[key], override);
           }
-          return Object.values(groups);
+          // Sort: named groups first, Others last
+          return Object.values(groups).sort((a, b) => {
+            if (a.prefix === 'Others') return 1;
+            if (b.prefix === 'Others') return -1;
+            return a.prefix.localeCompare(b.prefix);
+          });
         },
 
         resolveTicketAssignment(ticket) {
-          const prefix = ticket.key.split('-')[0] || 'OTHER';
-          const group = this.epicGroups.find(g => g.prefix === prefix) || {};
+          const matchedRepo = this._matchTicketRepo(ticket);
+          const groupKey = matchedRepo ? matchedRepo.name : 'Others';
+          const group = this.epicGroups.find(g => g.prefix === groupKey) || {};
           const override = this.epicTicketOverrides[ticket.key] || {};
           return {
             repository_id: override.repoId || group.repoId || null,
