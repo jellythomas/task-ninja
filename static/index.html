@@ -1065,14 +1065,14 @@
                   <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-gray-500 font-mono" x-text="group.branch"></span>
                 </template>
               </div>
-              <button @click="group.expanded = !group.expanded; if(group.expanded && !epicGroupOverrides[group.prefix]) epicGroupOverrides[group.prefix] = { repoId: group.repoId, branch: group.branch, profileId: group.profileId }"
+              <button @click="epicExpandedGroups[group.prefix] = !epicExpandedGroups[group.prefix]; if(epicExpandedGroups[group.prefix] && !epicGroupOverrides[group.prefix]) epicGroupOverrides[group.prefix] = { repoId: group.repoId, branch: group.branch, profileId: group.profileId }"
                       class="text-[10px] px-2 py-0.5 rounded border transition flex-shrink-0"
-                      :class="group.expanded ? 'border-blue-500 text-blue-400' : 'border-gray-700 text-gray-500 hover:border-gray-500'">
-                <span x-text="group.expanded ? 'Close' : 'Override'"></span>
+                      :class="epicExpandedGroups[group.prefix] ? 'border-blue-500 text-blue-400' : 'border-gray-700 text-gray-500 hover:border-gray-500'">
+                <span x-text="epicExpandedGroups[group.prefix] ? 'Close' : 'Override'"></span>
               </button>
             </div>
             <!-- Group override config (collapsible) -->
-            <template x-if="group.expanded">
+            <template x-if="epicExpandedGroups[group.prefix]">
               <div class="bg-gray-800/30 px-3 py-2 border-t border-gray-800 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <div class="flex items-center gap-1.5">
                   <label class="text-[10px] text-gray-500">Repo:</label>
@@ -1318,6 +1318,7 @@
         setupStep: 1,
         epicTickets: [],
         epicGroupOverrides: {},   // prefix -> { repoId, branch, profileId }
+        epicExpandedGroups: {},   // prefix -> boolean
         epicTicketOverrides: {},  // jira_key -> { repoId, branch, profileId }
         epicEditingTicket: null,  // jira_key of ticket being edited
         epicFilter: { search: '', activeTags: [] },
@@ -1503,7 +1504,6 @@
                 repoName: matchedRepo?.name || null,
                 branch: matchedRepo?.default_branch || '',
                 profileId: null,
-                expanded: false,
                 tickets: [],
               };
             }
@@ -2128,6 +2128,7 @@
           this.epicParentBranch = '';
           this.epicProfileId = null;
           this.epicGroupOverrides = {};
+          this.epicExpandedGroups = {};
           this.epicTicketOverrides = {};
           this.epicEditingTicket = null;
           await this.loadRunTickets();
