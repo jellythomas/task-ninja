@@ -670,11 +670,9 @@
                   </div>
                   <div class="bg-gray-900 rounded-lg p-3 space-y-2">
                     <span class="text-xs text-gray-500 block">Access from your phone:</span>
-                    <div class="flex items-center gap-2">
-                      <code class="text-xs bg-gray-950 px-3 py-1.5 rounded text-emerald-400 flex-1 select-all truncate block overflow-hidden" x-text="tailscale.url"></code>
-                      <button @click="navigator.clipboard.writeText(tailscale.url); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
-                              class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1.5 rounded transition flex-shrink-0">Copy</button>
-                    </div>
+                    <code class="text-xs bg-gray-950 px-3 py-2 rounded text-emerald-400 select-all block break-all" x-text="tailscale.url"></code>
+                    <button @click="navigator.clipboard.writeText(tailscale.url); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
+                            class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded transition w-full">Copy</button>
                     <p class="text-xs text-gray-500">Open this URL on any device connected to your Tailscale network.</p>
                   </div>
                 </div>
@@ -730,10 +728,9 @@
 
               <!-- ngrok -->
               <div class="bg-gray-900/70 rounded-lg p-3 space-y-1.5">
-                <div class="flex items-center gap-2">
-                  <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></span>
                   <span class="text-sm font-medium text-white">ngrok</span>
-                  <span class="text-[10px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded-full">No install on phone</span>
                 </div>
                 <p class="text-xs text-gray-500">Creates a public URL tunneled to your local server.</p>
                 <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400">ngrok http 8420</code>
@@ -741,13 +738,12 @@
 
               <!-- Cloudflare Tunnel -->
               <div class="bg-gray-900/70 rounded-lg p-3 space-y-1.5">
-                <div class="flex items-center gap-2">
-                  <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="w-2 h-2 rounded-full bg-orange-500 flex-shrink-0"></span>
                   <span class="text-sm font-medium text-white">Cloudflare Tunnel</span>
-                  <span class="text-[10px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded-full">Requires domain</span>
                 </div>
                 <p class="text-xs text-gray-500">Route through Cloudflare with your own domain.</p>
-                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400">cloudflared tunnel --url http://localhost:8420</code>
+                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400 break-all">cloudflared tunnel --url http://localhost:8420</code>
               </div>
             </div>
 
