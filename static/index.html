@@ -639,6 +639,199 @@
             </template>
           </div>
 
+          <!-- Scheduler -->
+          <div x-show="activeSettingsTab === 'scheduler'" class="space-y-6">
+            <h3 class="text-sm font-medium text-gray-300">Scheduler</h3>
+
+            <!-- Schedules List -->
+            <div class="space-y-2">
+              <span class="text-xs text-gray-500 font-medium">Active Schedules</span>
+              <template x-if="schedules.length === 0">
+                <p class="text-xs text-gray-600 italic">No schedules configured.</p>
+              </template>
+              <template x-for="s in schedules" :key="s.id">
+                <div class="bg-gray-800/50 rounded-lg p-3 border border-gray-800 flex items-center justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                            :class="s.schedule_type === 'recurring' ? 'bg-blue-500/20 text-blue-400' : 'bg-amber-500/20 text-amber-400'"
+                            x-text="s.schedule_type"></span>
+                      <span class="text-xs text-gray-300 font-mono" x-text="s.cron_expression || (s.start_time ? new Date(s.start_time).toLocaleString() : '-')"></span>
+                    </div>
+                    <div class="text-[10px] text-gray-500" x-text="s.next_run ? 'Next: ' + new Date(s.next_run).toLocaleString() : ''"></div>
+                  </div>
+                  <div class="flex items-center gap-2 flex-shrink-0">
+                    <button @click="toggleSchedule(s)" class="text-[10px] px-2 py-0.5 rounded border transition"
+                            :class="s.enabled ? 'border-emerald-600 text-emerald-400' : 'border-gray-700 text-gray-500'">
+                      <span x-text="s.enabled ? 'On' : 'Off'"></span>
+                    </button>
+                    <button @click="deleteSchedule(s.id)" class="text-red-400/60 hover:text-red-400 transition">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Create Schedule -->
+            <details class="group">
+              <summary class="text-xs text-blue-400 hover:text-blue-300 cursor-pointer py-1">+ Add schedule</summary>
+              <div class="mt-2 bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
+                <!-- Type -->
+                <div class="flex items-center gap-3">
+                  <label class="text-xs text-gray-500">Type:</label>
+                  <button @click="newSchedule.type = 'recurring'"
+                          :class="newSchedule.type === 'recurring' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'"
+                          class="px-3 py-1 text-xs rounded-md transition">Recurring</button>
+                  <button @click="newSchedule.type = 'one-time'"
+                          :class="newSchedule.type === 'one-time' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'"
+                          class="px-3 py-1 text-xs rounded-md transition">One-time</button>
+                </div>
+
+                <!-- Recurring: Visual Cron Builder -->
+                <template x-if="newSchedule.type === 'recurring'">
+                  <div class="space-y-3">
+                    <!-- Presets -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">Presets</label>
+                      <div class="flex flex-wrap gap-1.5">
+                        <button @click="newSchedule.cronDays=[1,2,3,4,5]; newSchedule.cronHour=9; newSchedule.cronMinute=0; buildCron()"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Weekdays 9AM</button>
+                        <button @click="newSchedule.cronDays=[1,2,3,4,5]; newSchedule.cronHour=0; newSchedule.cronMinute=0; buildCron()"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Weekdays midnight</button>
+                        <button @click="newSchedule.cronDays=[0,1,2,3,4,5,6]; newSchedule.cronHour=9; newSchedule.cronMinute=0; buildCron()"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Daily 9AM</button>
+                        <button @click="newSchedule.cron='0 */6 * * *'"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Every 6h</button>
+                        <button @click="newSchedule.cron='0 * * * *'"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Every hour</button>
+                      </div>
+                    </div>
+                    <!-- Day toggles -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">Days</label>
+                      <div class="flex gap-1">
+                        <template x-for="(day, i) in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']" :key="i">
+                          <button @click="const idx = newSchedule.cronDays.indexOf(i); idx >= 0 ? newSchedule.cronDays.splice(idx,1) : newSchedule.cronDays.push(i); buildCron()"
+                                  :class="newSchedule.cronDays.includes(i) ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-800 text-gray-500 border-gray-700'"
+                                  class="w-8 h-7 text-[10px] rounded border transition font-medium" x-text="day"></button>
+                        </template>
+                      </div>
+                    </div>
+                    <!-- Time -->
+                    <div class="flex items-center gap-3">
+                      <div>
+                        <label class="text-[10px] text-gray-500 block mb-1">Hour</label>
+                        <select x-model.number="newSchedule.cronHour" @change="buildCron()"
+                                class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                          <template x-for="h in 24" :key="h">
+                            <option :value="h-1" x-text="String(h-1).padStart(2,'0')"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <span class="text-gray-500 mt-4">:</span>
+                      <div>
+                        <label class="text-[10px] text-gray-500 block mb-1">Minute</label>
+                        <select x-model.number="newSchedule.cronMinute" @change="buildCron()"
+                                class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                          <template x-for="m in [0,5,10,15,20,25,30,35,40,45,50,55]" :key="m">
+                            <option :value="m" x-text="String(m).padStart(2,'0')"></option>
+                          </template>
+                        </select>
+                      </div>
+                    </div>
+                    <!-- Raw cron -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">Cron Expression</label>
+                      <input x-model="newSchedule.cron" type="text" placeholder="0 9 * * 1-5"
+                             class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm font-mono w-full focus:border-blue-500 focus:outline-none">
+                      <p class="text-[10px] text-gray-600 mt-1" x-text="describeCron(newSchedule.cron)"></p>
+                    </div>
+                    <!-- End time (optional) -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">End Date (optional)</label>
+                      <input x-model="newSchedule.endTime" type="datetime-local"
+                             class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs w-full focus:border-blue-500 focus:outline-none">
+                    </div>
+                  </div>
+                </template>
+
+                <!-- One-time: Datetime picker -->
+                <template x-if="newSchedule.type === 'one-time'">
+                  <div>
+                    <label class="text-[10px] text-gray-500 block mb-1">Run At</label>
+                    <input x-model="newSchedule.startTime" type="datetime-local"
+                           class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs w-full focus:border-blue-500 focus:outline-none">
+                  </div>
+                </template>
+
+                <button @click="createSchedule()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-xs rounded-lg font-medium transition w-full">Create Schedule</button>
+              </div>
+            </details>
+
+            <!-- Auto-Retry -->
+            <div class="border-t border-gray-800 pt-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-300 font-medium">Auto-Retry</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" x-model="autoRetry.enabled" @change="saveSchedulerSettings()" class="sr-only peer">
+                  <div class="w-8 h-4 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+              <p class="text-[10px] text-gray-600">Automatically retry failed tickets after a delay.</p>
+              <div x-show="autoRetry.enabled" class="flex items-center gap-4 mt-1">
+                <div class="flex items-center gap-2">
+                  <label class="text-[10px] text-gray-500">Delay:</label>
+                  <input x-model.number="autoRetry.delay" @change="saveSchedulerSettings()" type="number" min="1" max="120"
+                         class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-16 focus:border-blue-500 focus:outline-none">
+                  <span class="text-[10px] text-gray-600">min</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <label class="text-[10px] text-gray-500">Max:</label>
+                  <input x-model.number="autoRetry.max" @change="saveSchedulerSettings()" type="number" min="1" max="10"
+                         class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-16 focus:border-blue-500 focus:outline-none">
+                  <span class="text-[10px] text-gray-600">retries</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Working Hours -->
+            <div class="border-t border-gray-800 pt-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-300 font-medium">Working Hours</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" x-model="workingHours.enabled" @change="saveSchedulerSettings()" class="sr-only peer">
+                  <div class="w-8 h-4 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+              <p class="text-[10px] text-gray-600">Only spawn new workers during these hours.</p>
+              <div x-show="workingHours.enabled" class="space-y-2 mt-1">
+                <div class="flex items-center gap-3">
+                  <div class="flex items-center gap-2">
+                    <label class="text-[10px] text-gray-500">Start:</label>
+                    <input x-model="workingHours.start" @change="saveSchedulerSettings()" type="time"
+                           class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <label class="text-[10px] text-gray-500">End:</label>
+                    <input x-model="workingHours.end" @change="saveSchedulerSettings()" type="time"
+                           class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-1">Days</label>
+                  <div class="flex gap-1">
+                    <template x-for="(day, code) in {mon:'Mon',tue:'Tue',wed:'Wed',thu:'Thu',fri:'Fri',sat:'Sat',sun:'Sun'}">
+                      <button @click="const idx = workingHours.days.indexOf(code); idx >= 0 ? workingHours.days.splice(idx,1) : workingHours.days.push(code); saveSchedulerSettings()"
+                              :class="workingHours.days.includes(code) ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-800 text-gray-500 border-gray-700'"
+                              class="w-8 h-7 text-[10px] rounded border transition font-medium" x-text="day"></button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Remote Access -->
           <div x-show="activeSettingsTab === 'remote'" class="space-y-4">
             <h3 class="text-sm font-medium text-gray-300 mb-1">Remote Access</h3>
@@ -1353,6 +1546,10 @@
         remoteAccess: { enabled: false, hasToken: false },
         tailscale: { installed: false, running: false, ip: null, url: null, loading: false, installing: false, error: null },
         _testNotifSent: false,
+        schedules: [],
+        newSchedule: { type: 'recurring', cron: '0 9 * * 1-5', startTime: '', endTime: '', cronDays: [1,2,3,4,5], cronHour: 9, cronMinute: 0 },
+        autoRetry: { enabled: false, delay: 15, max: 3 },
+        workingHours: { enabled: false, start: '09:00', end: '18:00', days: ['mon','tue','wed','thu','fri'] },
 
         settingsTabs: [
           { id: 'general', label: 'General' },
@@ -1360,6 +1557,7 @@
           { id: 'profiles', label: 'Agent Profiles' },
           { id: 'jira', label: 'Jira Credentials' },
           { id: 'notifications', label: 'Notifications' },
+          { id: 'scheduler', label: 'Scheduler' },
           { id: 'remote', label: 'Remote Access' },
         ],
 
@@ -1420,6 +1618,8 @@
           }
 
           await this.initNotifications();
+          this.loadSchedulerSettings();
+          this.loadSchedules();
           this.$nextTick(() => this.initSortable());
           setInterval(() => this.tick++, 5000);
         },
@@ -2057,6 +2257,90 @@
           }
         },
 
+        // --- Scheduler ---
+
+        buildCron() {
+          const days = this.newSchedule.cronDays.sort((a, b) => a - b);
+          const dayStr = days.length === 7 ? '*' : days.join(',');
+          this.newSchedule.cron = `${this.newSchedule.cronMinute} ${this.newSchedule.cronHour} * * ${dayStr}`;
+        },
+
+        describeCron(cron) {
+          if (!cron) return '';
+          const parts = cron.split(' ');
+          if (parts.length < 5) return cron;
+          const [min, hour, , , dow] = parts;
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          let dayDesc = 'every day';
+          if (dow !== '*') {
+            const days = dow.split(',').map(d => dayNames[parseInt(d)] || d);
+            if (days.length === 5 && !days.includes('Sun') && !days.includes('Sat')) dayDesc = 'weekdays';
+            else dayDesc = days.join(', ');
+          }
+          const h = String(hour).padStart(2, '0');
+          const m = String(min).padStart(2, '0');
+          return `Runs ${dayDesc} at ${h}:${m}`;
+        },
+
+        async loadSchedules() {
+          const runId = this.currentRun?.id;
+          if (!runId) return;
+          const data = await this.api('GET', `/api/schedules?run_id=${runId}`);
+          this.schedules = data || [];
+        },
+
+        async createSchedule() {
+          const runId = this.currentRun?.id;
+          if (!runId) return;
+          const body = {
+            run_id: runId,
+            schedule_type: this.newSchedule.type,
+          };
+          if (this.newSchedule.type === 'recurring') {
+            body.cron_expression = this.newSchedule.cron;
+            if (this.newSchedule.endTime) body.end_time = this.newSchedule.endTime;
+          } else {
+            if (this.newSchedule.startTime) body.start_time = this.newSchedule.startTime;
+          }
+          await this.api('POST', '/api/schedules', body);
+          await this.loadSchedules();
+          this.newSchedule = { type: 'recurring', cron: '0 9 * * 1-5', startTime: '', endTime: '', cronDays: [1,2,3,4,5], cronHour: 9, cronMinute: 0 };
+        },
+
+        async toggleSchedule(schedule) {
+          await this.api('PATCH', `/api/schedules/${schedule.id}`, { enabled: !schedule.enabled });
+          await this.loadSchedules();
+        },
+
+        async deleteSchedule(id) {
+          if (!confirm('Delete this schedule?')) return;
+          await this.api('DELETE', `/api/schedules/${id}`);
+          await this.loadSchedules();
+        },
+
+        async loadSchedulerSettings() {
+          const env = await this.api('GET', '/api/env');
+          if (!env) return;
+          this.autoRetry.enabled = (env.AUTO_RETRY_ENABLED || '').toLowerCase() === 'true';
+          this.autoRetry.delay = parseInt(env.AUTO_RETRY_DELAY_MINUTES) || 15;
+          this.autoRetry.max = parseInt(env.AUTO_RETRY_MAX) || 3;
+          this.workingHours.enabled = (env.WORKING_HOURS_ENABLED || '').toLowerCase() === 'true';
+          this.workingHours.start = env.WORKING_HOURS_START || '09:00';
+          this.workingHours.end = env.WORKING_HOURS_END || '18:00';
+          this.workingHours.days = env.WORKING_HOURS_DAYS ? env.WORKING_HOURS_DAYS.split(',') : ['mon','tue','wed','thu','fri'];
+        },
+
+        async saveSchedulerSettings() {
+          await this.api('PUT', '/api/env', {
+            AUTO_RETRY_ENABLED: String(this.autoRetry.enabled),
+            AUTO_RETRY_DELAY_MINUTES: String(this.autoRetry.delay),
+            AUTO_RETRY_MAX: String(this.autoRetry.max),
+            WORKING_HOURS_ENABLED: String(this.workingHours.enabled),
+            WORKING_HOURS_START: this.workingHours.start,
+            WORKING_HOURS_END: this.workingHours.end,
+            WORKING_HOURS_DAYS: this.workingHours.days.join(','),
+          });
+        },
 
         // Actions
         async loadEpic() {

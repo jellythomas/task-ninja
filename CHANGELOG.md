@@ -61,8 +61,16 @@ All notable changes to Task Ninja are documented in this file.
 - **Auto-fill parent branch** — populated from the matched repo's `default_branch` based on Jira key prefix mapping
 - **Migrated Jira search API** — from deprecated `/rest/api/3/search` to `/rest/api/3/search/jql`
 
-#### Planned: 3-Tier Assignment Cascade
-- Design approved for per-prefix-group and per-ticket assignment overrides
+#### Scheduler Settings UI (2026-03-06)
+- **Scheduler tab in Settings** — unified configuration page for schedules, auto-retry, and working hours
+- **Visual cron builder** — preset buttons (weekday 9AM, nightly, hourly), day-of-week toggles, hour/minute selectors, with live human-readable preview
+- **Schedules CRUD** — create, toggle (enable/disable), and delete recurring or one-time schedules from the UI
+- **Auto-retry toggle** — enable/disable with configurable delay and max retries, saved to `.env`
+- **Working hours toggle** — enable/disable with start/end time and day-of-week selectors, saved to `.env`
+- **All features optional** — every scheduler feature can be independently toggled on/off
+
+#### 3-Tier Assignment Cascade (2026-03-06)
+- Per-prefix-group and per-ticket assignment overrides in unified ticket modal
 - See [design doc](docs/plans/2026-03-06-unified-ticket-modal-design.md) for full spec
 
 ### Fixed

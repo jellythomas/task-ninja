@@ -39,6 +39,7 @@ from models.ticket import (
     UpdateConfigRequest,
     UpdateRankRequest,
     UpdateRepositoryRequest,
+    UpdateScheduleRequest,
     UpdateSettingsRequest,
     UpdateTicketAssignmentRequest,
 )
@@ -600,6 +601,29 @@ async def create_schedule(req: CreateScheduleRequest):
 async def list_schedules(run_id: str = None):
     schedules = await state.list_schedules(run_id)
     return [s.model_dump() for s in schedules]
+
+
+@app.patch("/api/schedules/{schedule_id}")
+async def update_schedule(schedule_id: str, req: UpdateScheduleRequest):
+    schedule = await state.get_schedule(schedule_id)
+    if not schedule:
+        raise HTTPException(404, "Schedule not found")
+    updates = req.model_dump(exclude_none=True)
+    if "end_time" in updates and updates["end_time"]:
+        updates["end_time"] = updates["end_time"].isoformat()
+    updated = await state.update_schedule(schedule_id, **updates)
+    # Re-register with scheduler if cron changed or toggled
+    if req.enabled is False:
+        run_scheduler.remove_schedule(schedule_id)
+    elif req.enabled is True or req.cron_expression:
+        run_scheduler.remove_schedule(schedule_id)
+        if updated.enabled:
+            await run_scheduler.add_schedule(
+                updated.id, updated.run_id, updated.schedule_type,
+                cron_expression=updated.cron_expression,
+                start_time=updated.start_time.isoformat() if updated.start_time else None,
+            )
+    return updated.model_dump()
 
 
 @app.delete("/api/schedules/{schedule_id}")

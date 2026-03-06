@@ -340,6 +340,19 @@ class StateManager:
             rows = await cursor.fetchall()
             return [Schedule(**dict(r)) for r in rows]
 
+    async def update_schedule(self, schedule_id: str, **kwargs) -> Optional["Schedule"]:
+        from models.ticket import Schedule
+        updates = {k: v for k, v in kwargs.items() if v is not None}
+        if not updates:
+            return await self.get_schedule(schedule_id)
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [schedule_id]
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute(f"UPDATE schedules SET {set_clause} WHERE id = ?", values)
+            await db.commit()
+        return await self.get_schedule(schedule_id)
+
     async def delete_schedule(self, schedule_id: str) -> None:
         async with self._connect() as db:
             await self._setup_db(db)

@@ -302,7 +302,13 @@ Get alerted when tickets complete or fail:
 
 For background notifications (tab closed), configure VAPID keys in `.env`. See [architecture docs](docs/architecture.md) for details.
 
-### Auto-Retry & Working Hours
+### Scheduler, Auto-Retry & Working Hours
+
+All scheduler features are **optional** and independently toggleable from the UI or `.env`.
+
+**UI setup:** Settings > Scheduler tab — toggle each feature on/off, configure schedules with a visual cron builder, and set auto-retry/working hours parameters.
+
+**`.env` setup:**
 
 ```env
 # Auto-retry failed tickets (e.g., token exhaustion)
@@ -316,6 +322,8 @@ WORKING_HOURS_START=09:00
 WORKING_HOURS_END=18:00
 WORKING_HOURS_DAYS=mon,tue,wed,thu,fri
 ```
+
+**Schedules:** Create recurring (cron) or one-time schedules from the Scheduler tab. Schedules re-run tickets already on the board — they don't create new tickets.
 
 ---
 

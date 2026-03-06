@@ -175,6 +175,12 @@ class CreateScheduleRequest(BaseModel):
     end_time: Optional[datetime] = None
 
 
+class UpdateScheduleRequest(BaseModel):
+    enabled: Optional[bool] = None
+    cron_expression: Optional[str] = None
+    end_time: Optional[datetime] = None
+
+
 # --- Repository & Settings request models ---
 
 class CreateRepositoryRequest(BaseModel):
