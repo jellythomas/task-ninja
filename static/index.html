@@ -611,7 +611,10 @@
 
             <!-- Test notification -->
             <template x-if="notificationState.permission === 'granted'">
-              <button @click="testNotification()" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg px-4 py-2 transition w-full">Send Test Notification</button>
+              <div class="space-y-2">
+                <button @click="testNotification()" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg px-4 py-2 transition w-full">Send Test Notification</button>
+                <p x-show="_testNotifSent" class="text-xs text-emerald-400 text-center">Notification sent! Check your system notifications.</p>
+              </div>
             </template>
           </div>
 
@@ -1773,7 +1776,9 @@
 
         testNotification() {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            new Notification('Task Ninja', { body: 'Notifications are working!' });
+            new Notification('Task Ninja', { body: 'Notifications are working!', icon: '/favicon.ico' });
+            this._testNotifSent = true;
+            setTimeout(() => { this._testNotifSent = false; }, 3000);
           }
         },
 
