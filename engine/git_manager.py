@@ -35,10 +35,12 @@ class GitManager:
                 shutil.rmtree(str(worktree_path), ignore_errors=True)
             await self._run_git("worktree", "prune")
 
-        # Fetch latest if parent_branch specified (ensure it exists locally)
+        # Always fetch latest from origin before branching
+        fetched_remote = False
         if parent_branch:
             try:
                 await self._run_git("fetch", "origin", parent_branch)
+                fetched_remote = True
             except RuntimeError:
                 pass  # May not have remote, that's fine
 
@@ -54,9 +56,18 @@ class GitManager:
         if stdout.strip():
             # Branch exists — create worktree from it
             await self._run_git("worktree", "add", str(worktree_path), branch_name)
+            # Sync existing branch with latest origin
+            if parent_branch and fetched_remote:
+                try:
+                    await self._run_git("-C", str(worktree_path), "merge", f"origin/{parent_branch}", "--ff-only")
+                except RuntimeError:
+                    pass  # May have diverged, skip auto-merge
         else:
-            # Create new branch from parent_branch or HEAD
-            start_point = parent_branch or "HEAD"
+            # Create new branch from origin/<parent_branch> (latest remote) or local fallback
+            if parent_branch and fetched_remote:
+                start_point = f"origin/{parent_branch}"
+            else:
+                start_point = parent_branch or "HEAD"
             await self._run_git("worktree", "add", "-b", branch_name, str(worktree_path), start_point)
 
         return str(worktree_path)
