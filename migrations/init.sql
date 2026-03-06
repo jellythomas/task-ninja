@@ -103,7 +103,5 @@ CREATE TABLE IF NOT EXISTS logs (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_tickets_run_id ON tickets(run_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
-CREATE INDEX IF NOT EXISTS idx_tickets_repo ON tickets(repository_id);
 CREATE INDEX IF NOT EXISTS idx_logs_ticket_id ON logs(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_run_id ON schedules(run_id);
-CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_repo_mappings(repository_id);

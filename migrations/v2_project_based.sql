@@ -40,6 +40,4 @@ CREATE TABLE IF NOT EXISTS settings (
 -- Rename pending -> todo in existing tickets
 UPDATE tickets SET state = 'todo' WHERE state = 'pending';
 
--- New indexes
-CREATE INDEX IF NOT EXISTS idx_tickets_repo ON tickets(repository_id);
-CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_repo_mappings(repository_id);
+-- Note: indexes on new columns are created in state.py after ALTER TABLE

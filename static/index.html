@@ -499,11 +499,11 @@
                         <span class="text-gray-300 font-mono ml-1" x-text="ticket.worker_pid"></span>
                       </div>
                     </template>
-                    <!-- Terminal buttons -->
+                    <!-- Terminal buttons (only for active tickets) -->
                     <div class="flex gap-2 mt-1.5 pt-1.5 border-t border-gray-700/50">
-                      <button @click.stop="openInteractiveTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-cyan-400 hover:text-cyan-300 transition">
+                      <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-cyan-400 hover:text-cyan-300 transition">
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                        Terminal
+                        Live Terminal
                       </button>
                       <button @click.stop="openExternalTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 transition">
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
@@ -554,9 +554,9 @@
                   <template x-if="ticket.pr_url">
                     <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400">View PR</a>
                   </template>
-                  <button @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] text-cyan-400 flex items-center gap-1">
+                  <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] text-cyan-400 flex items-center gap-1">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    Terminal
+                    Live Terminal
                   </button>
                 </div>
               </div>
@@ -766,8 +766,9 @@
     <div class="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
       <div class="flex items-center gap-3">
         <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        <span class="text-sm font-medium text-white" x-text="interactiveTerminal.ticketKey || 'Terminal'"></span>
+        <span class="text-sm font-medium text-white" x-text="(interactiveTerminal.ticketKey || 'Terminal') + ' — Live Process'"></span>
         <span class="text-xs text-gray-500 font-mono" x-text="interactiveTerminal.cwd || ''"></span>
+        <span class="text-[10px] text-gray-600 italic">Closing this window will NOT stop the process</span>
       </div>
       <button @click="closeInteractiveTerminal()" class="p-1.5 hover:bg-gray-800 rounded-lg transition">
         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -1115,7 +1116,11 @@
           this.agentProfiles = this.agentProfiles.filter(p => p.id !== id);
         },
 
-        // Interactive Terminal
+        // Interactive Terminal (attach/detach to live worker process)
+        isTicketActive(ticket) {
+          return ticket && ['planning', 'developing'].includes(ticket.state);
+        },
+
         openInteractiveTerminal(ticketId) {
           const ticket = this.tickets.find(t => t.id === ticketId);
           if (!ticket) return;
@@ -1146,17 +1151,18 @@
             term.open(container);
             fitAddon.fit();
 
+            term.write('\x1b[36mAttaching to live process...\x1b[0m\r\n');
+
             this.interactiveTerminal.term = term;
             this.interactiveTerminal.fitAddon = fitAddon;
 
-            // Connect WebSocket
+            // Connect WebSocket to worker's PTY
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal/${ticketId}`);
             ws.binaryType = 'arraybuffer';
             this.interactiveTerminal.ws = ws;
 
             ws.onopen = () => {
-              // Send initial resize
               ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
             };
 
@@ -1164,20 +1170,33 @@
               if (event.data instanceof ArrayBuffer) {
                 term.write(new Uint8Array(event.data));
               } else {
-                // JSON control message
-                try { JSON.parse(event.data); } catch { term.write(event.data); }
+                // JSON control messages (pong, process_exit)
+                try {
+                  const msg = JSON.parse(event.data);
+                  if (msg.type === 'process_exit') {
+                    const color = msg.code === 0 ? '32' : '31';
+                    const label = msg.code === 0 ? 'completed successfully' : `exited with code ${msg.code}`;
+                    term.write(`\r\n\x1b[${color}m[Process ${label}]\x1b[0m\r\n`);
+                  }
+                } catch {
+                  term.write(event.data);
+                }
               }
             };
 
-            ws.onclose = () => {
-              term.write('\r\n\x1b[90m[Session ended]\x1b[0m\r\n');
+            ws.onclose = (event) => {
+              if (event.code === 4004) {
+                term.write(`\r\n\x1b[33m[No running process for this ticket]\x1b[0m\r\n`);
+              } else {
+                term.write('\r\n\x1b[90m[Detached from process]\x1b[0m\r\n');
+              }
             };
 
             ws.onerror = () => {
               term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
             };
 
-            // Terminal input -> WebSocket
+            // Terminal input -> worker's PTY
             term.onData((data) => {
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(new TextEncoder().encode(data));

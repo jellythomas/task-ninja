@@ -40,6 +40,16 @@ async def init_db(db_path: str = DB_PATH) -> None:
             except Exception:
                 pass  # Column already exists
 
+        # Create indexes on new columns (safe after ALTER TABLE)
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_tickets_repo ON tickets(repository_id)",
+            "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_repo_mappings(repository_id)",
+        ]:
+            try:
+                await db.execute(idx_sql)
+            except Exception:
+                pass
+
         # Seed default Claude Code agent profile if none exist
         cursor = await db.execute("SELECT COUNT(*) FROM agent_profiles")
         count = (await cursor.fetchone())[0]

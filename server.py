@@ -19,7 +19,7 @@ from engine.jira_client import JiraClient
 from engine.orchestrator import Orchestrator
 from engine.scheduler import RunScheduler
 from engine.state import StateManager, init_db
-from engine.terminal import TerminalManager, handle_terminal_websocket
+from engine.terminal import TerminalManager
 from models.ticket import (
     AddTicketsRequest,
     CreateAgentProfileRequest,
@@ -547,36 +547,44 @@ async def update_ticket_assignment(ticket_id: str, req: UpdateTicketAssignmentRe
 
 @app.websocket("/ws/terminal/{ticket_id}")
 async def terminal_ws(websocket: WebSocket, ticket_id: str):
-    """WebSocket endpoint for interactive terminal in a ticket's worktree."""
-    ticket = await state.get_ticket(ticket_id)
-    if not ticket:
-        await websocket.close(code=4004, reason="Ticket not found")
-        return
+    """WebSocket endpoint to attach to a running worker's live terminal.
 
-    # Determine working directory: worktree if exists, else resolve from repo
-    cwd = ticket.worktree_path
-    if not cwd or not Path(cwd).exists():
-        # Fall back to repo path
-        if ticket.repository_id:
-            repo = await state.get_repository(ticket.repository_id)
-            if repo:
-                cwd = repo.path
-        if not cwd:
-            run = await state.get_run(ticket.run_id)
-            cwd = run.project_path if run else None
-    if not cwd or not Path(cwd).exists():
-        await websocket.close(code=4004, reason="No valid working directory")
+    Attach/detach model: closing the terminal does NOT kill the worker process.
+    """
+    import json as _json
+
+    # Find the live worker for this ticket
+    worker = orchestrator._workers.get(ticket_id)
+    if not worker or not worker.is_running:
+        await websocket.close(code=4004, reason="No running process for this ticket")
         return
 
     await websocket.accept()
-    session = terminal_manager.create_session(ticket_id, cwd)
+    await worker.attach_viewer(websocket)
 
     try:
-        await handle_terminal_websocket(websocket, session)
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.receive":
+                if "bytes" in message and message["bytes"]:
+                    worker.write_input(message["bytes"])
+                elif "text" in message and message["text"]:
+                    try:
+                        ctrl = _json.loads(message["text"])
+                        if ctrl.get("type") == "resize":
+                            worker.resize_pty(ctrl.get("rows", 24), ctrl.get("cols", 80))
+                        elif ctrl.get("type") == "ping":
+                            await websocket.send_text(_json.dumps({"type": "pong"}))
+                    except (_json.JSONDecodeError, KeyError):
+                        worker.write_input(message["text"].encode())
+            elif message["type"] == "websocket.disconnect":
+                break
     except WebSocketDisconnect:
         pass
+    except Exception:
+        pass
     finally:
-        terminal_manager.close_session(ticket_id)
+        worker.detach_viewer(websocket)
 
 
 @app.post("/api/tickets/{ticket_id}/open-terminal")
