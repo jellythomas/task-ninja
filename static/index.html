@@ -845,6 +845,10 @@
                       <template x-if="ticket.repository_id && repoNameById(ticket.repository_id)">
                         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium" x-text="repoNameById(ticket.repository_id)"></span>
                       </template>
+                      <!-- Agent badge -->
+                      <template x-if="ticket.profile_id && profileNameById(ticket.profile_id)">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-medium" x-text="profileNameById(ticket.profile_id)"></span>
+                      </template>
                       <!-- Live terminal shortcut for active tickets -->
                       <template x-if="isTicketActive(ticket)">
                         <button @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 transition flex items-center gap-1" title="Attach to live process">
@@ -890,6 +894,12 @@
                       <div>
                         <span class="text-gray-500">Completed:</span>
                         <span class="text-gray-300 ml-1" x-text="new Date(ticket.completed_at).toLocaleString()"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.profile_id && profileNameById(ticket.profile_id)">
+                      <div>
+                        <span class="text-gray-500">Agent:</span>
+                        <span class="text-gray-300 ml-1" x-text="profileNameById(ticket.profile_id)"></span>
                       </div>
                     </template>
                     <template x-if="ticket.worker_pid">
@@ -1479,6 +1489,11 @@
           return repo ? repo.name : '';
         },
 
+        profileNameById(id) {
+          const p = this.agentProfiles.find(p => p.id === id);
+          return p ? p.name : '';
+        },
+
         get epicFilterTags() {
           const tags = new Set();
           for (const t of this.epicTickets) {
@@ -1493,21 +1508,17 @@
 
         // Match a ticket to a repo by checking summary tags against repo jira_label and name
         _matchTicketRepo(ticket) {
-          // Extract bracket tags from summary: [Flex], [MOBILE], [BE], etc.
+          // Only match bracket tags from summary: [Flex], [MOBILE], [BE], etc.
           const tags = (ticket.summary || '').match(/\[([A-Za-z0-9_-]+)\]/g) || [];
           const tagValues = tags.map(t => t.slice(1, -1).toLowerCase());
-          // Also check key prefix (e.g., MC, CKYC)
-          const keyPrefix = (ticket.key.split('-')[0] || '').toLowerCase();
+          if (tagValues.length === 0) return null;
 
           for (const repo of this.repositories) {
             const label = (repo.jira_label || '').toLowerCase();
             const name = (repo.name || '').toLowerCase();
             if (!label && !name) continue;
-            // Match against summary tags
             if (label && tagValues.includes(label)) return repo;
             if (name && tagValues.includes(name)) return repo;
-            // Match against key prefix
-            if (label && label === keyPrefix) return repo;
           }
           return null;
         },
