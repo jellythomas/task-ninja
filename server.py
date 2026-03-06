@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI):
     await run_scheduler.load_existing_schedules()
     yield
     run_scheduler.stop()
+    orchestrator.watchdog.cancel_all()
     terminal_manager.close_all()
 
 
@@ -544,6 +545,12 @@ async def get_settings():
 async def update_settings(req: UpdateSettingsRequest):
     await state.set_settings(req.settings)
     return {"status": "updated"}
+
+
+@app.get("/api/watchdog/status")
+async def watchdog_status():
+    """Get watchdog status (active timers, retries, working hours)."""
+    return orchestrator.watchdog.get_status()
 
 
 @app.get("/api/settings/jira-status")

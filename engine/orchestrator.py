@@ -10,6 +10,7 @@ from engine.broadcaster import Broadcaster
 from engine.git_manager import GitManager
 from engine.jira_client import JiraClient
 from engine.state import StateManager
+from engine.ticket_watchdog import TicketWatchdog
 from engine.worker import Worker
 from models.ticket import RunStatus, TicketState
 
@@ -26,6 +27,8 @@ class Orchestrator:
         self._running = False
         self._run_id: Optional[str] = None
         self.jira_client = JiraClient()
+        self.watchdog = TicketWatchdog(state, broadcaster)
+        self.watchdog.set_callbacks(requeue_cb=self._watchdog_requeue)
 
     async def start(self, run_id: str) -> None:
         """Start the orchestration loop for a run."""
@@ -160,17 +163,26 @@ class Orchestrator:
             self._running = False
             return
 
-        # Clean up finished tasks
+        # Clean up finished tasks and notify watchdog
         finished = [tid for tid, task in self._tasks.items() if task.done()]
         for tid in finished:
             self._tasks.pop(tid, None)
             self._workers.pop(tid, None)
+            ticket = await self.state.get_ticket(tid)
+            if ticket and ticket.state == TicketState.FAILED:
+                self.watchdog.on_ticket_failed(tid)
+            elif ticket and ticket.state in (TicketState.DONE, TicketState.REVIEW):
+                self.watchdog.on_ticket_completed(tid)
 
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
         available_slots = run.max_parallel - active_count
 
         if available_slots <= 0:
+            return
+
+        # Skip spawning if outside working hours
+        if not self.watchdog.is_within_working_hours():
             return
 
         # Pick next queued tickets
@@ -218,6 +230,7 @@ class Orchestrator:
             await self.broadcaster.broadcast_ticket_update(
                 self._run_id, ticket_id, TicketState.FAILED, error=error
             )
+            self.watchdog.on_ticket_failed(ticket_id)
             return
 
         # Resolve parent branch: ticket > run > repo default > config default
@@ -246,6 +259,7 @@ class Orchestrator:
             await self.broadcaster.broadcast_ticket_update(
                 self._run_id, ticket_id, TicketState.FAILED, error=error
             )
+            self.watchdog.on_ticket_failed(ticket_id)
             return
 
         branch_name = await git.get_branch_name(jira_key)
@@ -307,4 +321,14 @@ class Orchestrator:
 
         self._workers[ticket_id] = worker
         self._tasks[ticket_id] = asyncio.create_task(worker.run())
+        self.watchdog.on_ticket_active(ticket_id)
         print(f"[orchestrator] Spawned worker for {jira_key} in {worktree_path}", file=sys.stderr)
+
+    async def _watchdog_requeue(self, run_id: str) -> None:
+        """Called by watchdog when a ticket is re-queued for retry."""
+        if self._running:
+            return  # _tick will pick it up
+        # If run is completed/idle, restart the loop
+        run = await self.state.get_run(run_id)
+        if run and run.status != RunStatus.RUNNING:
+            await self.start(run_id)
