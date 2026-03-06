@@ -41,6 +41,22 @@
 </head>
 <body class="h-full text-gray-200" x-data="app()" x-init="init()">
 
+  <!-- Login Screen -->
+  <div x-show="showLogin" x-transition class="fixed inset-0 bg-gray-950 flex items-center justify-center z-[70]">
+    <div class="w-full max-w-sm mx-4 text-center" x-data="{ loginToken: '', loginError: '' }">
+      <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center font-bold text-2xl mx-auto mb-6">TN</div>
+      <h1 class="text-xl font-semibold text-white mb-1">Task Ninja</h1>
+      <p class="text-sm text-gray-500 mb-6">Enter your access token to continue</p>
+      <input x-model="loginToken" type="password" placeholder="Access token"
+             @keydown.enter="loginError = await doLogin(loginToken) || ''"
+             class="bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm w-full focus:border-blue-500 focus:outline-none mb-3">
+      <div x-show="loginError" class="text-xs text-red-400 mb-3" x-text="loginError"></div>
+      <button @click="loginError = await doLogin(loginToken) || ''"
+              class="bg-blue-600 hover:bg-blue-700 px-4 py-2.5 text-sm rounded-lg font-medium transition w-full">Sign In</button>
+      <p class="text-xs text-gray-600 mt-4">Token is found in your .env file as TASK_NINJA_SECRET</p>
+    </div>
+  </div>
+
   <!-- Quick Setup Wizard -->
   <div x-show="showJiraSetup" x-transition class="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
     <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4">
@@ -1019,28 +1035,35 @@
         ],
 
         async init() {
+          // Check if auth is required
+          const authStatus = await this.api('GET', '/api/auth/status');
+          if (authStatus?.auth_required && !this._authToken) {
+            this.showLogin = true;
+            return;
+          }
+
           // Load settings data in parallel
-          const [runs, repos, profiles, jiraStatus] = await Promise.all([
+          const [runs, repos, profiles, jiraStatus, envConfig] = await Promise.all([
             this.api('GET', '/api/runs'),
             this.api('GET', '/api/repositories'),
             this.api('GET', '/api/profiles'),
             this.api('GET', '/api/settings/jira-status'),
+            this.api('GET', '/api/env'),
           ]);
 
           this.repositories = repos || [];
           this.agentProfiles = profiles || [];
 
-          // Show Jira setup modal if not configured
+          // Show Quick Setup wizard if not configured
           if (jiraStatus && !jiraStatus.configured) {
             this.showJiraSetup = true;
           }
 
-          // Load existing Jira settings for the settings tab
-          const allSettings = await this.api('GET', '/api/settings');
-          if (allSettings) {
-            this.jiraSetup.url = allSettings.jira_url || '';
-            this.jiraSetup.email = allSettings.jira_email || '';
-            // Token is masked, don't overwrite
+          // Load Jira settings from .env for the settings/wizard forms
+          if (envConfig) {
+            this.jiraSetup.url = envConfig.JIRA_BASE_URL || '';
+            this.jiraSetup.email = envConfig.JIRA_EMAIL || '';
+            // Token is masked in response, don't overwrite
           }
 
           if (runs && runs.length > 0) {
@@ -1178,15 +1201,38 @@
         },
 
         // API
+        _authToken: localStorage.getItem('tn_auth_token') || '',
+        showLogin: false,
+
         async api(method, path, body = null) {
           try {
             const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            if (this._authToken) opts.headers['Authorization'] = `Bearer ${this._authToken}`;
             if (body) opts.body = JSON.stringify(body);
             const res = await fetch(path, opts);
+            if (res.status === 401) {
+              this.showLogin = true;
+              return null;
+            }
             return await res.json();
           } catch (e) {
             console.error(`API ${method} ${path} failed:`, e);
             return null;
+          }
+        },
+
+        async doLogin(token) {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          });
+          if (res.ok) {
+            this._authToken = token;
+            localStorage.setItem('tn_auth_token', token);
+            this.showLogin = false;
+            await this.init();
+          } else {
+            return 'Invalid token';
           }
         },
 
@@ -1342,7 +1388,8 @@
 
             // Connect WebSocket to worker's PTY
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal/${ticketId}`);
+            const tokenParam = this._authToken ? `?token=${encodeURIComponent(this._authToken)}` : '';
+            const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal/${ticketId}${tokenParam}`);
             ws.binaryType = 'arraybuffer';
             this.interactiveTerminal.ws = ws;
 
@@ -1423,14 +1470,16 @@
           }
         },
 
-        // Jira Credentials
+        // Jira Credentials (stored in .env)
         async testJiraConnection() {
           this.jiraSetup.error = '';
           this.jiraSetup.success = '';
-          // Save first, then test
-          await this.api('PUT', '/api/settings', { settings: {
-            jira_url: this.jiraSetup.url, jira_email: this.jiraSetup.email, jira_token: this.jiraSetup.token,
-          }});
+          // Save to .env first, then test
+          await this.api('PUT', '/api/env', {
+            JIRA_BASE_URL: this.jiraSetup.url,
+            JIRA_EMAIL: this.jiraSetup.email,
+            JIRA_API_TOKEN: this.jiraSetup.token,
+          });
           const result = await this.api('POST', '/api/settings/test-jira');
           if (result && result.status === 'connected') {
             this.jiraSetup.success = `Connected as ${result.user}`;
@@ -1446,9 +1495,11 @@
             this.jiraSetup.error = 'All fields are required';
             return;
           }
-          await this.api('PUT', '/api/settings', { settings: {
-            jira_url: this.jiraSetup.url, jira_email: this.jiraSetup.email, jira_token: this.jiraSetup.token,
-          }});
+          await this.api('PUT', '/api/env', {
+            JIRA_BASE_URL: this.jiraSetup.url,
+            JIRA_EMAIL: this.jiraSetup.email,
+            JIRA_API_TOKEN: this.jiraSetup.token,
+          });
           this.showJiraSetup = false;
           this.jiraSetup.success = 'Saved';
         },
@@ -1632,7 +1683,8 @@
           }
 
           const runId = this.currentRun.id;
-          this.eventSource = new EventSource(`/api/stream/${runId}`);
+          const sseToken = this._authToken ? `?token=${encodeURIComponent(this._authToken)}` : '';
+          this.eventSource = new EventSource(`/api/stream/${runId}${sseToken}`);
 
           this.eventSource.onopen = () => {
             console.log('[SSE] Connected');

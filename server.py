@@ -13,8 +13,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
+from engine.auth import AuthMiddleware, verify_ws_token
 from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
+from engine.env_manager import load_env, get_env, update_env, get_public_env
 from engine.jira_client import JiraClient
 from engine.orchestrator import Orchestrator
 from engine.scheduler import RunScheduler
@@ -39,6 +41,9 @@ from models.ticket import (
     UpdateTicketAssignmentRequest,
 )
 
+# Load .env first (creates file with defaults if missing)
+env_config = load_env()
+
 # Load config
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 config = yaml.safe_load(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
@@ -49,7 +54,7 @@ broadcaster = Broadcaster()
 orchestrator = Orchestrator(state, broadcaster, config)
 claude_cfg = config.get("claude", {})
 claude_helper = ClaudeHelper(claude_cfg.get("command", "claude"), claude_cfg.get("skip_permissions", True))
-jira_client = JiraClient(state)
+jira_client = JiraClient()
 terminal_manager = TerminalManager()
 run_scheduler = RunScheduler(state, orchestrator.start)
 
@@ -81,6 +86,45 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Autonomous Atlassian Task", lifespan=lifespan)
+app.add_middleware(AuthMiddleware)
+
+
+# --- Auth ---
+
+@app.post("/api/auth/login")
+async def auth_login(req: dict):
+    """Validate token and return success."""
+    token = req.get("token", "")
+    secret = get_env("TASK_NINJA_SECRET", "")
+    if not secret or token == secret:
+        return {"status": "ok"}
+    raise HTTPException(401, "Invalid token")
+
+
+@app.get("/api/auth/status")
+async def auth_status():
+    """Check if auth is required."""
+    remote = get_env("TASK_NINJA_REMOTE_ACCESS", "false").lower() == "true"
+    return {"auth_required": remote}
+
+
+# --- Environment Config ---
+
+@app.get("/api/env")
+async def get_env_config():
+    """Get .env configuration (secrets masked)."""
+    return get_public_env()
+
+
+@app.put("/api/env")
+async def update_env_config(req: dict):
+    """Update .env configuration."""
+    updates = req.get("settings", req)
+    # Don't allow overwriting secret via API unless explicitly provided
+    if "TASK_NINJA_SECRET" in updates and not updates["TASK_NINJA_SECRET"]:
+        del updates["TASK_NINJA_SECRET"]
+    update_env(updates)
+    return {"status": "updated"}
 
 
 # --- Static UI ---
@@ -511,12 +555,12 @@ async def jira_status():
 
 @app.post("/api/settings/test-jira")
 async def test_jira_connection():
-    """Test Jira API connection with stored credentials."""
-    jira_url = await state.get_setting("jira_url")
-    jira_email = await state.get_setting("jira_email")
-    jira_token = await state.get_setting("jira_token")
+    """Test Jira API connection with .env credentials."""
+    jira_url = get_env("JIRA_BASE_URL")
+    jira_email = get_env("JIRA_EMAIL")
+    jira_token = get_env("JIRA_API_TOKEN")
     if not all([jira_url, jira_email, jira_token]):
-        raise HTTPException(400, "Jira credentials not configured")
+        raise HTTPException(400, "Jira credentials not configured in .env")
     try:
         import httpx
         async with httpx.AsyncClient() as client:
@@ -557,6 +601,11 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
     Attach/detach model: closing the terminal does NOT kill the worker process.
     """
     import json as _json
+
+    # Auth check for WebSocket
+    if not verify_ws_token(websocket):
+        await websocket.close(code=4001, reason="Authentication required")
+        return
 
     # Find the live worker for this ticket
     worker = orchestrator._workers.get(ticket_id)
@@ -650,7 +699,14 @@ async def open_external_terminal(ticket_id: str):
 # --- Entry point ---
 
 if __name__ == "__main__":
-    host = config.get("server", {}).get("host", "127.0.0.1")
-    port = config.get("server", {}).get("port", 8420)
+    # .env takes precedence, then config.yaml, then defaults
+    remote = get_env("TASK_NINJA_REMOTE_ACCESS", "false").lower() == "true"
+    host = get_env("TASK_NINJA_HOST") or config.get("server", {}).get("host", "127.0.0.1")
+    if remote:
+        host = "0.0.0.0"
+    port = int(get_env("TASK_NINJA_PORT") or config.get("server", {}).get("port", 8420))
+    if remote:
+        print(f"[server] Remote access ENABLED — auth required", file=sys.stderr)
+        print(f"[server] Auth token: {get_env('TASK_NINJA_SECRET')[:8]}...", file=sys.stderr)
     print(f"[server] Starting at http://{host}:{port}", file=sys.stderr)
     uvicorn.run("server:app", host=host, port=port, reload=False)

@@ -25,7 +25,7 @@ class Orchestrator:
         self._tasks: dict[str, asyncio.Task] = {}  # ticket_id -> Task
         self._running = False
         self._run_id: Optional[str] = None
-        self.jira_client = JiraClient(state)
+        self.jira_client = JiraClient()
 
     async def start(self, run_id: str) -> None:
         """Start the orchestration loop for a run."""

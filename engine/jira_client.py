@@ -5,23 +5,22 @@ from typing import Optional
 
 import httpx
 
-from engine.state import StateManager
+from engine.env_manager import get_env
 
 
 class JiraClient:
-    """Async Jira REST API client using credentials from settings DB."""
+    """Async Jira REST API client using credentials from .env."""
 
-    def __init__(self, state: StateManager):
-        self.state = state
+    def __init__(self):
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_credentials(self) -> tuple[str, str, str]:
-        """Fetch Jira credentials from settings. Raises ValueError if missing."""
-        url = await self.state.get_setting("jira_url")
-        email = await self.state.get_setting("jira_email")
-        token = await self.state.get_setting("jira_token")
+        """Fetch Jira credentials from .env. Raises ValueError if missing."""
+        url = get_env("JIRA_BASE_URL")
+        email = get_env("JIRA_EMAIL")
+        token = get_env("JIRA_API_TOKEN")
         if not all([url, email, token]):
-            raise ValueError("Jira credentials not configured. Set jira_url, jira_email, jira_token in Settings.")
+            raise ValueError("Jira credentials not configured. Set JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN in .env")
         return url.rstrip("/"), email, token
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
