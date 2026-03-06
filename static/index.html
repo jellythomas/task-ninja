@@ -1234,6 +1234,7 @@
         notificationState: { permission: typeof Notification !== 'undefined' ? Notification.permission : 'denied', enabled: false, vapidKey: null },
         remoteAccess: { enabled: false, hasToken: false },
         tailscale: { installed: false, running: false, ip: null, url: null, loading: false, installing: false, error: null },
+        _testNotifSent: false,
 
         settingsTabs: [
           { id: 'general', label: 'General' },
