@@ -53,6 +53,20 @@ All notable changes to Task Ninja are documented in this file.
 - **JiraClient** no longer requires `StateManager` in constructor
 - **Orchestrator** integrates watchdog and notifier for ticket lifecycle events
 
+#### Unified Ticket Modal (2026-03-06)
+- **Jira URL parsing** — paste full Jira URLs (e.g., `https://jurnal.atlassian.net/browse/MC-9173`) anywhere: epic input, ticket input, or add-tickets API. Keys are auto-extracted.
+- **Unified modal for Epic + Tickets** — both flows now open the same selection modal with Jira-fetched summaries, statuses, and auto-matched repositories
+- **`POST /api/runs/{run_id}/fetch-tickets`** — new endpoint that fetches ticket details from Jira for the selection modal (used by Tickets paste flow)
+- **Agent profile selector in modal** — dropdown to pick which AI agent executes the queued tickets
+- **Auto-fill parent branch** — populated from the matched repo's `default_branch` based on Jira key prefix mapping
+- **Migrated Jira search API** — from deprecated `/rest/api/3/search` to `/rest/api/3/search/jql`
+
+#### Planned: 3-Tier Assignment Cascade
+- Design approved for per-prefix-group and per-ticket assignment overrides
+- See [design doc](docs/plans/2026-03-06-unified-ticket-modal-design.md) for full spec
+
 ### Fixed
 - Stale tickets (planning/developing with dead worker PID) recovered on startup
 - SSE reconnection handles auth token correctly
+- `_testNotifSent` Alpine ReferenceError — variable declared in data object
+- Settings form grids stack vertically on mobile (375px) instead of cramping
