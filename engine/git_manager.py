@@ -13,8 +13,13 @@ class GitManager:
         self.worktree_base = self.project_path / worktree_dir
         self.branch_prefix = branch_prefix
 
-    async def create_worktree(self, jira_key: str) -> str:
-        """Create a git worktree for a ticket. Returns the worktree path."""
+    async def create_worktree(self, jira_key: str, parent_branch: str = None) -> str:
+        """Create a git worktree for a ticket. Returns the worktree path.
+
+        Args:
+            jira_key: The Jira ticket key (e.g., MC-9174)
+            parent_branch: Branch to create the worktree from (default: current HEAD)
+        """
         branch_name = f"{self.branch_prefix}/{jira_key}"
         worktree_path = self.worktree_base / f"worktree-{jira_key.lower()}"
 
@@ -30,6 +35,13 @@ class GitManager:
                 shutil.rmtree(str(worktree_path), ignore_errors=True)
             await self._run_git("worktree", "prune")
 
+        # Fetch latest if parent_branch specified (ensure it exists locally)
+        if parent_branch:
+            try:
+                await self._run_git("fetch", "origin", parent_branch)
+            except RuntimeError:
+                pass  # May not have remote, that's fine
+
         # Check if branch exists
         proc = await asyncio.create_subprocess_exec(
             "git", "branch", "--list", branch_name,
@@ -43,8 +55,9 @@ class GitManager:
             # Branch exists — create worktree from it
             await self._run_git("worktree", "add", str(worktree_path), branch_name)
         else:
-            # Create new branch from current HEAD
-            await self._run_git("worktree", "add", "-b", branch_name, str(worktree_path))
+            # Create new branch from parent_branch or HEAD
+            start_point = parent_branch or "HEAD"
+            await self._run_git("worktree", "add", "-b", branch_name, str(worktree_path), start_point)
 
         return str(worktree_path)
 

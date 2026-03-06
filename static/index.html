@@ -3,10 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Autonomous Atlassian Task</title>
+  <title>Task Ninja</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -26,19 +29,63 @@
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
     @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+    /* Mobile list view */
+    @media (max-width: 639px) {
+      .kanban-board { display: none !important; }
+      .mobile-list { display: block !important; }
+    }
+    @media (min-width: 640px) {
+      .mobile-list { display: none !important; }
+    }
   </style>
 </head>
 <body class="h-full text-gray-200" x-data="app()" x-init="init()">
 
+  <!-- Jira Setup Modal -->
+  <div x-show="showJiraSetup" x-transition class="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md mx-4">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h2 class="text-lg font-semibold text-white">Configure Jira Connection</h2>
+        <p class="text-xs text-gray-500 mt-1">Task Ninja needs Jira API access to fetch epics and sync ticket status.</p>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Jira Base URL</label>
+          <input x-model="jiraSetup.url" type="text" placeholder="https://yourcompany.atlassian.net"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Email</label>
+          <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">API Token</label>
+          <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
+        <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-between">
+        <button @click="showJiraSetup = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Skip for now</button>
+        <div class="flex gap-2">
+          <button @click="testJiraConnection()" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test</button>
+          <button @click="saveJiraCredentials()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Header -->
-  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
+  <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">AT</div>
-      <h1 class="text-lg font-semibold text-white">Autonomous Atlassian Task</h1>
+      <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">TN</div>
+      <h1 class="text-lg font-semibold text-white hidden sm:block">Task Ninja</h1>
     </div>
     <div class="flex items-center gap-3">
-      <span class="text-xs text-gray-500" x-text="currentRun ? `Run: ${currentRun.name}` : 'No active run'"></span>
-      <button @click="showSettings = !showSettings" class="p-2 hover:bg-gray-800 rounded-lg transition">
+      <span class="text-xs text-gray-500 hidden sm:inline" x-text="currentRun ? `Run: ${currentRun.name}` : 'No active run'"></span>
+      <button @click="showSettings = !showSettings" :class="showSettings ? 'bg-gray-800' : ''" class="p-2 hover:bg-gray-800 rounded-lg transition">
         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
@@ -49,9 +96,37 @@
 
   <div class="flex flex-col h-[calc(100vh-56px)]">
 
+    <!-- Project/Repo Tabs -->
+    <div class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6" x-show="repositories.length > 0">
+      <!-- Desktop tabs -->
+      <div class="hidden sm:flex items-center gap-1 overflow-x-auto py-1">
+        <button @click="activeRepoId = null"
+                :class="activeRepoId === null ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                class="px-3 py-1.5 text-xs rounded-md transition font-medium flex-shrink-0">All</button>
+        <template x-for="repo in repositories" :key="repo.id">
+          <button @click="activeRepoId = repo.id"
+                  :class="activeRepoId === repo.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                  class="px-3 py-1.5 text-xs rounded-md transition font-medium flex-shrink-0 flex items-center gap-1.5">
+            <span x-text="repo.name"></span>
+            <span class="bg-gray-700/50 text-gray-500 px-1 rounded text-[10px]" x-text="ticketCountForRepo(repo.id)"></span>
+          </button>
+        </template>
+      </div>
+      <!-- Mobile dropdown -->
+      <div class="sm:hidden py-2">
+        <select x-model.number="activeRepoId" @change="activeRepoId = $event.target.value === '' ? null : parseInt($event.target.value)"
+                class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          <option value="">All Projects</option>
+          <template x-for="repo in repositories" :key="repo.id">
+            <option :value="repo.id" x-text="repo.name + ' (' + ticketCountForRepo(repo.id) + ')'"></option>
+          </template>
+        </select>
+      </div>
+    </div>
+
     <!-- Config Bar -->
-    <div class="bg-gray-900/50 border-b border-gray-800 px-6 py-3">
-      <div class="flex flex-wrap items-center gap-4">
+    <div class="bg-gray-900/50 border-b border-gray-800 px-4 sm:px-6 py-3">
+      <div class="flex flex-wrap items-center gap-3 sm:gap-4">
 
         <!-- Input Mode Tabs -->
         <div class="flex bg-gray-800 rounded-lg p-0.5">
@@ -62,7 +137,7 @@
         <!-- Epic Input -->
         <template x-if="inputMode === 'epic'">
           <div class="flex items-center gap-2">
-            <input x-model="epicKey" type="text" placeholder="MC-9056" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-32 focus:border-blue-500 focus:outline-none">
+            <input x-model="epicKey" type="text" placeholder="MC-9056" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-28 sm:w-32 focus:border-blue-500 focus:outline-none">
             <button @click="loadEpic()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Load</button>
           </div>
         </template>
@@ -70,15 +145,15 @@
         <!-- Ticket Input -->
         <template x-if="inputMode === 'tickets'">
           <div class="flex items-center gap-2">
-            <input x-model="ticketInput" type="text" placeholder="MC-9173, MC-9174, MC-9177" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-72 focus:border-blue-500 focus:outline-none">
+            <input x-model="ticketInput" type="text" placeholder="MC-9173, MC-9174" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-48 sm:w-72 focus:border-blue-500 focus:outline-none">
             <button @click="addTickets()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Queue</button>
           </div>
         </template>
 
-        <div class="h-6 w-px bg-gray-700"></div>
+        <div class="h-6 w-px bg-gray-700 hidden sm:block"></div>
 
         <!-- Board Filter -->
-        <div class="flex items-center gap-1.5">
+        <div class="hidden sm:flex items-center gap-1.5">
           <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
           <input x-model="boardFilter" type="text" placeholder="Filter board..."
                  class="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs w-36 focus:border-blue-500 focus:outline-none focus:w-48 transition-all">
@@ -87,10 +162,10 @@
           </button>
         </div>
 
-        <div class="h-6 w-px bg-gray-700"></div>
+        <div class="h-6 w-px bg-gray-700 hidden sm:block"></div>
 
         <!-- Parallel Config -->
-        <div class="flex items-center gap-2">
+        <div class="hidden sm:flex items-center gap-2">
           <span class="text-xs text-gray-500">Parallel:</span>
           <div class="flex gap-1">
             <template x-for="n in [1,2,3,4]">
@@ -99,26 +174,26 @@
           </div>
         </div>
 
-        <div class="h-6 w-px bg-gray-700"></div>
+        <div class="h-6 w-px bg-gray-700 hidden sm:block"></div>
 
         <!-- Run Controls -->
         <div class="flex items-center gap-2">
           <template x-if="!currentRun || currentRun.status === 'idle' || currentRun.status === 'completed'">
-            <button @click="startRun()" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+            <button @click="startRun()" class="bg-emerald-600 hover:bg-emerald-700 px-3 sm:px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-              Start
+              <span class="hidden sm:inline">Start</span>
             </button>
           </template>
           <template x-if="currentRun && currentRun.status === 'running'">
-            <button @click="pauseRun()" class="bg-amber-600 hover:bg-amber-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+            <button @click="pauseRun()" class="bg-amber-600 hover:bg-amber-700 px-3 sm:px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z"/></svg>
-              Pause
+              <span class="hidden sm:inline">Pause</span>
             </button>
           </template>
           <template x-if="currentRun && currentRun.status === 'paused'">
-            <button @click="resumeRun()" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+            <button @click="resumeRun()" class="bg-emerald-600 hover:bg-emerald-700 px-3 sm:px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-              Resume
+              <span class="hidden sm:inline">Resume</span>
             </button>
           </template>
         </div>
@@ -135,9 +210,19 @@
       </div>
     </div>
 
-    <!-- Settings Panel (collapsible) -->
-    <div x-show="showSettings" x-transition class="bg-gray-900/80 border-b border-gray-800 px-6 py-4">
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl">
+    <!-- Settings Panel (collapsible, tabbed) -->
+    <div x-show="showSettings" x-transition class="bg-gray-900/80 border-b border-gray-800 px-4 sm:px-6 py-4">
+      <!-- Settings Tabs -->
+      <div class="flex gap-1 mb-4 overflow-x-auto">
+        <template x-for="tab in settingsTabs" :key="tab.id">
+          <button @click="activeSettingsTab = tab.id"
+                  :class="activeSettingsTab === tab.id ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'"
+                  class="px-3 py-1 text-xs rounded-md transition font-medium flex-shrink-0" x-text="tab.label"></button>
+        </template>
+      </div>
+
+      <!-- General -->
+      <div x-show="activeSettingsTab === 'general'" class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl">
         <label class="flex items-center gap-2">
           <input type="checkbox" x-model="settings.skipPermissions" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
           <span class="text-sm text-gray-300">Skip Permissions</span>
@@ -151,10 +236,156 @@
           <span class="text-sm text-gray-300">Cleanup Worktrees</span>
         </label>
       </div>
+
+      <!-- Repositories -->
+      <div x-show="activeSettingsTab === 'repositories'" class="max-w-3xl">
+        <div class="space-y-2 mb-3">
+          <template x-for="repo in repositories" :key="repo.id">
+            <div class="flex items-center gap-3 bg-gray-800 rounded-lg px-3 py-2">
+              <span class="text-sm font-medium text-white w-32 truncate" x-text="repo.name"></span>
+              <span class="text-xs text-gray-400 font-mono flex-1 truncate" x-text="repo.path"></span>
+              <span class="text-xs text-gray-500 w-16" x-text="repo.default_branch"></span>
+              <button @click="editRepo(repo)" class="text-gray-500 hover:text-blue-400 transition p-1">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+              </button>
+              <button @click="removeRepo(repo.id)" class="text-gray-500 hover:text-red-400 transition p-1">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </div>
+          </template>
+        </div>
+        <div class="flex flex-wrap items-end gap-2 bg-gray-800/50 rounded-lg p-3">
+          <div>
+            <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+            <input x-model="newRepo.name" type="text" placeholder="mekari_credit" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-36">
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <label class="text-[10px] text-gray-500 block mb-0.5">Path</label>
+            <input x-model="newRepo.path" type="text" placeholder="/Users/you/mekari_credit" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full">
+          </div>
+          <div>
+            <label class="text-[10px] text-gray-500 block mb-0.5">Default Branch</label>
+            <input x-model="newRepo.default_branch" type="text" placeholder="main" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-24">
+          </div>
+          <button @click="addRepo()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 text-sm rounded font-medium transition">Add</button>
+        </div>
+      </div>
+
+      <!-- Label Mappings -->
+      <div x-show="activeSettingsTab === 'mappings'" class="max-w-2xl">
+        <p class="text-xs text-gray-500 mb-3">Map Jira labels/components to repositories for auto-assignment when loading epics.</p>
+        <div class="space-y-2 mb-3">
+          <template x-for="m in labelMappings" :key="m.id">
+            <div class="flex items-center gap-3 bg-gray-800 rounded-lg px-3 py-2">
+              <span class="text-sm font-mono text-blue-400 w-24" x-text="m.jira_label"></span>
+              <svg class="w-4 h-4 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+              <span class="text-sm text-gray-300" x-text="repoNameById(m.repository_id)"></span>
+              <div class="flex-1"></div>
+              <button @click="removeLabelMapping(m.id)" class="text-gray-500 hover:text-red-400 transition p-1">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+          </template>
+        </div>
+        <div class="flex items-end gap-2 bg-gray-800/50 rounded-lg p-3">
+          <div>
+            <label class="text-[10px] text-gray-500 block mb-0.5">Jira Label</label>
+            <input x-model="newMapping.jira_label" type="text" placeholder="[MC]" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-28">
+          </div>
+          <div>
+            <label class="text-[10px] text-gray-500 block mb-0.5">Repository</label>
+            <select x-model.number="newMapping.repository_id" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm">
+              <option value="">Select...</option>
+              <template x-for="repo in repositories" :key="repo.id">
+                <option :value="repo.id" x-text="repo.name"></option>
+              </template>
+            </select>
+          </div>
+          <button @click="addLabelMapping()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 text-sm rounded font-medium transition">Add</button>
+        </div>
+      </div>
+
+      <!-- Agent Profiles -->
+      <div x-show="activeSettingsTab === 'profiles'" class="max-w-3xl">
+        <div class="space-y-2 mb-3">
+          <template x-for="p in agentProfiles" :key="p.id">
+            <div class="bg-gray-800 rounded-lg px-3 py-2">
+              <div class="flex items-center gap-3">
+                <span class="text-sm font-medium text-white" x-text="p.name"></span>
+                <template x-if="p.is_default">
+                  <span class="text-[10px] bg-blue-900/50 text-blue-400 px-1.5 py-0.5 rounded-full">Default</span>
+                </template>
+                <div class="flex-1"></div>
+                <span class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400" x-text="p.log_format"></span>
+                <button x-show="!p.is_default" @click="setDefaultProfile(p.id)" class="text-xs text-gray-500 hover:text-blue-400 transition">Set Default</button>
+                <button @click="editProfile(p)" class="text-gray-500 hover:text-blue-400 transition p-1">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                </button>
+                <button @click="removeProfile(p.id)" class="text-gray-500 hover:text-red-400 transition p-1">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+              </div>
+              <div class="mt-1 text-xs font-mono text-gray-500 truncate" x-text="p.command + ' ' + p.args_template"></div>
+            </div>
+          </template>
+        </div>
+        <div class="bg-gray-800/50 rounded-lg p-3 space-y-2">
+          <div class="flex flex-wrap gap-2">
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+              <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-32">
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
+              <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-28">
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-0.5">Log Format</label>
+              <select x-model="newProfile.log_format" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm">
+                <option value="plain-text">plain-text</option>
+                <option value="stream-json">stream-json</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-[10px] text-gray-500 block mb-0.5">Args Template <span class="text-gray-600">({JIRA_KEY}, {BRANCH_NAME}, {WORKTREE_PATH}, {PARENT_BRANCH}, {PROJECT_PATH}, {JIRA_SUMMARY})</span></label>
+            <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"'
+                   class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full">
+          </div>
+          <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 text-sm rounded font-medium transition">Add Profile</button>
+        </div>
+      </div>
+
+      <!-- Jira Credentials -->
+      <div x-show="activeSettingsTab === 'jira'" class="max-w-lg">
+        <div class="space-y-3">
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Jira Base URL</label>
+            <input x-model="jiraSetup.url" type="text" placeholder="https://yourcompany.atlassian.net"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Email</label>
+            <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">API Token</label>
+            <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+          </div>
+          <div class="flex gap-2">
+            <button @click="testJiraConnection()" class="px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test Connection</button>
+            <button @click="saveJiraCredentials()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+          </div>
+          <div x-show="jiraSetup.error" class="text-xs text-red-400" x-text="jiraSetup.error"></div>
+          <div x-show="jiraSetup.success" class="text-xs text-emerald-400" x-text="jiraSetup.success"></div>
+        </div>
+      </div>
     </div>
 
-    <!-- Kanban Board -->
-    <div class="flex-1 overflow-x-auto p-4">
+    <!-- Desktop Kanban Board -->
+    <div class="kanban-board flex-1 overflow-x-auto p-4">
       <div class="flex gap-3 h-full min-w-max">
         <template x-for="col in columns" :key="col.id">
           <div class="w-64 flex-shrink-0 flex flex-col bg-gray-900/50 rounded-xl border border-gray-800">
@@ -218,6 +449,10 @@
                           <span x-text="ticket.pr_number ? 'PR #' + ticket.pr_number : 'Draft PR'"></span>
                         </a>
                       </template>
+                      <!-- Repo badge -->
+                      <template x-if="ticket.repository_id && repoNameById(ticket.repository_id)">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500" x-text="repoNameById(ticket.repository_id)"></span>
+                      </template>
                     </div>
                   </div>
                   <!-- Expanded detail panel -->
@@ -232,6 +467,12 @@
                       <div>
                         <span class="text-gray-500">Branch:</span>
                         <span class="text-gray-300 font-mono ml-1" x-text="ticket.branch_name"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.parent_branch">
+                      <div>
+                        <span class="text-gray-500">Parent:</span>
+                        <span class="text-gray-300 font-mono ml-1" x-text="ticket.parent_branch"></span>
                       </div>
                     </template>
                     <template x-if="ticket.worktree_path">
@@ -258,6 +499,17 @@
                         <span class="text-gray-300 font-mono ml-1" x-text="ticket.worker_pid"></span>
                       </div>
                     </template>
+                    <!-- Terminal buttons -->
+                    <div class="flex gap-2 mt-1.5 pt-1.5 border-t border-gray-700/50">
+                      <button @click.stop="openInteractiveTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-cyan-400 hover:text-cyan-300 transition">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        Terminal
+                      </button>
+                      <button @click.stop="openExternalTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 transition">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                        External
+                      </button>
+                    </div>
                   </div>
                 </div>
               </template>
@@ -267,8 +519,55 @@
       </div>
     </div>
 
+    <!-- Mobile List View -->
+    <div class="mobile-list flex-1 overflow-y-auto p-3 space-y-3">
+      <template x-for="col in columns" :key="col.id">
+        <div x-show="ticketsInColumn(col.id).length > 0">
+          <button @click="col._open = !col._open" class="flex items-center justify-between w-full px-3 py-2 bg-gray-900/50 rounded-lg border border-gray-800">
+            <div class="flex items-center gap-2">
+              <div :class="col.dotColor" class="w-2 h-2 rounded-full"></div>
+              <span class="text-sm font-semibold text-gray-300" x-text="col.label"></span>
+              <span class="text-xs text-gray-500" x-text="'(' + ticketsInColumn(col.id).length + ')'"></span>
+            </div>
+            <svg :class="col._open ? 'rotate-180' : ''" class="w-4 h-4 text-gray-500 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div x-show="col._open !== false" class="mt-1 space-y-1.5 pl-1">
+            <template x-for="ticket in ticketsInColumn(col.id)" :key="ticket.id">
+              <div class="bg-gray-800 rounded-lg border border-gray-700 p-3" @click="switchTerminal(ticket.id)">
+                <div class="flex items-center justify-between mb-1">
+                  <a :href="'https://mfrlab.atlassian.net/browse/' + ticket.jira_key" target="_blank" @click.stop
+                     class="text-xs font-bold text-blue-400" x-text="ticket.jira_key"></a>
+                  <div class="flex items-center gap-2">
+                    <template x-if="ticket.state === 'planning' || ticket.state === 'developing'">
+                      <div class="flex items-center gap-1">
+                        <div :class="ticket.paused ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse-dot'" class="w-1.5 h-1.5 rounded-full"></div>
+                        <span class="text-[10px] text-gray-500" x-text="ticket.paused ? 'Paused' : (tick, elapsedTime(ticket.started_at))"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.state === 'failed'">
+                      <button @click.stop="moveTicket(ticket.id, 'queued')" class="text-[10px] text-blue-400 px-1.5 py-0.5 bg-blue-900/30 rounded">Retry</button>
+                    </template>
+                  </div>
+                </div>
+                <p class="text-xs text-gray-400 line-clamp-2" x-text="ticket.summary || 'No summary'"></p>
+                <div class="flex items-center gap-3 mt-1.5">
+                  <template x-if="ticket.pr_url">
+                    <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400">View PR</a>
+                  </template>
+                  <button @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] text-cyan-400 flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    Terminal
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
     <!-- Terminal Panel -->
-    <div class="h-56 bg-gray-950 border-t border-gray-800 flex flex-col">
+    <div class="h-48 sm:h-56 bg-gray-950 border-t border-gray-800 flex flex-col">
       <!-- Terminal Tabs -->
       <div class="flex items-center border-b border-gray-800 px-2 overflow-x-auto">
         <span class="text-xs text-gray-600 px-2 py-2 flex-shrink-0">Terminal</span>
@@ -302,6 +601,12 @@
       <div class="px-5 py-4 border-b border-gray-800">
         <h2 class="text-lg font-semibold text-white">Select Tickets from <span class="text-blue-400" x-text="epicKey"></span></h2>
         <p class="text-xs text-gray-500 mt-1">Filter and pick the tickets you want to queue for execution.</p>
+        <!-- Parent Branch for this epic -->
+        <div class="mt-2 flex items-center gap-2">
+          <label class="text-xs text-gray-500">Parent Branch:</label>
+          <input x-model="epicParentBranch" type="text" placeholder="main (default)"
+                 class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-48 focus:border-blue-500 focus:outline-none">
+        </div>
         <!-- Search + Quick Filters -->
         <div class="mt-3 flex flex-col gap-2">
           <input x-model="epicFilter.search" type="text" placeholder="Search by key or summary..."
@@ -331,6 +636,10 @@
             <input type="checkbox" x-model="t.selected" :disabled="t.alreadyAdded" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 flex-shrink-0">
             <span class="text-sm font-mono text-blue-400 flex-shrink-0 w-20" x-text="t.key"></span>
             <span class="text-sm text-gray-300 truncate flex-1" x-text="t.summary"></span>
+            <!-- Matched repo -->
+            <template x-if="t.matchedRepo">
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500 flex-shrink-0" x-text="t.matchedRepo"></span>
+            </template>
             <template x-if="t.alreadyAdded">
               <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 text-emerald-400 bg-emerald-900/30">On Board</span>
             </template>
@@ -367,20 +676,6 @@
   </div>
 
   <!-- Confirm Delete Modal -->
-  <div x-show="confirmModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="confirmModal.show = false">
-    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm mx-4 overflow-hidden">
-      <div class="px-5 py-4">
-        <h3 class="text-base font-semibold text-white" x-text="confirmModal.title"></h3>
-        <p class="text-sm text-gray-400 mt-2" x-text="confirmModal.message"></p>
-      </div>
-      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
-        <button @click="confirmModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition rounded-lg">Cancel</button>
-        <button @click="confirmDelete()" class="bg-red-600 hover:bg-red-700 px-4 py-1.5 text-sm rounded-lg font-medium transition text-white">Remove</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Confirm Delete Modal -->
   <div x-show="confirmModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="confirmModal.show = false" @keydown.escape.window="confirmModal.show = false">
     <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm mx-4 overflow-hidden">
       <div class="px-5 py-4">
@@ -394,71 +689,197 @@
     </div>
   </div>
 
+  <!-- Edit Repo Modal -->
+  <div x-show="editRepoModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="editRepoModal.show = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md mx-4">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h3 class="text-base font-semibold text-white">Edit Repository</h3>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Name</label>
+          <input x-model="editRepoModal.data.name" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Path</label>
+          <input x-model="editRepoModal.data.path" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Default Branch</label>
+          <input x-model="editRepoModal.data.default_branch" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Default Agent Profile</label>
+          <select x-model.number="editRepoModal.data.default_profile_id" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+            <option value="">None (use global default)</option>
+            <template x-for="p in agentProfiles" :key="p.id">
+              <option :value="p.id" x-text="p.name"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
+        <button @click="editRepoModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Cancel</button>
+        <button @click="saveRepoEdit()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Profile Modal -->
+  <div x-show="editProfileModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="editProfileModal.show = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h3 class="text-base font-semibold text-white">Edit Agent Profile</h3>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div class="flex gap-3">
+          <div class="flex-1">
+            <label class="text-xs text-gray-400 block mb-1">Name</label>
+            <input x-model="editProfileModal.data.name" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Command</label>
+            <input x-model="editProfileModal.data.command" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-32">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Args Template</label>
+          <input x-model="editProfileModal.data.args_template" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full font-mono">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Log Format</label>
+          <select x-model="editProfileModal.data.log_format" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm">
+            <option value="plain-text">plain-text</option>
+            <option value="stream-json">stream-json</option>
+          </select>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
+        <button @click="editProfileModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Cancel</button>
+        <button @click="saveProfileEdit()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Terminal Overlay -->
+  <div x-show="interactiveTerminal.show" x-transition class="fixed inset-0 bg-black/80 flex flex-col z-50">
+    <div class="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
+      <div class="flex items-center gap-3">
+        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        <span class="text-sm font-medium text-white" x-text="interactiveTerminal.ticketKey || 'Terminal'"></span>
+        <span class="text-xs text-gray-500 font-mono" x-text="interactiveTerminal.cwd || ''"></span>
+      </div>
+      <button @click="closeInteractiveTerminal()" class="p-1.5 hover:bg-gray-800 rounded-lg transition">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="interactive-terminal" class="flex-1 bg-black"></div>
+  </div>
+
   <script>
     function app() {
       return {
         // State
         currentRun: null,
         tickets: [],
+        repositories: [],
+        labelMappings: [],
+        agentProfiles: [],
+        activeRepoId: null,
         inputMode: 'epic',
         epicKey: '',
+        epicParentBranch: '',
         ticketInput: '',
         maxParallel: 2,
         showSettings: false,
+        activeSettingsTab: 'general',
         showEpicModal: false,
+        showJiraSetup: false,
         epicTickets: [],
         epicFilter: { search: '', activeTags: [] },
         boardFilter: '',
         confirmModal: { show: false, title: '', message: '', ticketId: null },
+        editRepoModal: { show: false, id: null, data: {} },
+        editProfileModal: { show: false, id: null, data: {} },
+        interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '', ws: null, term: null, fitAddon: null },
         activeTerminal: null,
-        terminalLogs: {},  // ticket_id -> logs[]
-        terminalFetched: {},  // ticket_id -> true if logs loaded from API
+        terminalLogs: {},
+        terminalFetched: {},
         settings: {
           skipPermissions: true,
           workerTimeout: 30,
           cleanupWorktrees: true,
         },
+        jiraSetup: { url: '', email: '', token: '', error: '', success: '' },
+        newRepo: { name: '', path: '', default_branch: 'main' },
+        newMapping: { jira_label: '', repository_id: '' },
+        newProfile: { name: '', command: '', args_template: '', log_format: 'plain-text' },
         eventSource: null,
         tick: 0,
 
+        settingsTabs: [
+          { id: 'general', label: 'General' },
+          { id: 'repositories', label: 'Repositories' },
+          { id: 'mappings', label: 'Label Mappings' },
+          { id: 'profiles', label: 'Agent Profiles' },
+          { id: 'jira', label: 'Jira Credentials' },
+        ],
+
         columns: [
-          { id: 'pending', label: 'Pending', dotColor: 'bg-gray-500' },
-          { id: 'queued', label: 'Queued', dotColor: 'bg-yellow-500' },
-          { id: 'planning', label: 'Planning', dotColor: 'bg-cyan-500' },
-          { id: 'developing', label: 'Developing', dotColor: 'bg-blue-500' },
-          { id: 'review', label: 'Review', dotColor: 'bg-purple-500' },
-          { id: 'done', label: 'Done', dotColor: 'bg-emerald-500' },
-          { id: 'failed', label: 'Failed', dotColor: 'bg-red-500' },
+          { id: 'todo', label: 'Todo', dotColor: 'bg-gray-500', _open: true },
+          { id: 'queued', label: 'Queued', dotColor: 'bg-yellow-500', _open: true },
+          { id: 'planning', label: 'Planning', dotColor: 'bg-cyan-500', _open: true },
+          { id: 'developing', label: 'Developing', dotColor: 'bg-blue-500', _open: true },
+          { id: 'review', label: 'Review', dotColor: 'bg-purple-500', _open: true },
+          { id: 'done', label: 'Done', dotColor: 'bg-emerald-500', _open: true },
+          { id: 'failed', label: 'Failed', dotColor: 'bg-red-500', _open: true },
         ],
 
         async init() {
-          // Load existing runs
-          const runs = await this.api('GET', '/api/runs');
+          // Load settings data in parallel
+          const [runs, repos, mappings, profiles, jiraStatus] = await Promise.all([
+            this.api('GET', '/api/runs'),
+            this.api('GET', '/api/repositories'),
+            this.api('GET', '/api/label-mappings'),
+            this.api('GET', '/api/profiles'),
+            this.api('GET', '/api/settings/jira-status'),
+          ]);
+
+          this.repositories = repos || [];
+          this.labelMappings = mappings || [];
+          this.agentProfiles = profiles || [];
+
+          // Show Jira setup modal if not configured
+          if (jiraStatus && !jiraStatus.configured) {
+            this.showJiraSetup = true;
+          }
+
+          // Load existing Jira settings for the settings tab
+          const allSettings = await this.api('GET', '/api/settings');
+          if (allSettings) {
+            this.jiraSetup.url = allSettings.jira_url || '';
+            this.jiraSetup.email = allSettings.jira_email || '';
+            // Token is masked, don't overwrite
+          }
+
           if (runs && runs.length > 0) {
             this.currentRun = runs[0];
             await this.loadRunTickets();
             this.connectSSE();
-
-            // Auto-select first active ticket for terminal and load its logs
             const active = this.tickets.find(t => ['planning', 'developing'].includes(t.state));
-            if (active) {
-              await this.switchTerminal(active.id);
-            }
+            if (active) await this.switchTerminal(active.id);
           }
 
-          // Init sortable on each column after DOM ready
           this.$nextTick(() => this.initSortable());
-
-          // Update elapsed times every 5 seconds via reactive tick
           setInterval(() => this.tick++, 5000);
-
         },
 
         initSortable() {
           this.columns.forEach(col => {
             const el = document.getElementById('col-' + col.id);
             if (!el) return;
-            Sortable.create(el, {
+            if (el._sortable) return; // already initialized
+            el._sortable = Sortable.create(el, {
               group: 'kanban',
               animation: 150,
               ghostClass: 'sortable-ghost',
@@ -478,6 +899,10 @@
         // Computed
         ticketsInColumn(state) {
           let filtered = this.tickets.filter(t => t.state === state);
+          // Filter by active repo tab
+          if (this.activeRepoId !== null) {
+            filtered = filtered.filter(t => t.repository_id === this.activeRepoId);
+          }
           if (this.boardFilter) {
             const q = this.boardFilter.toLowerCase();
             filtered = filtered.filter(t =>
@@ -489,14 +914,21 @@
           return filtered.sort((a, b) => a.rank - b.rank);
         },
 
+        ticketCountForRepo(repoId) {
+          return this.tickets.filter(t => t.repository_id === repoId).length;
+        },
+
+        repoNameById(id) {
+          const repo = this.repositories.find(r => r.id === id);
+          return repo ? repo.name : '';
+        },
+
         get epicFilterTags() {
-          // Auto-detect tags from ticket summaries: [BE], [FE], [QA], etc.
           const tags = new Set();
           for (const t of this.epicTickets) {
             const matches = (t.summary || '').match(/\[([A-Za-z0-9-]+)\]/g);
             if (matches) matches.forEach(m => tags.add(m));
           }
-          // Add common defaults if not found
           ['[BE]', '[FE]', '[QA]'].forEach(d => {
             if (this.epicTickets.some(t => (t.summary || '').includes(d))) tags.add(d);
           });
@@ -505,26 +937,26 @@
 
         get filteredEpicTickets() {
           return this.epicTickets.filter(t => {
-            // Text search
             if (this.epicFilter.search) {
               const q = this.epicFilter.search.toLowerCase();
-              const matchesSearch = t.key.toLowerCase().includes(q) || (t.summary || '').toLowerCase().includes(q);
-              if (!matchesSearch) return false;
+              if (!t.key.toLowerCase().includes(q) && !(t.summary || '').toLowerCase().includes(q)) return false;
             }
-            // Tag filter (OR logic — show if matches ANY active tag)
             if (this.epicFilter.activeTags.length > 0) {
               const summary = (t.summary || '').toLowerCase();
-              const matchesTag = this.epicFilter.activeTags.some(tag => summary.includes(tag.toLowerCase()));
-              if (!matchesTag) return false;
+              if (!this.epicFilter.activeTags.some(tag => summary.includes(tag.toLowerCase()))) return false;
             }
             return true;
           });
         },
 
         get terminalTabs() {
-          return this.tickets.filter(t =>
+          let tabs = this.tickets.filter(t =>
             ['planning', 'developing', 'review', 'failed', 'done'].includes(t.state)
           );
+          if (this.activeRepoId !== null) {
+            tabs = tabs.filter(t => t.repository_id === this.activeRepoId);
+          }
+          return tabs;
         },
 
         get activeTerminalLogs() {
@@ -540,15 +972,12 @@
             const existing = this.terminalLogs[ticketId] || [];
             const lastApiTs = result.logs[result.logs.length - 1]?.timestamp;
             const newFromSSE = existing.filter(l => l.timestamp > lastApiTs);
-            // Replace entire object to trigger Alpine.js reactivity
             this.terminalLogs = { ...this.terminalLogs, [ticketId]: [...result.logs, ...newFromSSE] };
           }
         },
 
-
         async switchTerminal(ticketId) {
           this.activeTerminal = ticketId;
-          // Always fetch if no logs yet, or force on explicit switch
           const hasLogs = (this.terminalLogs[ticketId]?.length || 0) > 0;
           await this.fetchLogsForTicket(ticketId, !hasLogs);
         },
@@ -568,10 +997,25 @@
 
         async ensureRun() {
           if (!this.currentRun) {
-            const projectPath = prompt('Enter the project path (e.g., /Users/you/project):');
-            if (!projectPath) return false;
+            // If repos available, use the first one. Otherwise prompt for path.
+            let projectPath = '';
+            let repoId = null;
+            if (this.repositories.length > 0) {
+              const repo = this.activeRepoId ? this.repositories.find(r => r.id === this.activeRepoId) : this.repositories[0];
+              if (repo) {
+                projectPath = repo.path;
+                repoId = repo.id;
+              }
+            }
+            if (!projectPath) {
+              projectPath = prompt('Enter the project path (e.g., /Users/you/project):');
+              if (!projectPath) return false;
+            }
             const name = this.epicKey || 'Manual Run';
-            this.currentRun = await this.api('POST', '/api/runs', { name, project_path: projectPath, max_parallel: this.maxParallel });
+            this.currentRun = await this.api('POST', '/api/runs', {
+              name, project_path: projectPath, max_parallel: this.maxParallel,
+              repository_id: repoId,
+            });
             this.connectSSE();
           }
           return true;
@@ -587,27 +1031,245 @@
           }
         },
 
+        // Repo Management
+        async addRepo() {
+          if (!this.newRepo.name || !this.newRepo.path) return;
+          const repo = await this.api('POST', '/api/repositories', this.newRepo);
+          if (repo) {
+            this.repositories.push(repo);
+            this.newRepo = { name: '', path: '', default_branch: 'main' };
+          }
+        },
+
+        editRepo(repo) {
+          this.editRepoModal = {
+            show: true, id: repo.id,
+            data: { name: repo.name, path: repo.path, default_branch: repo.default_branch, default_profile_id: repo.default_profile_id || '' },
+          };
+        },
+
+        async saveRepoEdit() {
+          const updates = { ...this.editRepoModal.data };
+          if (updates.default_profile_id === '') updates.default_profile_id = null;
+          const repo = await this.api('PUT', `/api/repositories/${this.editRepoModal.id}`, updates);
+          if (repo) {
+            const idx = this.repositories.findIndex(r => r.id === this.editRepoModal.id);
+            if (idx >= 0) this.repositories[idx] = repo;
+          }
+          this.editRepoModal.show = false;
+        },
+
+        async removeRepo(id) {
+          await this.api('DELETE', `/api/repositories/${id}`);
+          this.repositories = this.repositories.filter(r => r.id !== id);
+        },
+
+        // Label Mappings
+        async addLabelMapping() {
+          if (!this.newMapping.jira_label || !this.newMapping.repository_id) return;
+          const m = await this.api('POST', '/api/label-mappings', this.newMapping);
+          if (m) {
+            this.labelMappings.push(m);
+            this.newMapping = { jira_label: '', repository_id: '' };
+          }
+        },
+
+        async removeLabelMapping(id) {
+          await this.api('DELETE', `/api/label-mappings/${id}`);
+          this.labelMappings = this.labelMappings.filter(m => m.id !== id);
+        },
+
+        // Agent Profiles
+        async addProfile() {
+          if (!this.newProfile.name || !this.newProfile.command || !this.newProfile.args_template) return;
+          const p = await this.api('POST', '/api/profiles', this.newProfile);
+          if (p) {
+            this.agentProfiles.push(p);
+            this.newProfile = { name: '', command: '', args_template: '', log_format: 'plain-text' };
+          }
+        },
+
+        editProfile(profile) {
+          this.editProfileModal = {
+            show: true, id: profile.id,
+            data: { name: profile.name, command: profile.command, args_template: profile.args_template, log_format: profile.log_format },
+          };
+        },
+
+        async saveProfileEdit() {
+          const p = await this.api('PUT', `/api/profiles/${this.editProfileModal.id}`, this.editProfileModal.data);
+          if (p) {
+            const idx = this.agentProfiles.findIndex(x => x.id === this.editProfileModal.id);
+            if (idx >= 0) this.agentProfiles[idx] = p;
+          }
+          this.editProfileModal.show = false;
+        },
+
+        async setDefaultProfile(id) {
+          await this.api('PUT', `/api/profiles/${id}/default`);
+          this.agentProfiles.forEach(p => p.is_default = (p.id === id));
+        },
+
+        async removeProfile(id) {
+          await this.api('DELETE', `/api/profiles/${id}`);
+          this.agentProfiles = this.agentProfiles.filter(p => p.id !== id);
+        },
+
+        // Interactive Terminal
+        openInteractiveTerminal(ticketId) {
+          const ticket = this.tickets.find(t => t.id === ticketId);
+          if (!ticket) return;
+
+          this.interactiveTerminal.show = true;
+          this.interactiveTerminal.ticketId = ticketId;
+          this.interactiveTerminal.ticketKey = ticket.jira_key;
+          this.interactiveTerminal.cwd = ticket.worktree_path || '';
+
+          this.$nextTick(() => {
+            const container = document.getElementById('interactive-terminal');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const term = new Terminal({
+              cursorBlink: true,
+              fontSize: 13,
+              fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace',
+              theme: {
+                background: '#000000',
+                foreground: '#e2e8f0',
+                cursor: '#60a5fa',
+                selectionBackground: '#334155',
+              },
+            });
+            const fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(container);
+            fitAddon.fit();
+
+            this.interactiveTerminal.term = term;
+            this.interactiveTerminal.fitAddon = fitAddon;
+
+            // Connect WebSocket
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal/${ticketId}`);
+            ws.binaryType = 'arraybuffer';
+            this.interactiveTerminal.ws = ws;
+
+            ws.onopen = () => {
+              // Send initial resize
+              ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+            };
+
+            ws.onmessage = (event) => {
+              if (event.data instanceof ArrayBuffer) {
+                term.write(new Uint8Array(event.data));
+              } else {
+                // JSON control message
+                try { JSON.parse(event.data); } catch { term.write(event.data); }
+              }
+            };
+
+            ws.onclose = () => {
+              term.write('\r\n\x1b[90m[Session ended]\x1b[0m\r\n');
+            };
+
+            ws.onerror = () => {
+              term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
+            };
+
+            // Terminal input -> WebSocket
+            term.onData((data) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(new TextEncoder().encode(data));
+              }
+            });
+
+            // Handle resize
+            const resizeObserver = new ResizeObserver(() => {
+              fitAddon.fit();
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+              }
+            });
+            resizeObserver.observe(container);
+            this.interactiveTerminal._resizeObserver = resizeObserver;
+          });
+        },
+
+        closeInteractiveTerminal() {
+          if (this.interactiveTerminal.ws) {
+            this.interactiveTerminal.ws.close();
+            this.interactiveTerminal.ws = null;
+          }
+          if (this.interactiveTerminal.term) {
+            this.interactiveTerminal.term.dispose();
+            this.interactiveTerminal.term = null;
+          }
+          if (this.interactiveTerminal._resizeObserver) {
+            this.interactiveTerminal._resizeObserver.disconnect();
+            this.interactiveTerminal._resizeObserver = null;
+          }
+          this.interactiveTerminal.show = false;
+          this.interactiveTerminal.ticketId = null;
+        },
+
+        async openExternalTerminal(ticketId) {
+          const result = await this.api('POST', `/api/tickets/${ticketId}/open-terminal`);
+          if (!result || result.detail) {
+            alert(result?.detail || 'Failed to open external terminal');
+          }
+        },
+
+        // Jira Credentials
+        async testJiraConnection() {
+          this.jiraSetup.error = '';
+          this.jiraSetup.success = '';
+          // Save first, then test
+          await this.api('PUT', '/api/settings', { settings: {
+            jira_url: this.jiraSetup.url, jira_email: this.jiraSetup.email, jira_token: this.jiraSetup.token,
+          }});
+          const result = await this.api('POST', '/api/settings/test-jira');
+          if (result && result.status === 'connected') {
+            this.jiraSetup.success = `Connected as ${result.user}`;
+            this.jiraSetup.error = '';
+          } else {
+            this.jiraSetup.error = result?.detail || 'Connection failed';
+            this.jiraSetup.success = '';
+          }
+        },
+
+        async saveJiraCredentials() {
+          if (!this.jiraSetup.url || !this.jiraSetup.email || !this.jiraSetup.token) {
+            this.jiraSetup.error = 'All fields are required';
+            return;
+          }
+          await this.api('PUT', '/api/settings', { settings: {
+            jira_url: this.jiraSetup.url, jira_email: this.jiraSetup.email, jira_token: this.jiraSetup.token,
+          }});
+          this.showJiraSetup = false;
+          this.jiraSetup.success = 'Saved';
+        },
+
         // Actions
         async loadEpic() {
           if (!this.epicKey) return;
           if (!(await this.ensureRun())) return;
 
-          // Show loading state in modal
           this.epicTickets = [
             { key: '...', summary: 'Fetching tickets from Jira...', status: 'Loading', selected: false }
           ];
           this.showEpicModal = true;
 
-          // Fetch epic children via API (uses Claude CLI + MCP tools)
           const result = await this.api('POST', `/api/runs/${this.currentRun.id}/load-epic`, { epic_key: this.epicKey });
           if (result && result.tickets && result.tickets.length > 0) {
-            // Data only — no DB records created. User selects, then add-tickets creates them.
             this.epicTickets = result.tickets.map(t => ({
               key: t.jira_key,
               summary: t.summary || t.jira_key,
               status: t.status || 'To Do',
               selected: false,
               alreadyAdded: t.already_added || false,
+              matchedRepo: t.matched_repository_name || null,
+              matchedRepoId: t.matched_repository_id || null,
             }));
           } else if (result && result.found === 0) {
             this.epicTickets = [
@@ -615,7 +1277,7 @@
             ];
           } else {
             this.epicTickets = [
-              { key: this.epicKey, summary: 'Failed to fetch — try adding tickets manually', status: 'Error', selected: false }
+              { key: this.epicKey, summary: 'Failed to fetch. Check Jira credentials in Settings.', status: 'Error', selected: false }
             ];
           }
         },
@@ -625,7 +1287,9 @@
           if (!(await this.ensureRun())) return;
 
           const keys = this.ticketInput.split(/[,\n\s]+/).filter(k => k.trim());
-          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, { keys });
+          const body = { keys };
+          if (this.activeRepoId) body.repository_id = this.activeRepoId;
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, body);
           if (result && result.tickets) {
             this.tickets.push(...result.tickets);
             this.ticketInput = '';
@@ -640,28 +1304,32 @@
             return;
           }
 
-          // Create tickets in DB via add-tickets (only selected ones)
           const keys = selected.map(t => t.key);
           const summaries = {};
           selected.forEach(t => { summaries[t.key] = t.summary; });
-          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, { keys, summaries });
+          const body = { keys, summaries };
+          if (this.epicParentBranch) body.parent_branch = this.epicParentBranch;
+          // Use matched repo if all selected share the same one, otherwise use active tab
+          const repoIds = [...new Set(selected.map(t => t.matchedRepoId).filter(Boolean))];
+          if (repoIds.length === 1) body.repository_id = repoIds[0];
+          else if (this.activeRepoId) body.repository_id = this.activeRepoId;
+
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, body);
           if (result && result.tickets) {
             this.tickets.push(...result.tickets);
           }
 
           this.showEpicModal = false;
           this.epicFilter = { search: '', activeTags: [] };
+          this.epicParentBranch = '';
           await this.loadRunTickets();
           this.$nextTick(() => this.initSortable());
         },
 
         toggleEpicFilterTag(tag) {
           const idx = this.epicFilter.activeTags.indexOf(tag);
-          if (idx >= 0) {
-            this.epicFilter.activeTags.splice(idx, 1);
-          } else {
-            this.epicFilter.activeTags.push(tag);
-          }
+          if (idx >= 0) this.epicFilter.activeTags.splice(idx, 1);
+          else this.epicFilter.activeTags.push(tag);
         },
 
         toggleAllEpicTickets(checked, visibleOnly = false) {
@@ -755,7 +1423,6 @@
         // SSE
         connectSSE() {
           if (!this.currentRun) return;
-          // Close existing connection
           if (this.eventSource) {
             this.eventSource.close();
             this.eventSource = null;
@@ -766,11 +1433,8 @@
 
           this.eventSource.onopen = () => {
             console.log('[SSE] Connected');
-            // Reload tickets and logs to catch updates missed during reconnect
             this.loadRunTickets();
-            if (this.activeTerminal) {
-              this.fetchLogsForTicket(this.activeTerminal, true);
-            }
+            if (this.activeTerminal) this.fetchLogsForTicket(this.activeTerminal, true);
           };
 
           this.eventSource.onmessage = (event) => {
@@ -793,7 +1457,6 @@
               const logs = [...(this.terminalLogs[data.ticket_id] || [])];
               logs.push({ timestamp: new Date().toISOString(), line: data.line });
               const trimmed = logs.length > 500 ? logs.slice(-500) : logs;
-              // Replace entire object to trigger Alpine.js reactivity
               this.terminalLogs = { ...this.terminalLogs, [data.ticket_id]: trimmed };
               this.$nextTick(() => {
                 const el = document.getElementById('terminal-output');

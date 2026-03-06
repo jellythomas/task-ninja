@@ -11,6 +11,7 @@ from typing import Optional
 
 from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
+from engine.jira_client import JiraClient
 from engine.state import StateManager
 from models.ticket import TicketState
 
@@ -48,6 +49,7 @@ class Worker:
         self.auto_create_pr = auto_create_pr
         self.pr_base_branch = pr_base_branch
         self.claude_helper = ClaudeHelper(claude_command, skip_permissions)
+        self.jira_client: Optional[JiraClient] = None
         self.process: Optional[asyncio.subprocess.Process] = None
         self._cancelled = False
         self._detected_pr_url: Optional[str] = None
@@ -329,7 +331,11 @@ class Worker:
         if not target:
             return
         try:
-            success = await self.claude_helper.transition_jira_issue(self.jira_key, target)
+            # Prefer direct API, fall back to Claude CLI
+            if self.jira_client and await self.jira_client.is_configured():
+                success = await self.jira_client.transition_issue(self.jira_key, target)
+            else:
+                success = await self.claude_helper.transition_jira_issue(self.jira_key, target)
             if success:
                 print(f"[worker] Synced {self.jira_key} -> {target} on Jira", file=sys.stderr)
                 await self.state.append_log(self.ticket_id, f"[jira] Transitioned to {target}")
