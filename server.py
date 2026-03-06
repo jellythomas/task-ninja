@@ -111,6 +111,93 @@ async def auth_status():
     return {"auth_required": remote}
 
 
+# --- Tailscale ---
+
+@app.get("/api/tailscale/status")
+async def tailscale_status():
+    """Check Tailscale installation and connection status."""
+    import shutil
+    result = {"installed": False, "running": False, "ip": None, "url": None}
+
+    if not shutil.which("tailscale"):
+        return result
+    result["installed"] = True
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tailscale", "status", "--json",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode == 0:
+            import json as _json
+            ts = _json.loads(stdout)
+            if ts.get("Self", {}).get("Online"):
+                result["running"] = True
+                # Get IPv4 address
+                addrs = ts["Self"].get("TailscaleIPs", [])
+                ipv4 = next((a for a in addrs if "." in a), None)
+                if ipv4:
+                    port = int(get_env("TASK_NINJA_PORT") or "8420")
+                    result["ip"] = ipv4
+                    result["url"] = f"http://{ipv4}:{port}"
+    except Exception:
+        pass
+
+    return result
+
+
+@app.post("/api/tailscale/install")
+async def tailscale_install():
+    """Install Tailscale via package manager."""
+    import platform, shutil
+
+    if shutil.which("tailscale"):
+        return {"status": "already_installed"}
+
+    system = platform.system().lower()
+    if system == "darwin":
+        cmd = ["brew", "install", "--cask", "tailscale"]
+    elif system == "linux":
+        # Use the official Tailscale install script
+        cmd = ["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"]
+    else:
+        raise HTTPException(400, f"Auto-install not supported on {system}. Install manually from https://tailscale.com/download")
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+
+    if proc.returncode != 0:
+        raise HTTPException(500, f"Install failed: {stderr.decode()[-500:]}")
+
+    return {"status": "installed", "message": "Tailscale installed. Open the Tailscale app to log in, then check status again."}
+
+
+@app.post("/api/tailscale/up")
+async def tailscale_up():
+    """Start Tailscale (tailscale up)."""
+    import shutil
+    if not shutil.which("tailscale"):
+        raise HTTPException(400, "Tailscale is not installed")
+
+    proc = await asyncio.create_subprocess_exec(
+        "tailscale", "up",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+
+    if proc.returncode != 0:
+        err = stderr.decode()
+        if "login" in err.lower() or "auth" in err.lower():
+            return {"status": "needs_login", "message": "Open the Tailscale app to log in first."}
+        raise HTTPException(500, f"Failed to start: {err[-500:]}")
+
+    return {"status": "started"}
+
+
 # --- Environment Config ---
 
 @app.get("/api/env")
