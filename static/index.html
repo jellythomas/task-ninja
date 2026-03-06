@@ -239,10 +239,12 @@
 
       <!-- Repositories -->
       <div x-show="activeSettingsTab === 'repositories'" class="max-w-3xl">
+        <p class="text-xs text-gray-500 mb-3">Register repositories and their Jira key prefix for auto-matching tickets (e.g., MC, CKYC).</p>
         <div class="space-y-2 mb-3">
           <template x-for="repo in repositories" :key="repo.id">
             <div class="flex items-center gap-3 bg-gray-800 rounded-lg px-3 py-2">
               <span class="text-sm font-medium text-white w-32 truncate" x-text="repo.name"></span>
+              <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-400 w-16 text-center" x-text="repo.jira_label || '—'" :class="repo.jira_label ? '' : 'text-gray-600'"></span>
               <span class="text-xs text-gray-400 font-mono flex-1 truncate" x-text="repo.path"></span>
               <span class="text-xs text-gray-500 w-16" x-text="repo.default_branch"></span>
               <button @click="editRepo(repo)" class="text-gray-500 hover:text-blue-400 transition p-1">
@@ -259,6 +261,10 @@
             <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
             <input x-model="newRepo.name" type="text" placeholder="mekari_credit" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-36">
           </div>
+          <div>
+            <label class="text-[10px] text-gray-500 block mb-0.5">Jira Prefix</label>
+            <input x-model="newRepo.jira_label" type="text" placeholder="MC" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-20">
+          </div>
           <div class="flex-1 min-w-[200px]">
             <label class="text-[10px] text-gray-500 block mb-0.5">Path</label>
             <input x-model="newRepo.path" type="text" placeholder="/Users/you/mekari_credit" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full">
@@ -268,40 +274,6 @@
             <input x-model="newRepo.default_branch" type="text" placeholder="main" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-24">
           </div>
           <button @click="addRepo()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 text-sm rounded font-medium transition">Add</button>
-        </div>
-      </div>
-
-      <!-- Label Mappings -->
-      <div x-show="activeSettingsTab === 'mappings'" class="max-w-2xl">
-        <p class="text-xs text-gray-500 mb-3">Map Jira labels/components to repositories for auto-assignment when loading epics.</p>
-        <div class="space-y-2 mb-3">
-          <template x-for="m in labelMappings" :key="m.id">
-            <div class="flex items-center gap-3 bg-gray-800 rounded-lg px-3 py-2">
-              <span class="text-sm font-mono text-blue-400 w-24" x-text="m.jira_label"></span>
-              <svg class="w-4 h-4 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
-              <span class="text-sm text-gray-300" x-text="repoNameById(m.repository_id)"></span>
-              <div class="flex-1"></div>
-              <button @click="removeLabelMapping(m.id)" class="text-gray-500 hover:text-red-400 transition p-1">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-              </button>
-            </div>
-          </template>
-        </div>
-        <div class="flex items-end gap-2 bg-gray-800/50 rounded-lg p-3">
-          <div>
-            <label class="text-[10px] text-gray-500 block mb-0.5">Jira Label</label>
-            <input x-model="newMapping.jira_label" type="text" placeholder="[MC]" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-28">
-          </div>
-          <div>
-            <label class="text-[10px] text-gray-500 block mb-0.5">Repository</label>
-            <select x-model.number="newMapping.repository_id" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm">
-              <option value="">Select...</option>
-              <template x-for="repo in repositories" :key="repo.id">
-                <option :value="repo.id" x-text="repo.name"></option>
-              </template>
-            </select>
-          </div>
-          <button @click="addLabelMapping()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 text-sm rounded font-medium transition">Add</button>
         </div>
       </div>
 
@@ -522,7 +494,7 @@
     <!-- Mobile List View -->
     <div class="mobile-list flex-1 overflow-y-auto p-3 space-y-3">
       <template x-for="col in columns" :key="col.id">
-        <div x-show="ticketsInColumn(col.id).length > 0">
+        <div>
           <button @click="col._open = !col._open" class="flex items-center justify-between w-full px-3 py-2 bg-gray-900/50 rounded-lg border border-gray-800">
             <div class="flex items-center gap-2">
               <div :class="col.dotColor" class="w-2 h-2 rounded-full"></div>
@@ -566,8 +538,14 @@
       </template>
     </div>
 
-    <!-- Terminal Panel -->
-    <div class="h-48 sm:h-56 bg-gray-950 border-t border-gray-800 flex flex-col">
+    <!-- Terminal Panel (resizable) -->
+    <div class="bg-gray-800 cursor-row-resize flex items-center justify-center select-none hover:bg-gray-700 transition-colors group"
+         style="height: 6px;"
+         @mousedown.prevent="_terminalDragging = true; $event.target.setPointerCapture?.($event.pointerId)"
+         @touchstart.prevent="_terminalDragging = true">
+      <div class="w-10 h-1 rounded-full bg-gray-600 group-hover:bg-gray-400 transition-colors"></div>
+    </div>
+    <div :style="'height:' + terminalHeight + 'px'" class="bg-gray-950 border-t border-gray-800 flex flex-col min-h-[80px]">
       <!-- Terminal Tabs -->
       <div class="flex items-center border-b border-gray-800 px-2 overflow-x-auto">
         <span class="text-xs text-gray-600 px-2 py-2 flex-shrink-0">Terminal</span>
@@ -704,9 +682,15 @@
           <label class="text-xs text-gray-400 block mb-1">Path</label>
           <input x-model="editRepoModal.data.path" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
         </div>
-        <div>
-          <label class="text-xs text-gray-400 block mb-1">Default Branch</label>
-          <input x-model="editRepoModal.data.default_branch" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+        <div class="flex gap-3">
+          <div class="flex-1">
+            <label class="text-xs text-gray-400 block mb-1">Default Branch</label>
+            <input x-model="editRepoModal.data.default_branch" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+          <div class="w-28">
+            <label class="text-xs text-gray-400 block mb-1">Jira Prefix</label>
+            <input x-model="editRepoModal.data.jira_label" type="text" placeholder="MC" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
         </div>
         <div>
           <label class="text-xs text-gray-400 block mb-1">Default Agent Profile</label>
@@ -784,7 +768,6 @@
         currentRun: null,
         tickets: [],
         repositories: [],
-        labelMappings: [],
         agentProfiles: [],
         activeRepoId: null,
         inputMode: 'epic',
@@ -803,6 +786,8 @@
         editRepoModal: { show: false, id: null, data: {} },
         editProfileModal: { show: false, id: null, data: {} },
         interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '', ws: null, term: null, fitAddon: null },
+        terminalHeight: 224,
+        _terminalDragging: false,
         activeTerminal: null,
         terminalLogs: {},
         terminalFetched: {},
@@ -812,8 +797,7 @@
           cleanupWorktrees: true,
         },
         jiraSetup: { url: '', email: '', token: '', error: '', success: '' },
-        newRepo: { name: '', path: '', default_branch: 'main' },
-        newMapping: { jira_label: '', repository_id: '' },
+        newRepo: { name: '', path: '', default_branch: 'main', jira_label: '' },
         newProfile: { name: '', command: '', args_template: '', log_format: 'plain-text' },
         eventSource: null,
         tick: 0,
@@ -821,7 +805,6 @@
         settingsTabs: [
           { id: 'general', label: 'General' },
           { id: 'repositories', label: 'Repositories' },
-          { id: 'mappings', label: 'Label Mappings' },
           { id: 'profiles', label: 'Agent Profiles' },
           { id: 'jira', label: 'Jira Credentials' },
         ],
@@ -838,16 +821,14 @@
 
         async init() {
           // Load settings data in parallel
-          const [runs, repos, mappings, profiles, jiraStatus] = await Promise.all([
+          const [runs, repos, profiles, jiraStatus] = await Promise.all([
             this.api('GET', '/api/runs'),
             this.api('GET', '/api/repositories'),
-            this.api('GET', '/api/label-mappings'),
             this.api('GET', '/api/profiles'),
             this.api('GET', '/api/settings/jira-status'),
           ]);
 
           this.repositories = repos || [];
-          this.labelMappings = mappings || [];
           this.agentProfiles = profiles || [];
 
           // Show Jira setup modal if not configured
@@ -895,6 +876,20 @@
               },
             });
           });
+
+          // Terminal panel resize via drag
+          const self = this;
+          const onMove = (e) => {
+            if (!self._terminalDragging) return;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const newH = window.innerHeight - clientY - 6;
+            self.terminalHeight = Math.max(80, Math.min(newH, window.innerHeight * 0.7));
+          };
+          const onUp = () => { self._terminalDragging = false; };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+          document.addEventListener('touchmove', onMove);
+          document.addEventListener('touchend', onUp);
         },
 
         // Computed
@@ -1038,14 +1033,14 @@
           const repo = await this.api('POST', '/api/repositories', this.newRepo);
           if (repo) {
             this.repositories.push(repo);
-            this.newRepo = { name: '', path: '', default_branch: 'main' };
+            this.newRepo = { name: '', path: '', default_branch: 'main', jira_label: '' };
           }
         },
 
         editRepo(repo) {
           this.editRepoModal = {
             show: true, id: repo.id,
-            data: { name: repo.name, path: repo.path, default_branch: repo.default_branch, default_profile_id: repo.default_profile_id || '' },
+            data: { name: repo.name, path: repo.path, default_branch: repo.default_branch, jira_label: repo.jira_label || '', default_profile_id: repo.default_profile_id || '' },
           };
         },
 
@@ -1065,19 +1060,9 @@
           this.repositories = this.repositories.filter(r => r.id !== id);
         },
 
-        // Label Mappings
-        async addLabelMapping() {
-          if (!this.newMapping.jira_label || !this.newMapping.repository_id) return;
-          const m = await this.api('POST', '/api/label-mappings', this.newMapping);
-          if (m) {
-            this.labelMappings.push(m);
-            this.newMapping = { jira_label: '', repository_id: '' };
-          }
-        },
-
+        // Label Mappings (legacy — now handled via repo.jira_label)
         async removeLabelMapping(id) {
           await this.api('DELETE', `/api/label-mappings/${id}`);
-          this.labelMappings = this.labelMappings.filter(m => m.id !== id);
         },
 
         // Agent Profiles

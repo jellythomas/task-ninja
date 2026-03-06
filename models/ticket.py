@@ -81,6 +81,7 @@ class Repository(BaseModel):
     name: str
     path: str
     default_branch: str = "main"
+    jira_label: Optional[str] = None  # e.g. "MC", "CKYC" — prefix for matching tickets
     default_profile_id: Optional[int] = None
     is_deleted: bool = False
     created_at: Optional[datetime] = None
@@ -167,6 +168,7 @@ class CreateRepositoryRequest(BaseModel):
     name: str
     path: str
     default_branch: str = "main"
+    jira_label: Optional[str] = None
     default_profile_id: Optional[int] = None
 
 
@@ -174,6 +176,7 @@ class UpdateRepositoryRequest(BaseModel):
     name: Optional[str] = None
     path: Optional[str] = None
     default_branch: Optional[str] = None
+    jira_label: Optional[str] = None
     default_profile_id: Optional[int] = None
 
 

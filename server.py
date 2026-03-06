@@ -189,15 +189,15 @@ async def load_epic(run_id: str, req: LoadEpicRequest):
     else:
         children = await claude_helper.fetch_epic_children(req.epic_key)
 
-    # Load label mappings for auto-assigning repos
-    label_mappings = await state.list_label_mappings()
+    # Load repositories for auto-assigning by jira_label
     repos = await state.list_repositories()
     repo_map = {r.id: r for r in repos}
 
-    # Build label -> repo_id lookup
+    # Build label -> repo_id lookup from repo.jira_label
     label_to_repo = {}
-    for m in label_mappings:
-        label_to_repo[m.jira_label.lower()] = m.repository_id
+    for r in repos:
+        if r.jira_label:
+            label_to_repo[r.jira_label.lower()] = r.id
 
     # Return ticket data without persisting — user selects in modal, then add-tickets creates them
     tickets = []
@@ -208,19 +208,24 @@ async def load_epic(run_id: str, req: LoadEpicRequest):
         # Check if already on the board
         existing = await state.get_ticket_by_jira_key(run_id, key)
 
-        # Auto-detect repository from labels/components
+        # Auto-detect repository from ticket key prefix or labels/components
         matched_repo_id = None
-        child_labels = [l.lower() for l in child.get("labels", [])]
-        child_components = [c.lower() for c in child.get("components", [])]
-        all_tags = child_labels + child_components
-        for tag in all_tags:
-            # Match against registered labels (e.g., "[mc]" matches "[MC]")
-            for label_key, repo_id in label_to_repo.items():
-                if label_key in tag or tag in label_key:
-                    matched_repo_id = repo_id
+        # Match by ticket key prefix (e.g., "MC-1234" matches jira_label "MC")
+        key_prefix = key.split("-")[0].lower() if "-" in key else ""
+        if key_prefix and key_prefix in label_to_repo:
+            matched_repo_id = label_to_repo[key_prefix]
+        else:
+            # Fallback: match against Jira labels/components
+            child_labels = [l.lower() for l in child.get("labels", [])]
+            child_components = [c.lower() for c in child.get("components", [])]
+            all_tags = child_labels + child_components
+            for tag in all_tags:
+                for label_key, repo_id in label_to_repo.items():
+                    if label_key in tag or tag in label_key:
+                        matched_repo_id = repo_id
+                        break
+                if matched_repo_id:
                     break
-            if matched_repo_id:
-                break
 
         ticket_data = {
             "jira_key": key,
@@ -398,7 +403,7 @@ async def list_repositories():
 
 @app.post("/api/repositories")
 async def create_repository(req: CreateRepositoryRequest):
-    repo = await state.create_repository(req.name, req.path, req.default_branch, req.default_profile_id)
+    repo = await state.create_repository(req.name, req.path, req.default_branch, req.jira_label, req.default_profile_id)
     return repo.model_dump()
 
 

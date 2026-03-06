@@ -34,6 +34,7 @@ async def init_db(db_path: str = DB_PATH) -> None:
         for col, tbl in [
             ("parent_branch", "runs"), ("repository_id", "runs"),
             ("repository_id", "tickets"), ("parent_branch", "tickets"), ("profile_id", "tickets"),
+            ("jira_label", "repositories"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT")
@@ -348,14 +349,14 @@ class StateManager:
     # --- Repositories ---
 
     async def create_repository(self, name: str, path: str, default_branch: str = "main",
-                                default_profile_id: int = None) -> Repository:
+                                jira_label: str = None, default_profile_id: int = None) -> Repository:
         now = datetime.utcnow().isoformat()
         async with self._connect() as db:
             await self._setup_db(db)
             cursor = await db.execute(
-                "INSERT INTO repositories (name, path, default_branch, default_profile_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (name, path, default_branch, default_profile_id, now, now),
+                "INSERT INTO repositories (name, path, default_branch, jira_label, default_profile_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (name, path, default_branch, jira_label, default_profile_id, now, now),
             )
             repo_id = cursor.lastrowid
             await db.commit()
