@@ -41,14 +41,31 @@
 </head>
 <body class="h-full text-gray-200" x-data="app()" x-init="init()">
 
-  <!-- Jira Setup Modal -->
+  <!-- Quick Setup Wizard -->
   <div x-show="showJiraSetup" x-transition class="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
-    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md mx-4">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4">
+      <!-- Wizard Header -->
       <div class="px-5 py-4 border-b border-gray-800">
-        <h2 class="text-lg font-semibold text-white">Configure Jira Connection</h2>
-        <p class="text-xs text-gray-500 mt-1">Task Ninja needs Jira API access to fetch epics and sync ticket status.</p>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold text-white">Quick Setup</h2>
+          <span class="text-xs text-gray-500" x-text="'Step ' + setupStep + ' of 3'"></span>
+        </div>
+        <!-- Step indicators -->
+        <div class="flex gap-1.5">
+          <template x-for="s in 3" :key="s">
+            <div class="h-1 flex-1 rounded-full transition-all duration-300"
+                 :class="s <= setupStep ? 'bg-blue-500' : 'bg-gray-700'"></div>
+          </template>
+        </div>
       </div>
-      <div class="px-5 py-4 space-y-3">
+
+      <!-- Step 1: Jira Connection -->
+      <div x-show="setupStep === 1" class="px-5 py-4 space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+          <h3 class="text-sm font-medium text-white">Jira Connection</h3>
+        </div>
+        <p class="text-xs text-gray-500">Connect Jira to fetch epics and sync ticket status.</p>
         <div>
           <label class="text-xs text-gray-400 block mb-1">Jira Base URL</label>
           <input x-model="jiraSetup.url" type="text" placeholder="https://yourcompany.atlassian.net"
@@ -66,12 +83,125 @@
         </div>
         <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
         <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
-      </div>
-      <div class="px-5 py-3 border-t border-gray-800 flex justify-between">
-        <button @click="showJiraSetup = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Skip for now</button>
         <div class="flex gap-2">
-          <button @click="testJiraConnection()" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test</button>
-          <button @click="saveJiraCredentials()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+          <button @click="testJiraConnection()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test</button>
+          <button @click="saveJiraCredentials()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Save</button>
+        </div>
+      </div>
+
+      <!-- Step 2: First Repository -->
+      <div x-show="setupStep === 2" class="px-5 py-4 space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+          <h3 class="text-sm font-medium text-white">Add a Repository</h3>
+        </div>
+        <p class="text-xs text-gray-500">Register the project where AI agents will create branches and worktrees.</p>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Repository Name</label>
+          <input x-model="newRepo.name" type="text" placeholder="mekari_credit"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Local Path</label>
+          <input x-model="newRepo.path" type="text" placeholder="/Users/you/projects/mekari_credit"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Default Branch</label>
+            <input x-model="newRepo.default_branch" type="text" placeholder="main"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Jira Prefix</label>
+            <input x-model="newRepo.jira_label" type="text" placeholder="MC"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+          </div>
+        </div>
+        <!-- Already added repos -->
+        <template x-if="repositories.length > 0">
+          <div class="border-t border-gray-800 pt-2 mt-2">
+            <span class="text-[10px] text-gray-500 mb-1 block">Added:</span>
+            <template x-for="r in repositories" :key="r.id">
+              <div class="flex items-center gap-2 text-xs text-gray-400 py-0.5">
+                <span class="text-white font-medium" x-text="r.name"></span>
+                <span x-show="r.jira_label" class="text-violet-400 font-mono text-[10px]" x-text="r.jira_label"></span>
+                <span class="text-gray-600 font-mono truncate flex-1" x-text="r.path"></span>
+              </div>
+            </template>
+          </div>
+        </template>
+        <button @click="addRepo().then(() => {})" class="bg-violet-600 hover:bg-violet-700 px-4 py-1.5 text-sm rounded-lg font-medium transition w-full">Add Repository</button>
+      </div>
+
+      <!-- Step 3: Agent Profile -->
+      <div x-show="setupStep === 3" class="px-5 py-4 space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+          <h3 class="text-sm font-medium text-white">Agent Profile</h3>
+        </div>
+        <p class="text-xs text-gray-500">Choose the AI agent that will work on your tickets.</p>
+        <!-- Show existing profiles -->
+        <template x-if="agentProfiles.length > 0">
+          <div class="space-y-1.5">
+            <template x-for="p in agentProfiles" :key="p.id">
+              <div class="flex items-center gap-3 bg-gray-800/70 rounded-lg px-3 py-2.5 border transition"
+                   :class="p.is_default ? 'border-emerald-500/50' : 'border-gray-700 hover:border-gray-600 cursor-pointer'"
+                   @click="if (!p.is_default) setDefaultProfile(p.id)">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-medium text-white" x-text="p.name"></span>
+                    <template x-if="p.is_default">
+                      <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full">Active</span>
+                    </template>
+                  </div>
+                  <div class="text-[11px] text-gray-500 font-mono truncate mt-0.5" x-text="p.command + ' ' + p.args_template"></div>
+                </div>
+                <div x-show="!p.is_default" class="text-xs text-gray-500">Click to select</div>
+              </div>
+            </template>
+          </div>
+        </template>
+        <!-- Add new profile (collapsed) -->
+        <details class="group">
+          <summary class="text-xs text-blue-400 hover:text-blue-300 cursor-pointer py-1">+ Add custom agent profile</summary>
+          <div class="mt-2 space-y-2 bg-gray-800/30 rounded-lg p-3 border border-gray-800 border-dashed">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+                <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
+                <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-0.5">Args Template</label>
+              <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"' class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+            </div>
+            <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-xs rounded-lg font-medium transition w-full">Add Profile</button>
+          </div>
+        </details>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-between">
+        <div>
+          <button x-show="setupStep === 1" @click="showJiraSetup = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Skip for now</button>
+          <button x-show="setupStep > 1" @click="setupStep--" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            Back
+          </button>
+        </div>
+        <div class="flex gap-2">
+          <button x-show="setupStep < 3" @click="setupStep++" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1">
+            Next
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </button>
+          <button x-show="setupStep === 3" @click="showJiraSetup = false" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">
+            Done
+          </button>
         </div>
       </div>
     </div>
@@ -847,6 +977,7 @@
         activeSettingsTab: 'general',
         showEpicModal: false,
         showJiraSetup: false,
+        setupStep: 1,
         epicTickets: [],
         epicFilter: { search: '', activeTags: [] },
         boardFilter: '',
