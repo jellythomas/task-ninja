@@ -2103,44 +2103,207 @@
           }
         },
 
-        _poGetCharFrame(ticketState, animT) {
-          // Returns frame name based on ticket state and animation timer
-          const frame2 = Math.floor(animT / 0.4) % 2; // toggle every 0.4s
-          switch (ticketState) {
-            case 'queued': case 'todo': return frame2 === 0 ? 'idle_0' : 'idle_1';
-            case 'planning': return frame2 === 0 ? 'sit_read_0' : 'sit_read_1';
-            case 'developing': return frame2 === 0 ? 'sit_type_0' : 'sit_type_1';
-            case 'review': case 'done': return frame2 === 0 ? 'idle_0' : 'idle_1';
-            case 'failed': return 'idle_0'; // will be tinted red
-            default: return 'idle_0';
+        // ── BFS Pathfinding ────────────────────────────────────
+        _poBFS(grid, start, end, rows, cols) {
+          // Returns array of {col, row} from start to end, or null if no path
+          if (start.col === end.col && start.row === end.row) return [end];
+          const key = (c, r) => r * cols + c;
+          const visited = new Set();
+          const queue = [{ col: start.col, row: start.row, path: [{ col: start.col, row: start.row }] }];
+          visited.add(key(start.col, start.row));
+
+          const blocked = new Set([1, 2, 3, 4]); // wall, wall_top, desk_l, desk_r
+          const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]]; // up, down, left, right
+
+          while (queue.length > 0) {
+            const cur = queue.shift();
+            for (const [dc, dr] of dirs) {
+              const nc = cur.col + dc;
+              const nr = cur.row + dr;
+              if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) continue;
+              const k = key(nc, nr);
+              if (visited.has(k)) continue;
+              // Allow walking onto target even if it's a chair (5)
+              const tileType = grid[nr][nc];
+              if (blocked.has(tileType) && !(nc === end.col && nr === end.row)) continue;
+              visited.add(k);
+              const newPath = [...cur.path, { col: nc, row: nr }];
+              if (nc === end.col && nr === end.row) return newPath;
+              queue.push({ col: nc, row: nr, path: newPath });
+            }
+          }
+          return null; // no path found
+        },
+
+        // ── Character State Machine ──────────────────────────────
+        // States: idle_lobby, walk_to_desk, sit_read, sit_type, walk_to_exit, idle_exit, failed, walk_to_lobby
+        _poGetTargetTile(ticket, charState, layout) {
+          const id = ticket.id;
+          const cs = charState;
+          if (cs.charState === 'walk_to_desk' || cs.charState === 'sit_read' || cs.charState === 'sit_type' || cs.charState === 'failed') {
+            if (cs.deskIdx != null && cs.deskIdx < layout.deskPositions.length) {
+              return layout.deskPositions[cs.deskIdx];
+            }
+          }
+          if (cs.charState === 'idle_lobby' || cs.charState === 'walk_to_lobby') {
+            return cs.lobbyTile || layout.lobbyPositions[0];
+          }
+          if (cs.charState === 'walk_to_exit' || cs.charState === 'idle_exit') {
+            return cs.exitTile || layout.exitPositions[0];
+          }
+          return { col: 2, row: 2 };
+        },
+
+        _poAssignDesk(ticketId, layout) {
+          // Find first free desk
+          const taken = new Set();
+          for (const cs of Object.values(this._PO_CHAR_MAP)) {
+            if (cs.deskIdx != null) taken.add(cs.deskIdx);
+          }
+          for (let i = 0; i < layout.deskPositions.length; i++) {
+            if (!taken.has(i)) return i;
+          }
+          return Object.keys(this._PO_CHAR_MAP).length % layout.deskPositions.length;
+        },
+
+        _poUpdateCharacters(dt) {
+          const layout = this._PO_LAYOUT;
+          if (!layout) return;
+          const SPEED = 48; // pixels per second (3 tiles/sec at 16px tiles)
+          const T = this._PO_TILE;
+
+          // Sync tickets → character states
+          const seenIds = new Set();
+          this.tickets.forEach((ticket, idx) => {
+            seenIds.add(ticket.id);
+            let cs = this._PO_CHAR_MAP[ticket.id];
+
+            if (!cs) {
+              // New ticket — spawn at door
+              const lobbyIdx = idx % layout.lobbyPositions.length;
+              const lobby = layout.lobbyPositions[lobbyIdx];
+              cs = {
+                charState: 'idle_lobby',
+                variant: idx % 6,
+                px: 1 * T, py: 1 * T, // door position in pixels
+                targetPx: lobby.col * T, targetPy: lobby.row * T,
+                path: null, pathIdx: 0,
+                deskIdx: null,
+                lobbyTile: lobby,
+                exitTile: layout.exitPositions[idx % layout.exitPositions.length],
+                lastTicketState: ticket.state,
+                facing: 'right',
+                celebrateT: 0,
+              };
+              // Path from door to lobby
+              cs.path = this._poBFS(layout.grid, { col: 1, row: 1 }, lobby, layout.rows, layout.cols);
+              if (cs.path) { cs.charState = 'walk_to_lobby'; cs.pathIdx = 0; }
+              this._PO_CHAR_MAP[ticket.id] = cs;
+            }
+
+            // Detect ticket state changes → trigger transitions
+            if (cs.lastTicketState !== ticket.state) {
+              const prev = cs.lastTicketState;
+              const next = ticket.state;
+              cs.lastTicketState = next;
+
+              if ((next === 'planning' || next === 'developing') && cs.charState !== 'sit_read' && cs.charState !== 'sit_type' && cs.charState !== 'walk_to_desk') {
+                // Assign desk and walk there
+                if (cs.deskIdx == null) cs.deskIdx = this._poAssignDesk(ticket.id, layout);
+                const desk = layout.deskPositions[cs.deskIdx];
+                const from = { col: Math.round(cs.px / T), row: Math.round(cs.py / T) };
+                cs.path = this._poBFS(layout.grid, from, desk, layout.rows, layout.cols);
+                cs.pathIdx = 0;
+                cs.charState = 'walk_to_desk';
+              } else if (next === 'planning' && cs.charState === 'sit_type') {
+                cs.charState = 'sit_read'; // just change animation
+              } else if (next === 'developing' && cs.charState === 'sit_read') {
+                cs.charState = 'sit_type'; // just change animation
+              } else if (next === 'review' || next === 'done') {
+                // Walk to exit
+                const exitTile = cs.exitTile || layout.exitPositions[0];
+                const from = { col: Math.round(cs.px / T), row: Math.round(cs.py / T) };
+                cs.path = this._poBFS(layout.grid, from, exitTile, layout.rows, layout.cols);
+                cs.pathIdx = 0;
+                cs.charState = 'walk_to_exit';
+                cs.deskIdx = null; // free desk
+                cs.celebrateT = 0;
+              } else if (next === 'failed') {
+                cs.charState = 'failed';
+              } else if (next === 'queued' && (prev === 'failed' || cs.charState === 'failed')) {
+                // Retry — walk back to lobby
+                const lobby = cs.lobbyTile || layout.lobbyPositions[0];
+                const from = { col: Math.round(cs.px / T), row: Math.round(cs.py / T) };
+                cs.path = this._poBFS(layout.grid, from, lobby, layout.rows, layout.cols);
+                cs.pathIdx = 0;
+                cs.charState = 'walk_to_lobby';
+                cs.deskIdx = null;
+              }
+            }
+
+            // Move along path
+            if (cs.path && cs.pathIdx < cs.path.length && (cs.charState.startsWith('walk_'))) {
+              const target = cs.path[cs.pathIdx];
+              const tx = target.col * T;
+              const ty = target.row * T;
+              const dx = tx - cs.px;
+              const dy = ty - cs.py;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              const step = SPEED * dt;
+
+              if (dist <= step) {
+                cs.px = tx;
+                cs.py = ty;
+                cs.pathIdx++;
+
+                // Reached end of path
+                if (cs.pathIdx >= cs.path.length) {
+                  cs.path = null;
+                  if (cs.charState === 'walk_to_desk') {
+                    cs.charState = ticket.state === 'developing' ? 'sit_type' : 'sit_read';
+                  } else if (cs.charState === 'walk_to_exit') {
+                    cs.charState = 'idle_exit';
+                    cs.celebrateT = 0;
+                  } else if (cs.charState === 'walk_to_lobby') {
+                    cs.charState = 'idle_lobby';
+                  }
+                }
+              } else {
+                cs.px += (dx / dist) * step;
+                cs.py += (dy / dist) * step;
+                // Update facing direction
+                if (Math.abs(dx) > Math.abs(dy)) {
+                  cs.facing = dx > 0 ? 'right' : 'left';
+                }
+              }
+            }
+
+            // Celebrate bounce timer
+            if (cs.charState === 'idle_exit') {
+              cs.celebrateT += dt;
+            }
+          });
+
+          // Remove characters for tickets that no longer exist
+          for (const id of Object.keys(this._PO_CHAR_MAP)) {
+            if (!seenIds.has(id)) delete this._PO_CHAR_MAP[id];
           }
         },
 
-        _poGetCharPosition(ticket, layout, charIdx) {
-          // Determine where a character should be based on ticket state
-          const state = ticket.state;
-          if (state === 'planning' || state === 'developing') {
-            // Sit at assigned desk
-            const deskIdx = charIdx % layout.deskPositions.length;
-            const desk = layout.deskPositions[deskIdx];
-            return { x: desk.col, y: desk.row, atDesk: true };
-          } else if (state === 'queued' || state === 'todo') {
-            // Stand in lobby
-            const lobbyIdx = charIdx % layout.lobbyPositions.length;
-            const pos = layout.lobbyPositions[lobbyIdx];
-            return { x: pos.col, y: pos.row, atDesk: false };
-          } else if (state === 'review' || state === 'done') {
-            // Near exit
-            const exitIdx = charIdx % layout.exitPositions.length;
-            const pos = layout.exitPositions[exitIdx];
-            return { x: pos.col, y: pos.row, atDesk: false };
-          } else if (state === 'failed') {
-            // Stay at desk with red tint
-            const deskIdx = charIdx % layout.deskPositions.length;
-            const desk = layout.deskPositions[deskIdx];
-            return { x: desk.col, y: desk.row, atDesk: true, failed: true };
+        _poGetCharFrame(cs, animT) {
+          const f2 = Math.floor(animT / 0.4) % 2;
+          const walkF = Math.floor(animT / 0.15) % 2;
+          switch (cs.charState) {
+            case 'idle_lobby': case 'idle_exit':
+              return f2 === 0 ? 'idle_0' : 'idle_1';
+            case 'walk_to_desk': case 'walk_to_exit': case 'walk_to_lobby':
+              if (cs.facing === 'left') return walkF === 0 ? 'walk_l_0' : 'walk_l_1';
+              return walkF === 0 ? 'walk_r_0' : 'walk_r_1';
+            case 'sit_read': return f2 === 0 ? 'sit_read_0' : 'sit_read_1';
+            case 'sit_type': return f2 === 0 ? 'sit_type_0' : 'sit_type_1';
+            case 'failed': return 'idle_0';
+            default: return 'idle_0';
           }
-          return { x: 2, y: 2, atDesk: false };
         },
 
         _poDrawCharacters(ctx, ox, oy, Z, T, layout) {
@@ -2151,50 +2314,54 @@
           const W = this._PO_CHAR_W;
           const H = this._PO_CHAR_H;
 
-          // Sort tickets so characters lower on screen draw on top (Z-sort)
-          const sorted = this.tickets
-            .map((t, i) => ({ ticket: t, idx: i }))
-            .sort((a, b) => {
-              const pa = this._poGetCharPosition(a.ticket, layout, a.idx);
-              const pb = this._poGetCharPosition(b.ticket, layout, b.idx);
-              return pa.y - pb.y;
-            });
+          // Collect all characters with their pixel positions for Z-sort
+          const chars = [];
+          this.tickets.forEach((ticket) => {
+            const cs = this._PO_CHAR_MAP[ticket.id];
+            if (!cs) return;
+            chars.push({ ticket, cs });
+          });
 
-          sorted.forEach(({ ticket, idx }) => {
-            const variant = idx % charSprites.length;
+          // Z-sort: characters with higher py drawn last (on top)
+          chars.sort((a, b) => a.cs.py - b.cs.py);
+
+          chars.forEach(({ ticket, cs }) => {
+            const variant = cs.variant % charSprites.length;
             const sprites = charSprites[variant];
-            const pos = this._poGetCharPosition(ticket, layout, idx);
-            const frameName = this._poGetCharFrame(ticket.state, this._PO_ANIM_T);
+            const frameName = this._poGetCharFrame(cs, this._PO_ANIM_T);
             const sprite = sprites[frameName];
             if (!sprite) return;
 
-            // Calculate pixel position — center character on tile
-            const px = ox + (pos.x * T + (T - W) / 2) * Z;
-            const py = ox === ox ? oy + (pos.y * T + T - H) * Z : 0; // align feet to bottom of tile
+            // Sub-pixel position
+            let drawPx = ox + (cs.px + (T - W) / 2) * Z;
+            let drawPy = oy + (cs.py + T - H) * Z;
+
+            // Celebrate bounce for idle_exit
+            if (cs.charState === 'idle_exit') {
+              drawPy -= Math.abs(Math.sin(cs.celebrateT * 4)) * 6 * Z;
+            }
+
             const sw = W * Z;
             const sh = H * Z;
 
             // Draw character
-            ctx.drawImage(sprite, 0, 0, W, H, px, py, sw, sh);
+            ctx.drawImage(sprite, 0, 0, W, H, drawPx, drawPy, sw, sh);
 
-            // Failed state: red overlay
+            // State overlays
             if (ticket.state === 'failed') {
               ctx.fillStyle = 'rgba(220, 50, 50, 0.35)';
-              ctx.fillRect(px, py, sw, sh);
-            }
-
-            // Done/review: subtle green glow
-            if (ticket.state === 'done' || ticket.state === 'review') {
+              ctx.fillRect(drawPx, drawPy, sw, sh);
+            } else if (ticket.state === 'done' || ticket.state === 'review') {
               ctx.fillStyle = 'rgba(50, 200, 80, 0.15)';
-              ctx.fillRect(px, py, sw, sh);
+              ctx.fillRect(drawPx, drawPy, sw, sh);
             }
 
-            // Speech bubble with ticket key
-            this._poDrawBubble(ctx, px + sw / 2, py - 4 * Z, ticket, Z);
+            // Speech bubble
+            this._poDrawBubble(ctx, drawPx + sw / 2, drawPy - 4 * Z, ticket, Z);
 
-            // Store hit box for click detection (Phase 5)
+            // Hit box for click detection
             if (!this.pixelOffice._hitBoxes) this.pixelOffice._hitBoxes = {};
-            this.pixelOffice._hitBoxes[ticket.id] = { x: px, y: py, w: sw, h: sh };
+            this.pixelOffice._hitBoxes[ticket.id] = { x: drawPx, y: drawPy, w: sw, h: sh };
           });
         },
 
@@ -2374,6 +2541,8 @@
             this.pixelOffice._engine.stop();
             this.pixelOffice._engine = null;
           }
+          this._PO_CHAR_MAP = {};
+          this._PO_LAST_COUNT = -1;
         },
 
         _poRenderStaticLayer() {
@@ -2423,7 +2592,14 @@
             this._PO_LAYOUT = this._poGenerateLayout(count);
             this._PO_LAST_COUNT = count;
             this._poRenderStaticLayer();
+            // Reset character paths since layout changed
+            for (const cs of Object.values(this._PO_CHAR_MAP)) {
+              cs.path = null;
+            }
           }
+
+          // Update character state machine + movement
+          this._poUpdateCharacters(dt);
         },
 
         _pixelOfficeRender(ctx, w, h) {
