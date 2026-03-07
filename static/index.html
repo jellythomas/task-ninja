@@ -1754,8 +1754,11 @@
         _PO_TILE: 16,
         _PO_ZOOM: 3,
         _PO_TILES: null,   // cached tile ImageData canvases
+        _PO_CHARS: null,   // cached character sprite canvases
         _PO_LAYOUT: null,  // current office grid + metadata
         _PO_LAST_COUNT: -1, // last ticket count used for layout
+        _PO_CHAR_MAP: {},  // ticketId -> { variant, deskIdx, ... }
+        _PO_ANIM_T: 0,    // animation timer
 
         _poInitTiles() {
           if (this._PO_TILES) return;
@@ -1884,6 +1887,347 @@
           };
         },
 
+        // ── Character Sprite Definitions ─────────────────────────
+        // Each frame is a 12x16 pixel array using color indices.
+        // 0=transparent, 1=outline, 2=skin, 3=hair, 4=shirt, 5=pants, 6=shoes, 7=eye, 8=shirt_shadow
+        _PO_CHAR_W: 12,
+        _PO_CHAR_H: 16,
+        _PO_CHAR_FRAMES: {
+          idle_0: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,7,2,2,7,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,8,4,4,4,4,4,4,8,0,0],
+            [0,0,0,2,0,4,4,0,2,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,6,6,6,6,0,0,0,0],
+            [0,0,0,0,6,0,0,6,0,0,0,0],
+          ],
+          idle_1: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,7,2,2,7,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,8,4,4,4,4,4,4,8,0,0],
+            [0,0,0,2,0,4,4,0,2,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,6,6,6,6,0,0,0,0],
+            [0,0,0,0,6,0,0,6,0,0,0,0],
+          ],
+          walk_r_0: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,7,2,2,7,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,8,4,4,4,4,4,4,8,0,0],
+            [0,0,0,2,0,4,4,0,2,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,5,5,0,5,0,0,0,0],
+            [0,0,0,5,5,0,0,5,5,0,0,0],
+            [0,0,0,6,6,0,0,6,6,0,0,0],
+            [0,0,0,6,0,0,0,0,6,0,0,0],
+          ],
+          walk_r_1: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,7,2,2,7,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,8,4,4,4,4,4,4,8,0,0],
+            [0,0,0,2,0,4,4,0,2,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,6,6,6,6,0,0,0,0],
+            [0,0,0,0,0,6,6,0,0,0,0,0],
+          ],
+          sit_type_0: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,7,2,2,7,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,2,8,4,4,4,4,4,4,8,2,0],
+            [0,2,0,0,0,4,4,0,0,0,2,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+          ],
+          sit_type_1: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,7,2,2,7,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,8,4,4,4,4,4,4,8,0,0],
+            [2,0,0,0,0,4,4,0,0,0,0,2],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+          ],
+          sit_read_0: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,1,2,2,7,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,8,4,4,4,4,4,4,8,0,0],
+            [0,0,0,2,0,4,4,0,2,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+          ],
+          sit_read_1: [
+            [0,0,0,0,3,3,3,3,0,0,0,0],
+            [0,0,0,3,3,3,3,3,3,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,2,7,2,2,1,2,0,0,0],
+            [0,0,0,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,2,1,1,2,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,0,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,4,4,4,4,4,4,4,4,0,0],
+            [0,0,8,4,4,4,4,4,4,8,0,0],
+            [0,0,0,2,0,4,4,0,2,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0],
+          ],
+        },
+
+        // Palette variants: [transparent, outline, skin, hair, shirt, pants, shoes, eye, shirt_shadow]
+        _PO_PALETTES: {
+          office: [
+            ['transparent','#1a1a2e','#f5d6b8','#3a2a1a','#4a90d9','#2d3748','#1a1a2e','#1a1a2e','#3a78b8'],
+            ['transparent','#1a1a2e','#e8c5a0','#c0392b','#27ae60','#34495e','#1a1a2e','#1a1a2e','#1e8a4e'],
+            ['transparent','#1a1a2e','#f0d0a8','#f39c12','#8e44ad','#2c3e50','#1a1a2e','#1a1a2e','#73358a'],
+            ['transparent','#1a1a2e','#d4a574','#1a1a2e','#e74c3c','#2d3748','#1a1a2e','#1a1a2e','#c0392b'],
+            ['transparent','#1a1a2e','#fce0c8','#6a4a2a','#3498db','#4a5568','#1a1a2e','#1a1a2e','#2a80c0'],
+            ['transparent','#1a1a2e','#c8a882','#2c3e50','#e67e22','#2d3748','#1a1a2e','#1a1a2e','#c56a1a'],
+          ],
+          ninja: [
+            ['transparent','#1a1a2e','#f5d6b8','#1a1a2e','#2c3e50','#1a1a2e','#1a1a2e','#e74c3c','#222e3e'],
+            ['transparent','#1a1a2e','#f5d6b8','#8e1a1a','#8e1a1a','#1a1a2e','#1a1a2e','#f5d6b8','#701515'],
+            ['transparent','#1a1a2e','#f5d6b8','#1a3a5a','#1a3a5a','#1a1a2e','#1a1a2e','#f5d6b8','#152e48'],
+            ['transparent','#1a1a2e','#f5d6b8','#2a5a2a','#2a5a2a','#1a1a2e','#1a1a2e','#f5d6b8','#204820'],
+            ['transparent','#1a1a2e','#f5d6b8','#5a2a5a','#5a2a5a','#1a1a2e','#1a1a2e','#f5d6b8','#482048'],
+            ['transparent','#1a1a2e','#f5d6b8','#5a5a1a','#5a5a1a','#1a1a2e','#1a1a2e','#f5d6b8','#484815'],
+          ],
+        },
+
+        _poInitChars() {
+          if (this._PO_CHARS) return;
+          this._PO_CHARS = {};
+          const frames = this._PO_CHAR_FRAMES;
+          const W = this._PO_CHAR_W;
+          const H = this._PO_CHAR_H;
+
+          // For each theme
+          for (const [theme, palettes] of Object.entries(this._PO_PALETTES)) {
+            this._PO_CHARS[theme] = [];
+            // For each variant
+            palettes.forEach((pal, vi) => {
+              const variant = {};
+              // For each frame
+              for (const [fname, pixels] of Object.entries(frames)) {
+                const c = document.createElement('canvas');
+                c.width = W; c.height = H;
+                const ctx = c.getContext('2d');
+                for (let y = 0; y < H; y++) {
+                  for (let x = 0; x < W; x++) {
+                    const ci = pixels[y][x];
+                    if (ci === 0) continue; // transparent
+                    ctx.fillStyle = pal[ci];
+                    ctx.fillRect(x, y, 1, 1);
+                  }
+                }
+                variant[fname] = c;
+
+                // Generate mirrored version for walk_l
+                if (fname.startsWith('walk_r_')) {
+                  const mc = document.createElement('canvas');
+                  mc.width = W; mc.height = H;
+                  const mx = mc.getContext('2d');
+                  mx.translate(W, 0);
+                  mx.scale(-1, 1);
+                  mx.drawImage(c, 0, 0);
+                  variant[fname.replace('walk_r_', 'walk_l_')] = mc;
+                }
+              }
+              this._PO_CHARS[theme].push(variant);
+            });
+          }
+        },
+
+        _poGetCharFrame(ticketState, animT) {
+          // Returns frame name based on ticket state and animation timer
+          const frame2 = Math.floor(animT / 0.4) % 2; // toggle every 0.4s
+          switch (ticketState) {
+            case 'queued': case 'todo': return frame2 === 0 ? 'idle_0' : 'idle_1';
+            case 'planning': return frame2 === 0 ? 'sit_read_0' : 'sit_read_1';
+            case 'developing': return frame2 === 0 ? 'sit_type_0' : 'sit_type_1';
+            case 'review': case 'done': return frame2 === 0 ? 'idle_0' : 'idle_1';
+            case 'failed': return 'idle_0'; // will be tinted red
+            default: return 'idle_0';
+          }
+        },
+
+        _poGetCharPosition(ticket, layout, charIdx) {
+          // Determine where a character should be based on ticket state
+          const state = ticket.state;
+          if (state === 'planning' || state === 'developing') {
+            // Sit at assigned desk
+            const deskIdx = charIdx % layout.deskPositions.length;
+            const desk = layout.deskPositions[deskIdx];
+            return { x: desk.col, y: desk.row, atDesk: true };
+          } else if (state === 'queued' || state === 'todo') {
+            // Stand in lobby
+            const lobbyIdx = charIdx % layout.lobbyPositions.length;
+            const pos = layout.lobbyPositions[lobbyIdx];
+            return { x: pos.col, y: pos.row, atDesk: false };
+          } else if (state === 'review' || state === 'done') {
+            // Near exit
+            const exitIdx = charIdx % layout.exitPositions.length;
+            const pos = layout.exitPositions[exitIdx];
+            return { x: pos.col, y: pos.row, atDesk: false };
+          } else if (state === 'failed') {
+            // Stay at desk with red tint
+            const deskIdx = charIdx % layout.deskPositions.length;
+            const desk = layout.deskPositions[deskIdx];
+            return { x: desk.col, y: desk.row, atDesk: true, failed: true };
+          }
+          return { x: 2, y: 2, atDesk: false };
+        },
+
+        _poDrawCharacters(ctx, ox, oy, Z, T, layout) {
+          const theme = this.pixelOffice.theme || 'office';
+          const charSprites = this._PO_CHARS[theme];
+          if (!charSprites || !layout) return;
+
+          const W = this._PO_CHAR_W;
+          const H = this._PO_CHAR_H;
+
+          // Sort tickets so characters lower on screen draw on top (Z-sort)
+          const sorted = this.tickets
+            .map((t, i) => ({ ticket: t, idx: i }))
+            .sort((a, b) => {
+              const pa = this._poGetCharPosition(a.ticket, layout, a.idx);
+              const pb = this._poGetCharPosition(b.ticket, layout, b.idx);
+              return pa.y - pb.y;
+            });
+
+          sorted.forEach(({ ticket, idx }) => {
+            const variant = idx % charSprites.length;
+            const sprites = charSprites[variant];
+            const pos = this._poGetCharPosition(ticket, layout, idx);
+            const frameName = this._poGetCharFrame(ticket.state, this._PO_ANIM_T);
+            const sprite = sprites[frameName];
+            if (!sprite) return;
+
+            // Calculate pixel position — center character on tile
+            const px = ox + (pos.x * T + (T - W) / 2) * Z;
+            const py = ox === ox ? oy + (pos.y * T + T - H) * Z : 0; // align feet to bottom of tile
+            const sw = W * Z;
+            const sh = H * Z;
+
+            // Draw character
+            ctx.drawImage(sprite, 0, 0, W, H, px, py, sw, sh);
+
+            // Failed state: red overlay
+            if (ticket.state === 'failed') {
+              ctx.fillStyle = 'rgba(220, 50, 50, 0.35)';
+              ctx.fillRect(px, py, sw, sh);
+            }
+
+            // Done/review: subtle green glow
+            if (ticket.state === 'done' || ticket.state === 'review') {
+              ctx.fillStyle = 'rgba(50, 200, 80, 0.15)';
+              ctx.fillRect(px, py, sw, sh);
+            }
+
+            // Speech bubble with ticket key
+            this._poDrawBubble(ctx, px + sw / 2, py - 4 * Z, ticket, Z);
+
+            // Store hit box for click detection (Phase 5)
+            if (!this.pixelOffice._hitBoxes) this.pixelOffice._hitBoxes = {};
+            this.pixelOffice._hitBoxes[ticket.id] = { x: px, y: py, w: sw, h: sh };
+          });
+        },
+
+        _poDrawBubble(ctx, cx, by, ticket, Z) {
+          const key = ticket.jira_key || '???';
+          const icons = { todo: '\u23F3', queued: '\u23F3', planning: '\uD83D\uDCD6', developing: '\u2328', review: '\uD83D\uDCCB', done: '\u2713', failed: '!' };
+          const icon = icons[ticket.state] || '';
+          const text = icon + ' ' + key;
+
+          ctx.font = `${Math.max(8, 3 * Z)}px monospace`;
+          const tw = ctx.measureText(text).width;
+          const bw = tw + 8;
+          const bh = 4 * Z;
+          const bx = cx - bw / 2;
+
+          // Bubble background
+          ctx.fillStyle = ticket.state === 'failed' ? 'rgba(180, 30, 30, 0.9)' : 'rgba(20, 20, 40, 0.85)';
+          ctx.beginPath();
+          ctx.roundRect(bx, by - bh, bw, bh, 3);
+          ctx.fill();
+
+          // Border
+          ctx.strokeStyle = ticket.state === 'failed' ? '#e55' : '#4a4a7a';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // Text
+          ctx.fillStyle = ticket.state === 'failed' ? '#faa' : '#ccc';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(text, cx, by - bh / 2);
+        },
+
         _poGenerateLayout(ticketCount) {
           const desks = Math.max(3, ticketCount);
           const desksPerRow = 3;
@@ -1978,8 +2322,9 @@
           const ctx = canvas.getContext('2d');
           ctx.imageSmoothingEnabled = false;
 
-          // Initialize tile sprite cache
+          // Initialize sprite caches
           this._poInitTiles();
+          this._poInitChars();
 
           // Generate initial layout
           this._PO_LAYOUT = this._poGenerateLayout(this.tickets.length);
@@ -2069,6 +2414,9 @@
         },
 
         _pixelOfficeUpdate(dt) {
+          // Advance animation timer
+          this._PO_ANIM_T += dt;
+
           // Re-generate layout if ticket count changed
           const count = this.tickets.length;
           if (count !== this._PO_LAST_COUNT) {
@@ -2110,6 +2458,9 @@
               }
             }
           }
+
+          // Draw characters
+          this._poDrawCharacters(ctx, ox, oy, Z, T, layout);
 
           // Store rendering offset for click detection (Phase 5)
           this.pixelOffice._renderOffset = { x: ox, y: oy, zoom: Z, tile: T };
