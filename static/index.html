@@ -995,24 +995,36 @@
               @wheel.prevent="poCanvasWheel($event)"></canvas>
       <!-- Pixel Office Toolbar -->
       <div class="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-gray-900/90 backdrop-blur border border-gray-700 rounded-lg px-3 py-1.5 shadow-lg z-10">
+        <!-- Theme selector -->
         <select x-model="pixelOffice.theme" @change="localStorage.setItem('tn_pixelTheme', pixelOffice.theme)"
                 class="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-300 focus:outline-none">
           <option value="office">Office Workers</option>
           <option value="ninja">Ninja</option>
         </select>
         <div class="w-px h-4 bg-gray-700"></div>
+        <!-- SFX toggle -->
         <button @click="pixelOffice.soundEnabled = !pixelOffice.soundEnabled; localStorage.setItem('tn_pixelSound', pixelOffice.soundEnabled)"
-                :class="pixelOffice.soundEnabled ? 'text-indigo-400' : 'text-gray-500'" class="text-xs flex items-center gap-1 hover:text-white transition">
+                :class="pixelOffice.soundEnabled ? 'text-indigo-400' : 'text-gray-500'" class="text-xs flex items-center gap-1 hover:text-white transition" title="Sound effects">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <template x-if="pixelOffice.soundEnabled"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.788l4.01-3.343A1 1 0 0112 6.28v11.44a1 1 0 01-1.49.866L6.5 15.212H4a1 1 0 01-1-1v-4.424a1 1 0 011-1h2.5z"/></template>
-            <template x-if="!pixelOffice.soundEnabled"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/></template>
+            <path x-show="pixelOffice.soundEnabled" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.788l4.01-3.343A1 1 0 0112 6.28v11.44a1 1 0 01-1.49.866L6.5 15.212H4a1 1 0 01-1-1v-4.424a1 1 0 011-1h2.5z"/>
+            <path x-show="!pixelOffice.soundEnabled" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/>
           </svg>
-          <span x-text="pixelOffice.soundEnabled ? 'On' : 'Off'"></span>
+          <span class="hidden sm:inline" x-text="'SFX'"></span>
         </button>
-        <template x-if="pixelOffice.soundEnabled">
+        <div class="w-px h-4 bg-gray-700"></div>
+        <!-- Music toggle -->
+        <button @click="toggleBgMusic()"
+                :class="pixelOffice.musicEnabled ? 'text-emerald-400' : 'text-gray-500'" class="text-xs flex items-center gap-1 hover:text-white transition" title="Background music">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM21 16c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/>
+          </svg>
+          <span class="hidden sm:inline" x-text="'Music'"></span>
+        </button>
+        <!-- Volume slider (shared for SFX + music) -->
+        <template x-if="pixelOffice.soundEnabled || pixelOffice.musicEnabled">
           <input type="range" min="0" max="100" x-model="pixelOffice.soundVolume"
-                 @input="localStorage.setItem('tn_pixelVolume', pixelOffice.soundVolume)"
-                 class="w-16 h-1 accent-indigo-500">
+                 @input="localStorage.setItem('tn_pixelVolume', pixelOffice.soundVolume); updateBgMusicVolume()"
+                 class="w-16 h-1 accent-indigo-500" title="Volume">
         </template>
       </div>
       <!-- No tickets placeholder -->
@@ -1709,7 +1721,9 @@
           theme: localStorage.getItem('tn_pixelTheme') || 'office',
           soundEnabled: JSON.parse(localStorage.getItem('tn_pixelSound') || 'false'),
           soundVolume: parseInt(localStorage.getItem('tn_pixelVolume') || '50'),
+          musicEnabled: JSON.parse(localStorage.getItem('tn_pixelMusic') || 'false'),
         },
+        _PO_MUSIC_NODES: null, // { gain, oscillators } for background music
 
         settingsTabs: [
           { id: 'general', label: 'General' },
@@ -2080,6 +2094,122 @@
             source.connect(gain);
             source.start(now);
           }
+        },
+
+        // ── Background Music — lofi ambient generative loop ──
+        toggleBgMusic() {
+          this.pixelOffice.musicEnabled = !this.pixelOffice.musicEnabled;
+          localStorage.setItem('tn_pixelMusic', this.pixelOffice.musicEnabled);
+          if (this.pixelOffice.musicEnabled) {
+            this._poStartBgMusic();
+          } else {
+            this._poStopBgMusic();
+          }
+        },
+
+        updateBgMusicVolume() {
+          if (this._PO_MUSIC_NODES) {
+            const vol = (this.pixelOffice.soundVolume || 50) / 100;
+            this._PO_MUSIC_NODES.gain.gain.setTargetAtTime(vol * 0.08, this._PO_MUSIC_NODES.ctx.currentTime, 0.1);
+          }
+        },
+
+        _poStartBgMusic() {
+          if (this._PO_MUSIC_NODES) return;
+          const ctx = this._poEnsureAudio();
+          const vol = (this.pixelOffice.soundVolume || 50) / 100;
+
+          // Master gain for music
+          const masterGain = ctx.createGain();
+          masterGain.gain.setValueAtTime(0, ctx.currentTime);
+          masterGain.gain.linearRampToValueAtTime(vol * 0.08, ctx.currentTime + 2); // fade in
+          masterGain.connect(ctx.destination);
+
+          // Lofi pad: layered detuned sine waves for warm ambient chord
+          // Cmaj7 chord: C3, E3, G3, B3
+          const notes = [130.81, 164.81, 196.00, 246.94];
+          const oscillators = [];
+
+          notes.forEach((freq, i) => {
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, ctx.currentTime);
+            // Slight detune for warmth
+            osc.detune.setValueAtTime((i - 1.5) * 4, ctx.currentTime);
+
+            // Individual gain for each voice
+            const voiceGain = ctx.createGain();
+            voiceGain.gain.setValueAtTime(0.25, ctx.currentTime);
+            osc.connect(voiceGain);
+            voiceGain.connect(masterGain);
+            osc.start();
+            oscillators.push(osc);
+          });
+
+          // Sub bass — very quiet low hum
+          const subOsc = ctx.createOscillator();
+          subOsc.type = 'sine';
+          subOsc.frequency.setValueAtTime(65.41, ctx.currentTime); // C2
+          const subGain = ctx.createGain();
+          subGain.gain.setValueAtTime(0.15, ctx.currentTime);
+          subOsc.connect(subGain);
+          subGain.connect(masterGain);
+          subOsc.start();
+          oscillators.push(subOsc);
+
+          // Filtered noise layer — gentle air/vinyl crackle feel
+          const noiseSize = ctx.sampleRate * 2;
+          const noiseBuffer = ctx.createBuffer(1, noiseSize, ctx.sampleRate);
+          const noiseData = noiseBuffer.getChannelData(0);
+          for (let i = 0; i < noiseSize; i++) noiseData[i] = (Math.random() * 2 - 1);
+          const noiseSrc = ctx.createBufferSource();
+          noiseSrc.buffer = noiseBuffer;
+          noiseSrc.loop = true;
+          const noiseFilter = ctx.createBiquadFilter();
+          noiseFilter.type = 'lowpass';
+          noiseFilter.frequency.setValueAtTime(400, ctx.currentTime);
+          noiseFilter.Q.setValueAtTime(0.5, ctx.currentTime);
+          const noiseGain = ctx.createGain();
+          noiseGain.gain.setValueAtTime(0.06, ctx.currentTime);
+          noiseSrc.connect(noiseFilter);
+          noiseFilter.connect(noiseGain);
+          noiseGain.connect(masterGain);
+          noiseSrc.start();
+
+          // Slow chord evolution — cycle through chords every 8 seconds
+          const chords = [
+            [130.81, 164.81, 196.00, 246.94], // Cmaj7
+            [110.00, 138.59, 164.81, 220.00], // Am7
+            [116.54, 146.83, 174.61, 220.00], // Fmaj7
+            [98.00,  123.47, 146.83, 196.00], // G7
+          ];
+          let chordIdx = 0;
+          const chordInterval = setInterval(() => {
+            if (!this._PO_MUSIC_NODES) { clearInterval(chordInterval); return; }
+            chordIdx = (chordIdx + 1) % chords.length;
+            const chord = chords[chordIdx];
+            const t = ctx.currentTime;
+            oscillators.slice(0, 4).forEach((osc, i) => {
+              osc.frequency.linearRampToValueAtTime(chord[i], t + 2); // smooth 2s transition
+            });
+            // Move sub bass to root
+            subOsc.frequency.linearRampToValueAtTime(chord[0] / 2, t + 2);
+          }, 8000);
+
+          this._PO_MUSIC_NODES = { ctx, gain: masterGain, oscillators, noiseSrc, chordInterval };
+        },
+
+        _poStopBgMusic() {
+          if (!this._PO_MUSIC_NODES) return;
+          const { ctx, gain, oscillators, noiseSrc, chordInterval } = this._PO_MUSIC_NODES;
+          clearInterval(chordInterval);
+          // Fade out over 1 second
+          gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 1);
+          setTimeout(() => {
+            oscillators.forEach(o => { try { o.stop(); } catch(e) {} });
+            try { noiseSrc.stop(); } catch(e) {}
+          }, 1200);
+          this._PO_MUSIC_NODES = null;
         },
 
         _poHitTest(e) {
@@ -2948,10 +3078,10 @@
         },
 
         _poGenerateLayout(ticketCount) {
-          // Desk count: at least maxParallel so every active worker gets a seat
+          // Desk count = maxParallel (one desk per worker slot)
           const maxP = this.maxParallel || 2;
-          const desks = Math.max(maxP, ticketCount, 3);
-          const desksPerRow = Math.min(Math.max(maxP, 3), 4);
+          const desks = Math.max(maxP, 2);
+          const desksPerRow = Math.min(desks, 4);
           const deskRows = Math.ceil(desks / desksPerRow);
 
           // Room-based layout (pixel-agents style):
@@ -3138,6 +3268,11 @@
               resizeObserver.disconnect();
             }
           };
+
+          // Auto-start music if it was enabled
+          if (this.pixelOffice.musicEnabled && !this._PO_MUSIC_NODES) {
+            this._poStartBgMusic();
+          }
         },
 
         _stopPixelOffice() {
@@ -3145,6 +3280,8 @@
             this.pixelOffice._engine.stop();
             this.pixelOffice._engine = null;
           }
+          // Stop music when leaving pixel office
+          this._poStopBgMusic();
           // Preserve _PO_CHAR_MAP and _PO_LAST_COUNT so characters keep their positions
           this._PO_MOUSE = null;
           this._PO_DRAG = null;
