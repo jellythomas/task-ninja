@@ -2110,289 +2110,510 @@
           };
 
           this._PO_TILES = {
-            // Floor — subtle carpet pattern
+            // Floor — wood grain pattern
             floor_a: make((x, T) => {
               x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T);
-              // subtle texture dots
+              // wood grain streaks
               x.fillStyle = '#222244';
-              for (let i = 2; i < T; i += 4) for (let j = 2; j < T; j += 4) x.fillRect(i, j, 1, 1);
+              for (let i = 0; i < T; i += 3) x.fillRect(i, 0, 1, T);
+              x.fillStyle = '#1c1c38';
+              for (let i = 1; i < T; i += 5) x.fillRect(i, 0, 1, T);
+              // subtle knot
+              x.fillStyle = '#252548'; x.fillRect(6, 6, 3, 2);
+              x.fillStyle = '#202040';
+              for (let j = 2; j < T; j += 4) x.fillRect(0, j, T, 1);
             }),
             floor_b: make((x, T) => {
               x.fillStyle = '#1c1c36'; x.fillRect(0, 0, T, T);
+              // wood grain streaks offset
               x.fillStyle = '#202042';
-              for (let i = 0; i < T; i += 4) for (let j = 0; j < T; j += 4) x.fillRect(i, j, 1, 1);
+              for (let i = 1; i < T; i += 3) x.fillRect(i, 0, 1, T);
+              x.fillStyle = '#1a1a34';
+              for (let i = 2; i < T; i += 5) x.fillRect(i, 0, 1, T);
+              x.fillStyle = '#232346'; x.fillRect(10, 4, 2, 3);
+              x.fillStyle = '#1e1e3e';
+              for (let j = 0; j < T; j += 4) x.fillRect(0, j, T, 1);
             }),
-            // Wall — brick-like with top highlight
+            // Wall — panel pattern with depth
             wall: make((x, T) => {
               x.fillStyle = '#2a2a4e'; x.fillRect(0, 0, T, T);
-              // brick lines
+              // brick rows
               x.fillStyle = '#333360';
               x.fillRect(0, 0, T, 2); // top highlight
-              x.fillRect(0, 7, T, 1); // mortar line
-              x.fillRect(4, 0, 1, 7);
-              x.fillRect(8, 7, 1, T - 7);
-              x.fillRect(12, 0, 1, 7);
+              x.fillRect(0, 7, T, 1); // mortar h
+              x.fillStyle = '#2e2e55';
+              x.fillRect(4, 0, 1, 7); x.fillRect(12, 0, 1, 7); // mortar v top
+              x.fillRect(0, 7, 1, T-7); x.fillRect(8, 7, 1, T-7); // mortar v bot
+              // panel shading
+              x.fillStyle = '#2f2f58';
+              x.fillRect(1, 1, 3, 6); x.fillRect(5, 1, 7, 6);
+              x.fillStyle = '#28284a';
+              x.fillRect(1, 8, 7, T-9); x.fillRect(9, 8, 6, T-9);
               // bottom shadow
-              x.fillStyle = '#1a1a35';
-              x.fillRect(0, T - 1, T, 1);
+              x.fillStyle = '#1a1a35'; x.fillRect(0, T-1, T, 1);
             }),
-            // Wall top (darker cap)
+            // Wall top — cap with highlight and shadow
             wall_top: make((x, T) => {
               x.fillStyle = '#3a3a6a'; x.fillRect(0, 0, T, T);
-              x.fillStyle = '#4a4a7a'; x.fillRect(0, 0, T, 2);
-              x.fillStyle = '#2a2a50'; x.fillRect(0, T - 2, T, 2);
+              x.fillStyle = '#4a4a7a'; x.fillRect(0, 0, T, 3);
+              x.fillStyle = '#444474'; x.fillRect(0, 3, T, 2);
+              // subtle brick lines
+              x.fillStyle = '#3e3e6e';
+              x.fillRect(4, 0, 1, T); x.fillRect(10, 0, 1, T);
+              x.fillStyle = '#2a2a50'; x.fillRect(0, T-2, T, 2);
+              x.fillStyle = '#252548'; x.fillRect(0, T-1, T, 1);
             }),
-            // Desk (left half — has monitor)
+            // Desk left — wood desk with PC monitor
             desk_l: make((x, T) => {
               // desk surface
-              x.fillStyle = '#5a4a3a'; x.fillRect(0, 2, T, 10);
-              x.fillStyle = '#6a5a48'; x.fillRect(0, 2, T, 2); // top edge
-              x.fillStyle = '#4a3a2a'; x.fillRect(0, 12, T, 1); // shadow
-              // monitor
-              x.fillStyle = '#222'; x.fillRect(3, 0, 10, 7);
-              x.fillStyle = '#1a3a5a'; x.fillRect(4, 1, 8, 5); // screen
+              x.fillStyle = '#5a4a3a'; x.fillRect(0, 4, T, 8);
+              x.fillStyle = '#6a5a48'; x.fillRect(0, 4, T, 2); // top edge highlight
+              x.fillStyle = '#5e4e3e'; x.fillRect(0, 6, T, 1); // grain
+              x.fillStyle = '#4a3a2a'; x.fillRect(0, 12, T, 1); // bottom shadow
+              // monitor frame
+              x.fillStyle = '#2a2a2a'; x.fillRect(2, 0, 12, 8);
+              x.fillStyle = '#333'; x.fillRect(3, 0, 10, 1); // top bezel
+              // screen with glow
+              x.fillStyle = '#1a3a6a'; x.fillRect(3, 1, 10, 6);
+              x.fillStyle = '#2a5a8a'; x.fillRect(4, 2, 8, 4); // inner glow
+              x.fillStyle = '#3a6a9a'; x.fillRect(5, 3, 4, 2); // screen highlight
+              // monitor stand
+              x.fillStyle = '#333'; x.fillRect(6, 8, 4, 1);
+              x.fillStyle = '#2a2a2a'; x.fillRect(5, 9, 6, 1);
               // legs
               x.fillStyle = '#4a3a2a';
-              x.fillRect(1, 13, 2, 3);
-              x.fillRect(13, 13, 2, 3);
+              x.fillRect(1, 13, 2, 3); x.fillRect(13, 13, 2, 3);
+              x.fillStyle = '#3a2a1a'; x.fillRect(1, 15, 2, 1); x.fillRect(13, 15, 2, 1);
             }),
-            // Desk (right half)
+            // Desk right — keyboard and mouse
             desk_r: make((x, T) => {
               // desk surface
-              x.fillStyle = '#5a4a3a'; x.fillRect(0, 2, T, 10);
-              x.fillStyle = '#6a5a48'; x.fillRect(0, 2, T, 2);
+              x.fillStyle = '#5a4a3a'; x.fillRect(0, 4, T, 8);
+              x.fillStyle = '#6a5a48'; x.fillRect(0, 4, T, 2);
+              x.fillStyle = '#5e4e3e'; x.fillRect(0, 6, T, 1);
               x.fillStyle = '#4a3a2a'; x.fillRect(0, 12, T, 1);
-              // keyboard area
-              x.fillStyle = '#333'; x.fillRect(2, 4, 8, 4);
-              x.fillStyle = '#444'; x.fillRect(3, 5, 6, 2); // keys
+              // keyboard
+              x.fillStyle = '#2a2a2a'; x.fillRect(1, 5, 9, 5);
+              x.fillStyle = '#444'; x.fillRect(2, 6, 7, 3); // key area
+              x.fillStyle = '#555';
+              for (let i = 2; i < 9; i += 2) x.fillRect(i, 6, 1, 1); // key dots row 1
+              for (let i = 3; i < 9; i += 2) x.fillRect(i, 8, 1, 1); // key dots row 2
+              // mouse
+              x.fillStyle = '#3a3a3a'; x.fillRect(12, 6, 3, 4);
+              x.fillStyle = '#4a4a4a'; x.fillRect(12, 6, 3, 2); // mouse top
+              x.fillStyle = '#333'; x.fillRect(13, 6, 1, 1); // scroll wheel
               // legs
               x.fillStyle = '#4a3a2a';
-              x.fillRect(1, 13, 2, 3);
-              x.fillRect(13, 13, 2, 3);
+              x.fillRect(1, 13, 2, 3); x.fillRect(13, 13, 2, 3);
+              x.fillStyle = '#3a2a1a'; x.fillRect(1, 15, 2, 1); x.fillRect(13, 15, 2, 1);
             }),
-            // Chair (facing up — toward desk)
+            // Chair — wood frame with cushion
             chair: make((x, T) => {
-              // seat
-              x.fillStyle = '#3a3a6a'; x.fillRect(3, 6, 10, 8);
-              x.fillStyle = '#4a4a7a'; x.fillRect(3, 6, 10, 2); // cushion top
               // backrest
-              x.fillStyle = '#2a2a5a'; x.fillRect(4, 3, 8, 4);
-              x.fillStyle = '#3a3a6a'; x.fillRect(5, 4, 6, 2);
-              // wheels
+              x.fillStyle = '#3a3068'; x.fillRect(4, 2, 8, 5);
+              x.fillStyle = '#4a4078'; x.fillRect(5, 3, 6, 3); // cushion highlight
+              x.fillStyle = '#353060'; x.fillRect(4, 2, 8, 1); // top edge
+              // seat cushion
+              x.fillStyle = '#3a3a6a'; x.fillRect(3, 7, 10, 6);
+              x.fillStyle = '#4a4a7a'; x.fillRect(3, 7, 10, 2); // cushion top highlight
+              x.fillStyle = '#353565'; x.fillRect(3, 12, 10, 1); // seat shadow
+              // arm rests
+              x.fillStyle = '#4a3a2a'; x.fillRect(2, 6, 1, 6); x.fillRect(13, 6, 1, 6);
+              // wheels / base
               x.fillStyle = '#222';
-              x.fillRect(4, 14, 2, 2);
-              x.fillRect(10, 14, 2, 2);
-              x.fillRect(7, 15, 2, 1);
+              x.fillRect(4, 14, 2, 2); x.fillRect(10, 14, 2, 2);
+              x.fillStyle = '#333'; x.fillRect(7, 14, 2, 1);
+              x.fillRect(6, 15, 4, 1); // center base
             }),
-            // Door
+            // Door — detailed with panels and knob
             door: make((x, T) => {
-              x.fillStyle = '#5a3a2a'; x.fillRect(2, 0, 12, T);
-              x.fillStyle = '#6a4a38'; x.fillRect(3, 1, 10, T - 2);
-              // handle
-              x.fillStyle = '#daa520'; x.fillRect(10, 8, 2, 2);
-              // frame
+              // door frame
               x.fillStyle = '#4a2a1a';
               x.fillRect(1, 0, 1, T); x.fillRect(14, 0, 1, T);
               x.fillRect(1, 0, 14, 1);
+              // door body
+              x.fillStyle = '#5a3a2a'; x.fillRect(2, 1, 12, T-1);
+              x.fillStyle = '#6a4a38'; x.fillRect(3, 2, 10, T-3);
+              // top panel
+              x.fillStyle = '#7a5a48'; x.fillRect(4, 2, 8, 5);
+              x.fillStyle = '#6a4a38'; x.fillRect(5, 3, 6, 3);
+              // bottom panel
+              x.fillStyle = '#7a5a48'; x.fillRect(4, 9, 8, 5);
+              x.fillStyle = '#6a4a38'; x.fillRect(5, 10, 6, 3);
+              // handle
+              x.fillStyle = '#daa520'; x.fillRect(10, 8, 2, 2);
+              x.fillStyle = '#c89418'; x.fillRect(10, 9, 2, 1); // handle shadow
             }),
-            // Exit sign area
+            // Exit sign — clear appearance
             exit: make((x, T) => {
               x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T);
-              // exit sign
-              x.fillStyle = '#2a5a2a'; x.fillRect(2, 2, 12, 6);
-              x.fillStyle = '#4ae44a'; x.fillRect(3, 3, 10, 4);
-              // arrow
-              x.fillStyle = '#2a5a2a';
-              x.fillRect(6, 4, 4, 2);
-              x.fillRect(8, 3, 2, 4);
+              // sign background
+              x.fillStyle = '#1a4a1a'; x.fillRect(1, 1, 14, 8);
+              x.fillStyle = '#2a6a2a'; x.fillRect(2, 2, 12, 6);
+              // EXIT text (simplified pixel letters)
+              x.fillStyle = '#4ae44a';
+              // E
+              x.fillRect(3, 3, 1, 4); x.fillRect(4, 3, 1, 1); x.fillRect(4, 5, 1, 1); x.fillRect(4, 6, 1, 1);
+              // X
+              x.fillRect(6, 3, 1, 1); x.fillRect(8, 3, 1, 1); x.fillRect(7, 4, 1, 2); x.fillRect(6, 6, 1, 1); x.fillRect(8, 6, 1, 1);
+              // arrow below
+              x.fillStyle = '#3ad43a';
+              x.fillRect(5, 11, 6, 2); x.fillRect(9, 10, 2, 1); x.fillRect(9, 13, 2, 1);
+              // glow
+              x.fillStyle = 'rgba(74,228,74,0.15)'; x.fillRect(0, 0, T, 10);
             }),
-            // Plant decoration
+            // Plant — richer foliage, terracotta pot
             plant: make((x, T) => {
-              // pot
-              x.fillStyle = '#8a5a3a'; x.fillRect(4, 10, 8, 6);
-              x.fillStyle = '#9a6a48'; x.fillRect(3, 10, 10, 2);
-              // leaves
-              x.fillStyle = '#2a7a3a';
-              x.fillRect(6, 2, 4, 8);
-              x.fillRect(3, 4, 3, 4);
-              x.fillRect(10, 4, 3, 4);
-              x.fillStyle = '#3a9a4a';
-              x.fillRect(7, 3, 2, 6);
-              x.fillRect(4, 5, 2, 2);
-              x.fillRect(10, 5, 2, 2);
+              // terracotta pot
+              x.fillStyle = '#a0522d'; x.fillRect(5, 11, 6, 5);
+              x.fillStyle = '#b8653a'; x.fillRect(4, 11, 8, 2); // pot rim
+              x.fillStyle = '#8b4513'; x.fillRect(5, 15, 6, 1); // pot base shadow
+              // soil
+              x.fillStyle = '#3a2a1a'; x.fillRect(5, 11, 6, 1);
+              // leaves — lush foliage
+              x.fillStyle = '#1a6a2a';
+              x.fillRect(5, 2, 6, 9);
+              x.fillRect(3, 4, 3, 5);
+              x.fillRect(10, 4, 3, 5);
+              x.fillStyle = '#2a8a3a';
+              x.fillRect(6, 3, 4, 7);
+              x.fillRect(4, 5, 2, 3);
+              x.fillRect(10, 5, 2, 3);
+              // highlights
+              x.fillStyle = '#3aaa4a';
+              x.fillRect(7, 4, 2, 2);
+              x.fillRect(4, 6, 1, 1);
+              x.fillRect(11, 6, 1, 1);
+              // darker accents
+              x.fillStyle = '#155a20';
+              x.fillRect(5, 8, 1, 2); x.fillRect(10, 7, 1, 2);
+            }),
+            // Bookshelf — wood frame with colored spines
+            bookshelf: make((x, T) => {
+              // frame
+              x.fillStyle = '#5a3a1a'; x.fillRect(1, 0, 14, T);
+              x.fillStyle = '#6a4a2a'; x.fillRect(2, 0, 12, T);
+              // shelves
+              x.fillStyle = '#4a2a0a';
+              x.fillRect(1, 0, 14, 1); x.fillRect(1, 5, 14, 1); x.fillRect(1, 10, 14, 1); x.fillRect(1, 15, 14, 1);
+              // books row 1
+              x.fillStyle = '#cc4444'; x.fillRect(3, 1, 2, 4);
+              x.fillStyle = '#4488cc'; x.fillRect(5, 1, 2, 4);
+              x.fillStyle = '#44aa44'; x.fillRect(7, 2, 2, 3);
+              x.fillStyle = '#ccaa33'; x.fillRect(9, 1, 2, 4);
+              x.fillStyle = '#aa44aa'; x.fillRect(11, 1, 2, 4);
+              // books row 2
+              x.fillStyle = '#dd8833'; x.fillRect(3, 6, 2, 4);
+              x.fillStyle = '#3366aa'; x.fillRect(5, 6, 3, 4);
+              x.fillStyle = '#aa3333'; x.fillRect(8, 7, 2, 3);
+              x.fillStyle = '#33aa88'; x.fillRect(10, 6, 3, 4);
+              // books row 3
+              x.fillStyle = '#8844aa'; x.fillRect(3, 11, 2, 4);
+              x.fillStyle = '#aaaa33'; x.fillRect(5, 11, 2, 4);
+              x.fillStyle = '#4488cc'; x.fillRect(7, 12, 3, 3);
+              x.fillStyle = '#cc6633'; x.fillRect(10, 11, 3, 4);
+            }),
+            // Water cooler
+            cooler: make((x, T) => {
+              // water bottle (light blue top)
+              x.fillStyle = '#88ccee'; x.fillRect(5, 0, 6, 5);
+              x.fillStyle = '#aaddff'; x.fillRect(6, 1, 4, 3); // water highlight
+              x.fillStyle = '#77bbdd'; x.fillRect(5, 4, 6, 1); // bottle base
+              // body (white/gray)
+              x.fillStyle = '#cccccc'; x.fillRect(4, 5, 8, 8);
+              x.fillStyle = '#dddddd'; x.fillRect(5, 5, 6, 7); // front face
+              x.fillStyle = '#bbbbbb'; x.fillRect(4, 5, 1, 8); // left shadow
+              // spout
+              x.fillStyle = '#888'; x.fillRect(5, 8, 2, 1);
+              x.fillStyle = '#4488cc'; x.fillRect(5, 9, 1, 1); // cold
+              x.fillStyle = '#cc4444'; x.fillRect(6, 9, 1, 1); // hot
+              // base
+              x.fillStyle = '#444'; x.fillRect(3, 13, 10, 3);
+              x.fillStyle = '#555'; x.fillRect(4, 13, 8, 1);
+            }),
+            // Rug — warm decorative pattern
+            rug: make((x, T) => {
+              x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T); // floor base
+              // rug body
+              x.fillStyle = '#8b3a3a'; x.fillRect(1, 1, 14, 14);
+              x.fillStyle = '#a04040'; x.fillRect(2, 2, 12, 12);
+              // border pattern
+              x.fillStyle = '#cc8833';
+              x.fillRect(2, 2, 12, 1); x.fillRect(2, 13, 12, 1);
+              x.fillRect(2, 2, 1, 12); x.fillRect(13, 2, 1, 12);
+              // inner pattern
+              x.fillStyle = '#b85050';
+              x.fillRect(5, 5, 6, 6);
+              x.fillStyle = '#cc8833';
+              x.fillRect(7, 6, 2, 2); x.fillRect(6, 7, 4, 1); // diamond center
+              x.fillRect(7, 9, 2, 1);
+              // corner dots
+              x.fillStyle = '#ddaa44';
+              x.fillRect(4, 4, 1, 1); x.fillRect(11, 4, 1, 1);
+              x.fillRect(4, 11, 1, 1); x.fillRect(11, 11, 1, 1);
             }),
           };
         },
 
         // ── Character Sprite Definitions ─────────────────────────
-        // Each frame is a 12x16 pixel array using color indices.
-        // 0=transparent, 1=outline, 2=skin, 3=hair, 4=shirt, 5=pants, 6=shoes, 7=eye, 8=shirt_shadow
-        _PO_CHAR_W: 12,
-        _PO_CHAR_H: 16,
+        // Each frame is a 16x24 pixel array using color indices (pixel-agents style).
+        // 0=transparent, 1=outline, 2=skin, 3=hair, 4=shirt, 5=pants, 6=shoes, 7=eye(white), 8=shirt_shadow
+        _PO_CHAR_W: 16,
+        _PO_CHAR_H: 24,
         _PO_CHAR_FRAMES: {
           idle_0: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,7,2,2,7,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,8,4,4,4,4,4,4,8,0,0],
-            [0,0,0,2,0,4,4,0,2,0,0,0],
-            [0,0,0,0,0,5,5,0,0,0,0,0],
-            [0,0,0,0,0,5,5,0,0,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,6,6,6,6,0,0,0,0],
-            [0,0,0,0,6,0,0,6,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,7,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,0,0,2,0,8,4,4,4,4,8,0,2,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,6,6,0,0,6,6,0,0,0,0,0],
+            [0,0,0,0,0,6,6,0,0,6,6,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
           idle_1: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,7,2,2,7,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,8,4,4,4,4,4,4,8,0,0],
-            [0,0,0,2,0,4,4,0,2,0,0,0],
-            [0,0,0,0,0,5,5,0,0,0,0,0],
-            [0,0,0,0,0,5,5,0,0,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,6,6,6,6,0,0,0,0],
-            [0,0,0,0,6,0,0,6,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,7,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,0,0,2,0,8,4,4,4,4,8,0,2,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,6,6,0,0,6,6,0,0,0,0,0],
+            [0,0,0,0,0,6,6,0,0,6,6,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
           walk_r_0: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,7,2,2,7,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,8,4,4,4,4,4,4,8,0,0],
-            [0,0,0,2,0,4,4,0,2,0,0,0],
-            [0,0,0,0,0,5,5,0,0,0,0,0],
-            [0,0,0,0,5,5,0,5,0,0,0,0],
-            [0,0,0,5,5,0,0,5,5,0,0,0],
-            [0,0,0,6,6,0,0,6,6,0,0,0],
-            [0,0,0,6,0,0,0,0,6,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,7,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,0,0,2,0,8,4,4,4,4,8,0,2,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,0,5,0,0,0,0,0],
+            [0,0,0,0,5,5,0,0,0,0,5,5,0,0,0,0],
+            [0,0,0,5,5,0,0,0,0,0,5,5,0,0,0,0],
+            [0,0,0,6,6,0,0,0,0,0,6,6,0,0,0,0],
+            [0,0,0,6,0,0,0,0,0,0,0,6,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
           walk_r_1: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,7,2,2,7,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,8,4,4,4,4,4,4,8,0,0],
-            [0,0,0,2,0,4,4,0,2,0,0,0],
-            [0,0,0,0,0,5,5,0,0,0,0,0],
-            [0,0,0,0,0,5,5,0,0,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,6,6,6,6,0,0,0,0],
-            [0,0,0,0,0,6,6,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,7,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,0,0,2,0,8,4,4,4,4,8,0,2,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,0,0,5,5,0,0,0,0,0],
+            [0,0,0,0,0,6,6,0,0,6,6,0,0,0,0,0],
+            [0,0,0,0,0,0,6,0,0,6,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+          ],
+          walk_r_2: [
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,7,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,0,0,2,0,8,4,4,4,4,8,0,2,0,0,0],
+            [0,0,0,0,0,0,5,5,5,5,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,5,5,5,5,0,0,0,0],
+            [0,0,0,0,0,0,0,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,0,0,6,6,6,6,0,0,0,0,0],
+            [0,0,0,0,0,0,6,0,0,0,6,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
           sit_type_0: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,7,2,2,7,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,2,8,4,4,4,4,4,4,8,2,0],
-            [0,2,0,0,0,4,4,0,0,0,2,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,7,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,2,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,2,0,0,0,8,4,4,4,4,8,0,0,2,0,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
           sit_type_1: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,7,2,2,7,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,8,4,4,4,4,4,4,8,0,0],
-            [2,0,0,0,0,4,4,0,0,0,0,2],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,7,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,2,0,0],
+            [0,0,2,0,0,8,4,4,4,4,8,0,0,0,2,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
           sit_read_0: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,1,2,2,7,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,8,4,4,4,4,4,4,8,0,0],
-            [0,0,0,2,0,4,4,0,2,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,3,3,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,2,2,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,2,1,2,2,2,2,7,2,0,0,0,0],
+            [0,0,0,0,2,2,2,1,1,2,2,2,0,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,0,0,2,0,8,4,4,4,4,8,0,2,0,0,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
           sit_read_1: [
-            [0,0,0,0,3,3,3,3,0,0,0,0],
-            [0,0,0,3,3,3,3,3,3,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,2,7,2,2,1,2,0,0,0],
-            [0,0,0,2,2,2,2,2,2,0,0,0],
-            [0,0,0,0,2,1,1,2,0,0,0,0],
-            [0,0,0,4,4,4,4,4,4,0,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,4,4,4,4,4,4,4,4,0,0],
-            [0,0,8,4,4,4,4,4,4,8,0,0],
-            [0,0,0,2,0,4,4,0,2,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,5,5,5,5,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,3,3,3,3,0,0,0,0,0],
+            [0,0,0,0,0,0,3,3,3,3,3,3,0,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,3,3,0,0,0],
+            [0,0,0,0,0,3,3,3,3,3,3,3,3,0,0,0],
+            [0,0,0,0,0,2,2,2,2,2,2,2,2,0,0,0],
+            [0,0,0,0,0,2,7,2,2,2,2,1,2,0,0,0],
+            [0,0,0,0,0,2,2,2,1,1,2,2,2,0,0,0],
+            [0,0,0,0,0,0,2,2,2,2,2,2,0,0,0,0],
+            [0,0,0,0,0,4,4,4,4,4,4,0,0,0,0,0],
+            [0,0,0,0,4,4,4,4,4,4,4,4,0,0,0,0],
+            [0,0,0,4,4,4,4,4,4,4,4,4,4,0,0,0],
+            [0,0,0,8,4,4,4,4,4,4,4,4,8,0,0,0],
+            [0,0,0,2,0,8,4,4,4,4,8,0,2,0,0,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,5,5,5,5,5,5,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
           ],
         },
 
         // Palette variants: [transparent, outline, skin, hair, shirt, pants, shoes, eye, shirt_shadow]
         _PO_PALETTES: {
           office: [
-            ['transparent','#1a1a2e','#f5d6b8','#3a2a1a','#4a90d9','#2d3748','#1a1a2e','#1a1a2e','#3a78b8'],
-            ['transparent','#1a1a2e','#e8c5a0','#c0392b','#27ae60','#34495e','#1a1a2e','#1a1a2e','#1e8a4e'],
-            ['transparent','#1a1a2e','#f0d0a8','#f39c12','#8e44ad','#2c3e50','#1a1a2e','#1a1a2e','#73358a'],
-            ['transparent','#1a1a2e','#d4a574','#1a1a2e','#e74c3c','#2d3748','#1a1a2e','#1a1a2e','#c0392b'],
-            ['transparent','#1a1a2e','#fce0c8','#6a4a2a','#3498db','#4a5568','#1a1a2e','#1a1a2e','#2a80c0'],
-            ['transparent','#1a1a2e','#c8a882','#2c3e50','#e67e22','#2d3748','#1a1a2e','#1a1a2e','#c56a1a'],
+            ['transparent','#1a1a2e','#FFCC99','#553322','#4488CC','#334466','#222222','#FFFFFF','#3366AA'],
+            ['transparent','#1a1a2e','#FFCC99','#FFD700','#CC4444','#333333','#222222','#FFFFFF','#AA3333'],
+            ['transparent','#1a1a2e','#DEB887','#222222','#44AA66','#334444','#333333','#FFFFFF','#338855'],
+            ['transparent','#1a1a2e','#FFCC99','#AA4422','#AA55CC','#443355','#222222','#FFFFFF','#8844AA'],
+            ['transparent','#1a1a2e','#DEB887','#553322','#CCAA33','#444433','#333333','#FFFFFF','#AA8822'],
+            ['transparent','#1a1a2e','#FFCC99','#111111','#FF8844','#443322','#222222','#FFFFFF','#DD6633'],
           ],
           ninja: [
-            ['transparent','#1a1a2e','#f5d6b8','#1a1a2e','#2c3e50','#1a1a2e','#1a1a2e','#e74c3c','#222e3e'],
-            ['transparent','#1a1a2e','#f5d6b8','#8e1a1a','#8e1a1a','#1a1a2e','#1a1a2e','#f5d6b8','#701515'],
-            ['transparent','#1a1a2e','#f5d6b8','#1a3a5a','#1a3a5a','#1a1a2e','#1a1a2e','#f5d6b8','#152e48'],
-            ['transparent','#1a1a2e','#f5d6b8','#2a5a2a','#2a5a2a','#1a1a2e','#1a1a2e','#f5d6b8','#204820'],
-            ['transparent','#1a1a2e','#f5d6b8','#5a2a5a','#5a2a5a','#1a1a2e','#1a1a2e','#f5d6b8','#482048'],
-            ['transparent','#1a1a2e','#f5d6b8','#5a5a1a','#5a5a1a','#1a1a2e','#1a1a2e','#f5d6b8','#484815'],
+            ['transparent','#1a1a2e','#FFCC99','#1a1a2e','#2c3e50','#1a1a2e','#1a1a2e','#e74c3c','#222e3e'],
+            ['transparent','#1a1a2e','#FFCC99','#8e1a1a','#8e1a1a','#1a1a2e','#1a1a2e','#FFFFFF','#701515'],
+            ['transparent','#1a1a2e','#FFCC99','#1a3a5a','#1a3a5a','#1a1a2e','#1a1a2e','#FFFFFF','#152e48'],
+            ['transparent','#1a1a2e','#FFCC99','#2a5a2a','#2a5a2a','#1a1a2e','#1a1a2e','#FFFFFF','#204820'],
+            ['transparent','#1a1a2e','#FFCC99','#5a2a5a','#5a2a5a','#1a1a2e','#1a1a2e','#FFFFFF','#482048'],
+            ['transparent','#1a1a2e','#FFCC99','#5a5a1a','#5a5a1a','#1a1a2e','#1a1a2e','#FFFFFF','#484815'],
           ],
         },
 
@@ -2449,7 +2670,7 @@
           const queue = [{ col: start.col, row: start.row, path: [{ col: start.col, row: start.row }] }];
           visited.add(key(start.col, start.row));
 
-          const blocked = new Set([1, 2, 3, 4]); // wall, wall_top, desk_l, desk_r
+          const blocked = new Set([1, 2, 3, 4, 9, 10]); // wall, wall_top, desk_l, desk_r, bookshelf, cooler
           const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]]; // up, down, left, right
 
           while (queue.length > 0) {
@@ -2645,15 +2866,17 @@
 
         _poGetCharFrame(cs, animT) {
           const idleF = Math.floor(animT / 0.6) % 2;   // slow idle breathing
-          const walkF = Math.floor(animT / 0.12) % 2;   // fast walk cycle
+          const walkF = Math.floor(animT / 0.12) % 4;   // fast walk cycle (4-frame pattern)
+          const walkFrames = [0, 1, 2, 1];
+          const wf = walkFrames[walkF];
           const typeF = Math.floor(animT / 0.25) % 2;   // medium typing
           const readF = Math.floor(animT / 0.5) % 2;    // gentle reading
           switch (cs.charState) {
             case 'idle_lobby': case 'idle_exit':
               return idleF === 0 ? 'idle_0' : 'idle_1';
             case 'walk_to_desk': case 'walk_to_exit': case 'walk_to_lobby':
-              if (cs.facing === 'left') return walkF === 0 ? 'walk_l_0' : 'walk_l_1';
-              return walkF === 0 ? 'walk_r_0' : 'walk_r_1';
+              if (cs.facing === 'left') return 'walk_l_' + wf;
+              return 'walk_r_' + wf;
             case 'sit_read': return readF === 0 ? 'sit_read_0' : 'sit_read_1';
             case 'sit_type': return typeF === 0 ? 'sit_type_0' : 'sit_type_1';
             case 'failed': return idleF === 0 ? 'idle_0' : 'idle_1';
@@ -2801,7 +3024,7 @@
           const cols = Math.max(12, desksPerRow * 4 + 4); // 4 tiles per desk (deskL + deskR + gap + gap) + margins
           const rows = Math.max(8, 2 + 2 + deskRows * 3 + 2); // wall(2) + lobby(2) + desks + exit(2)
 
-          // Build grid: 0=floor, 1=wall, 2=wall_top, 3=desk_l, 4=desk_r, 5=chair, 6=door, 7=exit, 8=plant
+          // Build grid: 0=floor, 1=wall, 2=wall_top, 3=desk_l, 4=desk_r, 5=chair, 6=door, 7=exit, 8=plant, 9=bookshelf, 10=cooler, 11=rug
           const grid = [];
           for (let r = 0; r < rows; r++) {
             grid[r] = [];
@@ -2837,6 +3060,25 @@
           if (rows > 5 && cols > 5) {
             grid[2][cols - 2] = 8;
             grid[rows - 2][1] = 8;
+          }
+
+          // Bookshelves along walls (1-2 per office)
+          if (cols > 8) {
+            grid[2][1] = 9; // bookshelf near top-left
+            if (cols > 10) grid[2][cols - 3] = 9; // bookshelf near top-right
+          }
+
+          // Water cooler near lobby
+          if (rows > 6 && cols > 6) {
+            grid[3][cols - 2] = 10;
+          }
+
+          // Rug tiles in lobby area
+          if (cols > 8) {
+            for (let c = 4; c < Math.min(cols - 4, 8); c++) {
+              if (grid[2][c] === 0) grid[2][c] = 11;
+              if (grid[3][c] === 0) grid[3][c] = 11;
+            }
           }
 
           // Place desks
@@ -2960,7 +3202,7 @@
           ox.imageSmoothingEnabled = false;
 
           const tiles = this._PO_TILES;
-          const tileMap = { 0: null, 1: 'wall', 2: 'wall_top', 3: 'desk_l', 4: 'desk_r', 5: 'chair', 6: 'door', 7: 'exit', 8: 'plant' };
+          const tileMap = { 0: null, 1: 'wall', 2: 'wall_top', 3: 'desk_l', 4: 'desk_r', 5: 'chair', 6: 'door', 7: 'exit', 8: 'plant', 9: 'bookshelf', 10: 'cooler', 11: 'rug' };
 
           for (let r = 0; r < layout.rows; r++) {
             for (let c = 0; c < layout.cols; c++) {
