@@ -2008,39 +2008,45 @@
           if (type === 'chime') {
             // Ascending 3-note chime: C5-E5-G5 — ticket starts working
             const osc = audioCtx.createOscillator();
-            const gain = makeGain(vol * 0.15);
+            const gain = makeGain(0);
             osc.type = 'sine';
             osc.connect(gain);
             osc.frequency.setValueAtTime(523.25, now);
             osc.frequency.setValueAtTime(659.25, now + 0.12);
             osc.frequency.setValueAtTime(783.99, now + 0.24);
+            gain.gain.setValueAtTime(vol * 0.2, now);
+            gain.gain.setValueAtTime(vol * 0.2, now + 0.3);
             gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
             osc.start(now);
-            osc.stop(now + 0.5);
+            osc.stop(now + 0.55);
           } else if (type === 'success') {
             // Ascending arpeggio: C5-E5-G5-C6 — ticket completed
             const osc = audioCtx.createOscillator();
-            const gain = makeGain(vol * 0.15);
+            const gain = makeGain(0);
             osc.type = 'triangle';
             osc.connect(gain);
             osc.frequency.setValueAtTime(523.25, now);
-            osc.frequency.setValueAtTime(659.25, now + 0.1);
-            osc.frequency.setValueAtTime(783.99, now + 0.2);
-            osc.frequency.setValueAtTime(1046.50, now + 0.3);
+            osc.frequency.setValueAtTime(659.25, now + 0.12);
+            osc.frequency.setValueAtTime(783.99, now + 0.24);
+            osc.frequency.setValueAtTime(1046.50, now + 0.36);
+            gain.gain.setValueAtTime(vol * 0.2, now);
+            gain.gain.setValueAtTime(vol * 0.2, now + 0.5);
             gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
             osc.start(now);
-            osc.stop(now + 0.8);
+            osc.stop(now + 0.85);
           } else if (type === 'error') {
             // Low descending buzz: C3→A2 — ticket failed
             const osc = audioCtx.createOscillator();
-            const gain = makeGain(vol * 0.1);
+            const gain = makeGain(0);
             osc.type = 'sawtooth';
             osc.connect(gain);
             osc.frequency.setValueAtTime(130.81, now);
             osc.frequency.linearRampToValueAtTime(110, now + 0.3);
+            gain.gain.setValueAtTime(vol * 0.15, now);
+            gain.gain.setValueAtTime(vol * 0.15, now + 0.3);
             gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
             osc.start(now);
-            osc.stop(now + 0.5);
+            osc.stop(now + 0.55);
           } else if (type === 'typing') {
             // Short noise burst — keyboard click
             const bufferSize = Math.floor(audioCtx.sampleRate * 0.04);
@@ -2638,17 +2644,19 @@
         },
 
         _poGetCharFrame(cs, animT) {
-          const f2 = Math.floor(animT / 0.4) % 2;
-          const walkF = Math.floor(animT / 0.15) % 2;
+          const idleF = Math.floor(animT / 0.6) % 2;   // slow idle breathing
+          const walkF = Math.floor(animT / 0.12) % 2;   // fast walk cycle
+          const typeF = Math.floor(animT / 0.25) % 2;   // medium typing
+          const readF = Math.floor(animT / 0.5) % 2;    // gentle reading
           switch (cs.charState) {
             case 'idle_lobby': case 'idle_exit':
-              return f2 === 0 ? 'idle_0' : 'idle_1';
+              return idleF === 0 ? 'idle_0' : 'idle_1';
             case 'walk_to_desk': case 'walk_to_exit': case 'walk_to_lobby':
               if (cs.facing === 'left') return walkF === 0 ? 'walk_l_0' : 'walk_l_1';
               return walkF === 0 ? 'walk_r_0' : 'walk_r_1';
-            case 'sit_read': return f2 === 0 ? 'sit_read_0' : 'sit_read_1';
-            case 'sit_type': return f2 === 0 ? 'sit_type_0' : 'sit_type_1';
-            case 'failed': return 'idle_0';
+            case 'sit_read': return readF === 0 ? 'sit_read_0' : 'sit_read_1';
+            case 'sit_type': return typeF === 0 ? 'sit_type_0' : 'sit_type_1';
+            case 'failed': return idleF === 0 ? 'idle_0' : 'idle_1';
             default: return 'idle_0';
           }
         },
@@ -2683,10 +2691,32 @@
             // Sub-pixel position
             let drawPx = ox + (cs.px + (T - W) / 2) * Z;
             let drawPy = oy + (cs.py + T - H) * Z;
+            const animT = this._PO_ANIM_T;
 
+            // Walking bob — sinusoidal Y bounce for liveliness
+            if (cs.charState.startsWith('walk_')) {
+              drawPy -= Math.abs(Math.sin(animT * 10)) * 2 * Z;
+            }
+            // Idle sway — subtle breathing motion
+            if (cs.charState === 'idle_lobby') {
+              drawPy -= Math.sin(animT * 2 + cs.variant) * 0.5 * Z;
+            }
+            // Sitting bob — subtle head/body motion while working
+            if (cs.charState === 'sit_type') {
+              drawPy -= Math.abs(Math.sin(animT * 3)) * 0.7 * Z;
+              drawPx += Math.sin(animT * 2.5) * 0.3 * Z;
+            }
+            if (cs.charState === 'sit_read') {
+              drawPy -= Math.sin(animT * 1.5 + 1) * 0.5 * Z;
+              drawPx += Math.sin(animT * 0.8) * 0.4 * Z;
+            }
             // Celebrate bounce for idle_exit
             if (cs.charState === 'idle_exit') {
               drawPy -= Math.abs(Math.sin(cs.celebrateT * 4)) * 6 * Z;
+            }
+            // Failed — jitter
+            if (cs.charState === 'failed') {
+              drawPx += (Math.random() - 0.5) * 0.8 * Z;
             }
 
             const sw = W * Z;
@@ -2859,15 +2889,15 @@
           this._poInitTiles();
           this._poInitChars();
 
-          // Generate initial layout
-          this._PO_LAYOUT = this._poGenerateLayout(this.tickets.length);
-          this._PO_LAST_COUNT = this.tickets.length;
-
-          // Center camera on office
-          const T = this._PO_TILE;
-          this._PO_CAM.x = this._PO_LAYOUT.cols * T / 2;
-          this._PO_CAM.y = this._PO_LAYOUT.rows * T / 2;
-          this._PO_CAM.zoom = 3;
+          // Only generate layout + center camera on first init (preserve across tab switches)
+          if (!this._PO_LAYOUT) {
+            this._PO_LAYOUT = this._poGenerateLayout(this.tickets.length);
+            this._PO_LAST_COUNT = this.tickets.length;
+            const T = this._PO_TILE;
+            this._PO_CAM.x = this._PO_LAYOUT.cols * T / 2;
+            this._PO_CAM.y = this._PO_LAYOUT.rows * T / 2;
+            this._PO_CAM.zoom = 3;
+          }
 
           // Pre-render static tiles to off-screen canvas for performance
           this._poRenderStaticLayer();
@@ -2913,8 +2943,7 @@
             this.pixelOffice._engine.stop();
             this.pixelOffice._engine = null;
           }
-          this._PO_CHAR_MAP = {};
-          this._PO_LAST_COUNT = -1;
+          // Preserve _PO_CHAR_MAP and _PO_LAST_COUNT so characters keep their positions
           this._PO_MOUSE = null;
           this._PO_DRAG = null;
         },
