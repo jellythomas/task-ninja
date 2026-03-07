@@ -990,7 +990,9 @@
     <!-- Pixel Office View -->
     <div x-show="boardView === 'pixel'" class="flex-1 relative overflow-hidden bg-gray-950" x-cloak>
       <canvas id="pixelOfficeCanvas" class="w-full h-full cursor-pointer" style="image-rendering: pixelated; image-rendering: crisp-edges;"
-              @click="poCanvasClick($event)" @mousemove="poCanvasHover($event)"></canvas>
+              @mousedown="poCanvasMouseDown($event)" @mousemove="poCanvasMouseMove($event)"
+              @mouseup="poCanvasMouseUp($event)" @mouseleave="poCanvasMouseLeave($event)"
+              @wheel.prevent="poCanvasWheel($event)"></canvas>
       <!-- Pixel Office Toolbar -->
       <div class="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-gray-900/90 backdrop-blur border border-gray-700 rounded-lg px-3 py-1.5 shadow-lg z-10">
         <select x-model="pixelOffice.theme" @change="localStorage.setItem('tn_pixelTheme', pixelOffice.theme)"
@@ -1823,35 +1825,160 @@
           return this.tickets.find(t => t.id === this.pixelOffice.selectedCharacter) || null;
         },
 
-        poCanvasClick(e) {
+        poCanvasMouseDown(e) {
+          if (e.button !== 0) return; // left click only
+          const canvas = e.target;
+          const rect = canvas.getBoundingClientRect();
+          const sx = e.clientX - rect.left;
+          const sy = e.clientY - rect.top;
           const hitId = this._poHitTest(e);
-          if (hitId) {
-            this.pixelOffice.selectedCharacter = hitId;
-            // Position popup near the character
-            const hb = this.pixelOffice._hitBoxes[hitId];
-            if (hb) {
-              const canvas = e.target;
-              const rect = canvas.getBoundingClientRect();
-              // Position to the right of character, or left if near edge
-              let px = hb.x + hb.w + 8;
-              let py = hb.y - 20;
-              // Clamp to canvas bounds
-              if (px + 256 > rect.width) px = hb.x - 264;
-              if (px < 4) px = 4;
-              if (py < 4) py = 4;
-              if (py + 200 > rect.height) py = rect.height - 200;
-              this.pixelOffice.popupPos = { x: px, y: py };
-            }
-          } else {
-            this.pixelOffice.selectedCharacter = null;
+          this._PO_MOUSE = {
+            startX: sx, startY: sy,
+            hitId: hitId,
+            camX: this._PO_CAM.x, camY: this._PO_CAM.y,
+            mode: null,
+          };
+        },
+
+        poCanvasMouseMove(e) {
+          const canvas = e.target;
+          const rect = canvas.getBoundingClientRect();
+          const sx = e.clientX - rect.left;
+          const sy = e.clientY - rect.top;
+          const m = this._PO_MOUSE;
+
+          if (!m) {
+            // Just hovering
+            const hitId = this._poHitTest(e);
+            this.pixelOffice._hoveredChar = hitId;
+            canvas.style.cursor = hitId ? 'pointer' : 'grab';
+            return;
+          }
+
+          const dx = sx - m.startX;
+          const dy = sy - m.startY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (!m.mode && dist > 4) {
+            m.mode = m.hitId ? 'drag' : 'pan';
+          }
+
+          if (m.mode === 'pan') {
+            const Z = this._PO_CAM.zoom;
+            this._PO_CAM.x = m.camX - dx / Z;
+            this._PO_CAM.y = m.camY - dy / Z;
+            canvas.style.cursor = 'grabbing';
+          } else if (m.mode === 'drag') {
+            this._PO_DRAG = { ticketId: m.hitId, screenX: sx, screenY: sy };
+            canvas.style.cursor = 'grabbing';
           }
         },
 
-        poCanvasHover(e) {
-          const hitId = this._poHitTest(e);
-          this.pixelOffice._hoveredChar = hitId;
+        poCanvasMouseUp(e) {
+          const m = this._PO_MOUSE;
           const canvas = e.target;
-          canvas.style.cursor = hitId ? 'pointer' : 'default';
+
+          if (m && !m.mode) {
+            // No drag/pan — treat as click
+            if (m.hitId) {
+              this.pixelOffice.selectedCharacter = m.hitId;
+              const hb = this.pixelOffice._hitBoxes?.[m.hitId];
+              if (hb) {
+                const rect = canvas.getBoundingClientRect();
+                let px = hb.x + hb.w + 8;
+                let py = hb.y - 20;
+                if (px + 256 > rect.width) px = hb.x - 264;
+                if (px < 4) px = 4;
+                if (py < 4) py = 4;
+                if (py + 200 > rect.height) py = rect.height - 200;
+                this.pixelOffice.popupPos = { x: px, y: py };
+              }
+            } else {
+              this.pixelOffice.selectedCharacter = null;
+            }
+          }
+
+          if (m?.mode === 'drag' && this._PO_DRAG) {
+            this._poHandleDrop(canvas, e);
+          }
+
+          this._PO_MOUSE = null;
+          this._PO_DRAG = null;
+          canvas.style.cursor = 'default';
+        },
+
+        poCanvasMouseLeave(e) {
+          if (this._PO_MOUSE?.mode === 'pan') {
+            // Allow pan to continue if re-entering
+          }
+          this._PO_MOUSE = null;
+          this._PO_DRAG = null;
+          this.pixelOffice._hoveredChar = null;
+        },
+
+        poCanvasWheel(e) {
+          const cam = this._PO_CAM;
+          const canvas = e.target;
+          const rect = canvas.getBoundingClientRect();
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+          const w = canvas.width;
+          const h = canvas.height;
+
+          const oldZ = cam.zoom;
+          if (e.deltaY < 0) {
+            cam.zoom = Math.min(cam.zoom + 1, 5);
+          } else {
+            cam.zoom = Math.max(cam.zoom - 1, 1);
+          }
+          const newZ = cam.zoom;
+
+          if (oldZ !== newZ) {
+            // Keep world point under cursor stable
+            const worldX = (mx - w / 2) / oldZ + cam.x;
+            const worldY = (my - h / 2) / oldZ + cam.y;
+            cam.x = worldX - (mx - w / 2) / newZ;
+            cam.y = worldY - (my - h / 2) / newZ;
+          }
+        },
+
+        _poScreenToWorld(sx, sy, canvas) {
+          const cam = this._PO_CAM;
+          const w = canvas.width;
+          const h = canvas.height;
+          return {
+            x: (sx - w / 2) / cam.zoom + cam.x,
+            y: (sy - h / 2) / cam.zoom + cam.y,
+          };
+        },
+
+        _poHandleDrop(canvas, e) {
+          const drag = this._PO_DRAG;
+          if (!drag) return;
+          const layout = this._PO_LAYOUT;
+          if (!layout) return;
+
+          const rect = canvas.getBoundingClientRect();
+          const sx = e.clientX - rect.left;
+          const sy = e.clientY - rect.top;
+          const world = this._poScreenToWorld(sx, sy, canvas);
+          const T = this._PO_TILE;
+          const tileCol = Math.floor(world.x / T);
+          const tileRow = Math.floor(world.y / T);
+
+          const ticket = this.tickets.find(t => t.id === drag.ticketId);
+          if (!ticket) return;
+
+          // Lobby zone: rows 2-3
+          const isLobby = tileRow >= 2 && tileRow <= 3 && tileCol >= 1 && tileCol < layout.cols - 1;
+          // Exit zone: bottom 2 rows
+          const isExit = tileRow >= layout.rows - 3 && tileCol >= 1;
+
+          if (isLobby && ticket.state !== 'queued' && ticket.state !== 'todo') {
+            this.moveTicket(ticket.id, 'queued');
+          } else if (isExit && ticket.state !== 'done' && ticket.state !== 'review') {
+            this.moveTicket(ticket.id, 'done');
+          }
         },
 
         _poHitTest(e) {
@@ -1883,6 +2010,9 @@
         _PO_LAST_COUNT: -1, // last ticket count used for layout
         _PO_CHAR_MAP: {},  // ticketId -> { variant, deskIdx, ... }
         _PO_ANIM_T: 0,    // animation timer
+        _PO_CAM: { x: 0, y: 0, zoom: 3 },  // camera: world center + zoom level
+        _PO_MOUSE: null,  // { startX, startY, hitId, camX, camY, mode: null|'pan'|'drag' }
+        _PO_DRAG: null,   // { ticketId, screenX, screenY } when dragging character
 
         _poInitTiles() {
           if (this._PO_TILES) return;
@@ -2629,6 +2759,12 @@
           this._PO_LAYOUT = this._poGenerateLayout(this.tickets.length);
           this._PO_LAST_COUNT = this.tickets.length;
 
+          // Center camera on office
+          const T = this._PO_TILE;
+          this._PO_CAM.x = this._PO_LAYOUT.cols * T / 2;
+          this._PO_CAM.y = this._PO_LAYOUT.rows * T / 2;
+          this._PO_CAM.zoom = 3;
+
           // Pre-render static tiles to off-screen canvas for performance
           this._poRenderStaticLayer();
 
@@ -2675,6 +2811,8 @@
           }
           this._PO_CHAR_MAP = {};
           this._PO_LAST_COUNT = -1;
+          this._PO_MOUSE = null;
+          this._PO_DRAG = null;
         },
 
         _poRenderStaticLayer() {
@@ -2724,6 +2862,10 @@
             this._PO_LAYOUT = this._poGenerateLayout(count);
             this._PO_LAST_COUNT = count;
             this._poRenderStaticLayer();
+            // Re-center camera on new layout
+            const T = this._PO_TILE;
+            this._PO_CAM.x = this._PO_LAYOUT.cols * T / 2;
+            this._PO_CAM.y = this._PO_LAYOUT.rows * T / 2;
             // Reset character paths since layout changed
             for (const cs of Object.values(this._PO_CHAR_MAP)) {
               cs.path = null;
@@ -2743,13 +2885,14 @@
           if (!layout || !staticCanvas) return;
 
           const T = this._PO_TILE;
-          const Z = this._PO_ZOOM;
+          const cam = this._PO_CAM;
+          const Z = cam.zoom;
           const officeW = layout.cols * T * Z;
           const officeH = layout.rows * T * Z;
 
-          // Center the office in the canvas
-          const ox = Math.floor((w - officeW) / 2);
-          const oy = Math.floor((h - officeH) / 2);
+          // Camera-based offset: cam.x/y is world center point
+          const ox = Math.floor(-cam.x * Z + w / 2);
+          const oy = Math.floor(-cam.y * Z + h / 2);
 
           // Draw the pre-rendered static layer scaled up
           ctx.drawImage(staticCanvas, 0, 0, staticCanvas.width, staticCanvas.height, ox, oy, officeW, officeH);
@@ -2767,10 +2910,65 @@
             }
           }
 
+          // Draw drop zone highlights when dragging a character
+          if (this._PO_DRAG) {
+            // Lobby zone highlight (rows 2-3)
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+            ctx.lineWidth = 2;
+            const lx = ox + 1 * T * Z;
+            const ly = oy + 2 * T * Z;
+            const lw = (layout.cols - 2) * T * Z;
+            const lh = 2 * T * Z;
+            ctx.fillRect(lx, ly, lw, lh);
+            ctx.strokeRect(lx, ly, lw, lh);
+            ctx.fillStyle = '#3b82f6';
+            ctx.font = `${Math.max(10, 3.5 * Z)}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.fillText('⏳ DROP → QUEUED', lx + lw / 2, ly + lh / 2 + 4);
+
+            // Exit zone highlight (bottom rows)
+            ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
+            ctx.strokeStyle = 'rgba(34, 197, 94, 0.6)';
+            const ex = ox + 1 * T * Z;
+            const ey = oy + (layout.rows - 3) * T * Z;
+            const ew = (layout.cols - 2) * T * Z;
+            const eh = 2 * T * Z;
+            ctx.fillRect(ex, ey, ew, eh);
+            ctx.strokeRect(ex, ey, ew, eh);
+            ctx.fillStyle = '#22c55e';
+            ctx.fillText('✓ DROP → DONE', ex + ew / 2, ey + eh / 2 + 4);
+            ctx.textAlign = 'left';
+          }
+
           // Draw characters
           this._poDrawCharacters(ctx, ox, oy, Z, T, layout);
 
-          // Store rendering offset for click detection (Phase 5)
+          // Draw ghost character when dragging
+          if (this._PO_DRAG) {
+            const drag = this._PO_DRAG;
+            const cs = this._PO_CHAR_MAP[drag.ticketId];
+            if (cs) {
+              const theme = this.pixelOffice.theme || 'office';
+              const charSprites = this._PO_CHARS[theme];
+              if (charSprites) {
+                const variant = cs.variant % charSprites.length;
+                const sprites = charSprites[variant];
+                const sprite = sprites['idle_0'];
+                if (sprite) {
+                  const W = this._PO_CHAR_W;
+                  const H = this._PO_CHAR_H;
+                  ctx.globalAlpha = 0.5;
+                  ctx.drawImage(sprite, 0, 0, W, H,
+                    drag.screenX - W * Z / 2, drag.screenY - H * Z / 2,
+                    W * Z, H * Z);
+                  ctx.globalAlpha = 1.0;
+                }
+              }
+            }
+          }
+
+          // Store rendering offset for click detection
           this.pixelOffice._renderOffset = { x: ox, y: oy, zoom: Z, tile: T };
         },
 
