@@ -1967,12 +1967,13 @@
           const tileRow = Math.floor(world.y / T);
 
           const ticket = this.tickets.find(t => t.id === drag.ticketId);
-          if (!ticket) return;
+          if (!ticket || !layout.zones) return;
 
-          // Lobby zone: rows 2-3
-          const isLobby = tileRow >= 2 && tileRow <= 3 && tileCol >= 1 && tileCol < layout.cols - 1;
-          // Exit zone: bottom 2 rows
-          const isExit = tileRow >= layout.rows - 3 && tileCol >= 1;
+          // Check which room the drop landed in
+          const lz = layout.zones.lobby;
+          const dz = layout.zones.desks;
+          const isLobby = tileRow >= lz.startRow && tileRow <= lz.endRow && tileCol >= lz.startCol && tileCol <= lz.endCol;
+          const isExit = tileRow >= dz.endRow - 1 && tileCol >= dz.startCol && tileCol <= dz.endCol;
 
           if (isLobby && ticket.state !== 'queued' && ticket.state !== 'todo') {
             this.moveTicket(ticket.id, 'queued');
@@ -2698,7 +2699,7 @@
         _poGetTargetTile(ticket, charState, layout) {
           const id = ticket.id;
           const cs = charState;
-          if (cs.charState === 'walk_to_desk' || cs.charState === 'sit_read' || cs.charState === 'sit_type' || cs.charState === 'failed') {
+          if (cs.charState === 'walk_to_desk' || cs.charState === 'sit_read' || cs.charState === 'sit_type') {
             if (cs.deskIdx != null && cs.deskIdx < layout.deskPositions.length) {
               return layout.deskPositions[cs.deskIdx];
             }
@@ -2791,7 +2792,15 @@
                 cs.celebrateT = 0;
                 this._poPlaySound('success');
               } else if (next === 'failed') {
-                cs.charState = 'failed';
+                // Walk to failed zone
+                const failPos = layout.failedPositions
+                  ? layout.failedPositions[Object.keys(this._PO_CHAR_MAP).length % layout.failedPositions.length]
+                  : { col: 2, row: layout.rows - 4 };
+                const from = { col: Math.round(cs.px / T), row: Math.round(cs.py / T) };
+                cs.path = this._poBFS(layout.grid, from, failPos, layout.rows, layout.cols);
+                cs.pathIdx = 0;
+                cs.charState = 'walk_to_failed';
+                cs.deskIdx = null; // free desk
                 this._poPlaySound('error');
               } else if (next === 'queued' && (prev === 'failed' || cs.charState === 'failed')) {
                 // Retry — walk back to lobby
@@ -2829,6 +2838,8 @@
                     cs.celebrateT = 0;
                   } else if (cs.charState === 'walk_to_lobby') {
                     cs.charState = 'idle_lobby';
+                  } else if (cs.charState === 'walk_to_failed') {
+                    cs.charState = 'failed';
                   }
                 }
               } else {
@@ -2874,7 +2885,7 @@
           switch (cs.charState) {
             case 'idle_lobby': case 'idle_exit':
               return idleF === 0 ? 'idle_0' : 'idle_1';
-            case 'walk_to_desk': case 'walk_to_exit': case 'walk_to_lobby':
+            case 'walk_to_desk': case 'walk_to_exit': case 'walk_to_lobby': case 'walk_to_failed':
               if (cs.facing === 'left') return 'walk_l_' + wf;
               return 'walk_r_' + wf;
             case 'sit_read': return readF === 0 ? 'sit_read_0' : 'sit_read_1';
@@ -2956,11 +2967,8 @@
             // Draw character
             ctx.drawImage(sprite, 0, 0, W, H, drawPx, drawPy, sw, sh);
 
-            // State overlays
-            if (ticket.state === 'failed') {
-              ctx.fillStyle = 'rgba(220, 50, 50, 0.35)';
-              ctx.fillRect(drawPx, drawPy, sw, sh);
-            } else if (ticket.state === 'done' || ticket.state === 'review') {
+            // State overlays — subtle green glow for done (failed uses zone, not overlay)
+            if (ticket.state === 'done' || ticket.state === 'review') {
               ctx.fillStyle = 'rgba(50, 200, 80, 0.15)';
               ctx.fillRect(drawPx, drawPy, sw, sh);
             }
@@ -3015,109 +3023,127 @@
         },
 
         _poGenerateLayout(ticketCount) {
-          const desks = Math.max(3, ticketCount);
-          const desksPerRow = 3;
+          // Desk count: at least maxParallel so every active worker gets a seat
+          const maxP = this.maxParallel || 2;
+          const desks = Math.max(maxP, ticketCount, 3);
+          const desksPerRow = Math.min(Math.max(maxP, 3), 4);
           const deskRows = Math.ceil(desks / desksPerRow);
 
-          // Office dimensions: walls + lobby + desk rows + exit
-          // Each desk row needs 3 tiles height (desk + chair + gap)
-          const cols = Math.max(12, desksPerRow * 4 + 4); // 4 tiles per desk (deskL + deskR + gap + gap) + margins
-          const rows = Math.max(8, 2 + 2 + deskRows * 3 + 2); // wall(2) + lobby(2) + desks + exit(2)
+          // Room-based layout (pixel-agents style):
+          //   ┌──────────────┬─────────┐
+          //   │ WAITING ROOM │ FAILED  │  (top rooms, split by vertical wall)
+          //   │  door, rug   │  room   │
+          //   ├──────────────┴─────────┤  (horizontal wall separator)
+          //   │      WORK ROOM         │
+          //   │  desk desk desk desk   │
+          //   │                  EXIT  │
+          //   └────────────────────────┘
 
-          // Build grid: 0=floor, 1=wall, 2=wall_top, 3=desk_l, 4=desk_r, 5=chair, 6=door, 7=exit, 8=plant, 9=bookshelf, 10=cooler, 11=rug
+          const workCols = desksPerRow * 4 + 2; // desk space + margins
+          const failedRoomW = 6;                 // 6 cols for failed room
+          const divCol = workCols + 1;           // vertical wall column
+          const cols = Math.max(16, divCol + failedRoomW + 1);
+          const topRoomH = 5;                    // rows for waiting/failed rooms (rows 2-6)
+          const horizWallRow = topRoomH + 2;     // row 7 = horizontal separator
+          const workStart = horizWallRow + 1;    // row 8 = work room starts
+          const workH = deskRows * 3 + 1;
+          const rows = workStart + workH + 1;    // +1 for bottom wall
+
+          // Init grid: 0=floor
           const grid = [];
           for (let r = 0; r < rows; r++) {
             grid[r] = [];
-            for (let c = 0; c < cols; c++) {
-              grid[r][c] = 0; // floor
-            }
+            for (let c = 0; c < cols; c++) grid[r][c] = 0;
           }
 
-          // Walls — top 2 rows
-          for (let c = 0; c < cols; c++) {
-            grid[0][c] = 2; // wall top cap
-            grid[1][c] = 1; // wall body
-          }
+          // ── Outer walls ──
+          for (let c = 0; c < cols; c++) { grid[0][c] = 2; grid[1][c] = 1; grid[rows-1][c] = 1; }
+          for (let r = 2; r < rows - 1; r++) { grid[r][0] = 1; grid[r][cols-1] = 1; }
 
-          // Door — at col 1, row 1
+          // ── Horizontal wall separator between top rooms and work room ──
+          for (let c = 0; c < cols; c++) grid[horizWallRow][c] = 1;
+          // Door from waiting room to work room
+          grid[horizWallRow][2] = 6;
+
+          // ── Vertical wall between waiting room and failed room ──
+          for (let r = 1; r <= horizWallRow; r++) grid[r][divCol] = 1;
+          // Door between rooms
+          grid[Math.floor(horizWallRow / 2) + 1][divCol] = 6;
+
+          // ── Entrance door (top-left) ──
           grid[1][1] = 6;
 
-          // Side walls
-          for (let r = 2; r < rows; r++) {
-            grid[r][0] = 1;
-            grid[r][cols - 1] = 1;
-          }
+          // ── Exit door (bottom-right) ──
+          grid[rows-1][cols-2] = 7;
 
-          // Bottom wall
-          for (let c = 0; c < cols; c++) {
-            grid[rows - 1][c] = 1;
-          }
-
-          // Exit — bottom right area
-          grid[rows - 1][cols - 2] = 7;
-
-          // Plants in corners
-          if (rows > 5 && cols > 5) {
-            grid[2][cols - 2] = 8;
-            grid[rows - 2][1] = 8;
-          }
-
-          // Bookshelves along walls (1-2 per office)
-          if (cols > 8) {
-            grid[2][1] = 9; // bookshelf near top-left
-            if (cols > 10) grid[2][cols - 3] = 9; // bookshelf near top-right
-          }
-
-          // Water cooler near lobby
-          if (rows > 6 && cols > 6) {
-            grid[3][cols - 2] = 10;
-          }
-
-          // Rug tiles in lobby area
-          if (cols > 8) {
-            for (let c = 4; c < Math.min(cols - 4, 8); c++) {
-              if (grid[2][c] === 0) grid[2][c] = 11;
-              if (grid[3][c] === 0) grid[3][c] = 11;
+          // ── WAITING ROOM furnishing (rows 2 to horizWallRow-1, cols 1 to divCol-1) ──
+          // Rug flooring
+          for (let r = 2; r < horizWallRow; r++) {
+            for (let c = 2; c < divCol - 1; c++) {
+              if (grid[r][c] === 0) grid[r][c] = 11; // rug
             }
           }
+          // Bookshelf + cooler
+          if (divCol > 4) { grid[2][1] = 9; grid[2][divCol-2] = 10; }
+          // Plant
+          grid[horizWallRow-1][1] = 8;
 
-          // Place desks
-          const deskPositions = []; // {col, row} — the chair position (where character sits)
-          const lobbyPositions = []; // standing spots in lobby
-          const startRow = 4; // leave lobby space (rows 2-3)
-          const startCol = 2;
+          // ── FAILED ROOM furnishing (rows 2 to horizWallRow-1, cols divCol+1 to cols-2) ──
+          // Plants + bookshelf in failed room
+          grid[2][divCol+1] = 9;
+          grid[2][cols-2] = 8;
+          grid[horizWallRow-1][cols-2] = 8;
 
+          // ── WORK ROOM desks ──
+          const deskPositions = [];
+          const deskStartRow = workStart + 1;
+          const deskStartCol = 2;
           for (let dr = 0; dr < deskRows; dr++) {
             for (let dc = 0; dc < desksPerRow; dc++) {
               const deskIdx = dr * desksPerRow + dc;
               if (deskIdx >= desks) break;
-
-              const c = startCol + dc * 4;
-              const r = startRow + dr * 3;
-
+              const c = deskStartCol + dc * 4;
+              const r = deskStartRow + dr * 3;
               if (r + 1 < rows - 1 && c + 1 < cols - 1) {
-                grid[r][c] = 3;     // desk left (monitor)
-                grid[r][c + 1] = 4; // desk right (keyboard)
-                grid[r + 1][c] = 0; // floor under chair area
-                grid[r + 1][c + 1] = 5; // chair
-                deskPositions.push({ col: c + 1, row: r + 1 }); // chair tile
+                grid[r][c] = 3; grid[r][c+1] = 4; grid[r+1][c+1] = 5;
+                deskPositions.push({ col: c+1, row: r+1 });
               }
             }
           }
+          // Plants in work room corners
+          grid[workStart][cols-2] = 8;
 
-          // Lobby positions (row 2-3, between walls)
-          for (let c = 2; c < cols - 2; c += 2) {
-            lobbyPositions.push({ col: c, row: 2 });
-            lobbyPositions.push({ col: c, row: 3 });
+          // ── POSITIONS ──
+          // Lobby (waiting room floor tiles)
+          const lobbyPositions = [];
+          for (let c = 2; c < divCol - 1; c += 2) {
+            for (let r = 3; r < horizWallRow - 1; r++) {
+              lobbyPositions.push({ col: c, row: r });
+            }
           }
 
-          // Exit positions (bottom area, row rows-2)
+          // Failed room positions
+          const failedPositions = [];
+          for (let c = divCol + 2; c < cols - 2; c += 2) {
+            for (let r = 3; r < horizWallRow - 1; r++) {
+              failedPositions.push({ col: c, row: r });
+            }
+          }
+
+          // Exit positions (bottom of work room)
           const exitPositions = [];
           for (let c = cols - 4; c < cols - 1; c++) {
             exitPositions.push({ col: c, row: rows - 2 });
           }
 
-          return { grid, cols, rows, deskPositions, lobbyPositions, exitPositions };
+          return {
+            grid, cols, rows, deskPositions, lobbyPositions, exitPositions, failedPositions,
+            zones: {
+              lobby: { startRow: 2, endRow: horizWallRow - 1, startCol: 1, endCol: divCol - 1, label: 'WAITING' },
+              failed: { startRow: 2, endRow: horizWallRow - 1, startCol: divCol + 1, endCol: cols - 2, label: 'FAILED' },
+              desks: { startRow: workStart, endRow: rows - 2, startCol: 1, endCol: cols - 2, label: 'WORK' },
+            }
+          };
         },
 
         _startPixelOffice() {
@@ -3285,34 +3311,80 @@
             }
           }
 
+          // ── Zone labels + room tints ──
+          if (layout.zones) {
+            ctx.font = `bold ${Math.max(8, 2.5 * Z)}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+
+            // Failed room — red tint floor
+            const fz = layout.zones.failed;
+            if (fz) {
+              const fx = ox + fz.startCol * T * Z;
+              const fy = oy + fz.startRow * T * Z;
+              const fw = (fz.endCol - fz.startCol + 1) * T * Z;
+              const fh = (fz.endRow - fz.startRow + 1) * T * Z;
+              ctx.fillStyle = 'rgba(220, 50, 50, 0.12)';
+              ctx.fillRect(fx, fy, fw, fh);
+              ctx.fillStyle = 'rgba(220, 80, 80, 0.7)';
+              ctx.fillText('⚠ FAILED', fx + fw / 2, fy + 3 * Z);
+            }
+
+            // Waiting room label
+            const lz = layout.zones.lobby;
+            if (lz) {
+              const lx = ox + lz.startCol * T * Z;
+              const ly = oy + lz.startRow * T * Z;
+              const lw = (lz.endCol - lz.startCol + 1) * T * Z;
+              ctx.fillStyle = 'rgba(100, 160, 255, 0.6)';
+              ctx.fillText('⏳ WAITING', lx + lw / 2, ly + 2 * Z);
+            }
+
+            // Work room label
+            const dz = layout.zones.desks;
+            if (dz) {
+              const dx = ox + dz.startCol * T * Z;
+              const dy = oy + dz.startRow * T * Z;
+              const dw = (dz.endCol - dz.startCol + 1) * T * Z;
+              ctx.fillStyle = 'rgba(200, 200, 200, 0.4)';
+              ctx.fillText('💻 WORKING', dx + dw / 2, dy + 2 * Z);
+            }
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'alphabetic';
+          }
+
           // Draw drop zone highlights when dragging a character
-          if (this._PO_DRAG) {
-            // Lobby zone highlight (rows 2-3)
-            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
-            ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
-            ctx.lineWidth = 2;
-            const lx = ox + 1 * T * Z;
-            const ly = oy + 2 * T * Z;
-            const lw = (layout.cols - 2) * T * Z;
-            const lh = 2 * T * Z;
-            ctx.fillRect(lx, ly, lw, lh);
-            ctx.strokeRect(lx, ly, lw, lh);
-            ctx.fillStyle = '#3b82f6';
+          if (this._PO_DRAG && layout.zones) {
             ctx.font = `${Math.max(10, 3.5 * Z)}px monospace`;
             ctx.textAlign = 'center';
+            ctx.lineWidth = 2;
+
+            // Waiting room = drop → QUEUED
+            const lz = layout.zones.lobby;
+            const lx = ox + lz.startCol * T * Z;
+            const ly = oy + lz.startRow * T * Z;
+            const lw = (lz.endCol - lz.startCol + 1) * T * Z;
+            const lh = (lz.endRow - lz.startRow + 1) * T * Z;
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.25)';
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+            ctx.fillRect(lx, ly, lw, lh);
+            ctx.strokeRect(lx, ly, lw, lh);
+            ctx.fillStyle = '#60a5fa';
             ctx.fillText('⏳ DROP → QUEUED', lx + lw / 2, ly + lh / 2 + 4);
 
-            // Exit zone highlight (bottom rows)
-            ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
-            ctx.strokeStyle = 'rgba(34, 197, 94, 0.6)';
-            const ex = ox + 1 * T * Z;
-            const ey = oy + (layout.rows - 3) * T * Z;
-            const ew = (layout.cols - 2) * T * Z;
+            // Work room exit area = drop → DONE
+            const dz = layout.zones.desks;
+            const ex = ox + dz.startCol * T * Z;
+            const ey = oy + (dz.endRow - 1) * T * Z;
+            const ew = (dz.endCol - dz.startCol + 1) * T * Z;
             const eh = 2 * T * Z;
+            ctx.fillStyle = 'rgba(34, 197, 94, 0.25)';
+            ctx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
             ctx.fillRect(ex, ey, ew, eh);
             ctx.strokeRect(ex, ey, ew, eh);
-            ctx.fillStyle = '#22c55e';
+            ctx.fillStyle = '#4ade80';
             ctx.fillText('✓ DROP → DONE', ex + ew / 2, ey + eh / 2 + 4);
+
             ctx.textAlign = 'left';
           }
 
