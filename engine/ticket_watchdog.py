@@ -114,7 +114,7 @@ class TicketWatchdog:
         error = f"Worker timeout exceeded ({self._get_worker_timeout() // 60}min)"
         print(f"[watchdog] {ticket_id}: stale — {error}", file=sys.stderr)
         await self.state.update_ticket(ticket_id, state=TicketState.FAILED, error=error)
-        await self.broadcaster.broadcast_update(ticket.run_id)
+        await self.broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.FAILED, error=error)
 
         # Auto-retry will be triggered by on_ticket_failed if enabled
         self.on_ticket_failed(ticket_id)
@@ -137,7 +137,7 @@ class TicketWatchdog:
         print(f"[watchdog] {ticket_id}: retrying (attempt {count})", file=sys.stderr)
 
         await self.state.update_ticket(ticket_id, state=TicketState.QUEUED, error=None)
-        await self.broadcaster.broadcast_update(ticket.run_id)
+        await self.broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.QUEUED)
 
         if self._requeue_callback:
             await self._requeue_callback(ticket.run_id)

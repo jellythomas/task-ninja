@@ -3083,13 +3083,20 @@
               if (grid[r][c] === 0) grid[r][c] = 11; // rug
             }
           }
-          // Bookshelf + cooler
-          if (divCol > 4) { grid[2][1] = 9; grid[2][divCol-2] = 10; }
-          // Plant
+          // Decorations (keep col 1 clear for entrance path!)
+          if (divCol > 4) { grid[2][3] = 9; grid[2][divCol-2] = 10; }
+          // Plants along edges
           grid[horizWallRow-1][1] = 8;
+          grid[2][1] = 8; // plant near entrance (walkable, unlike bookshelf)
 
           // ── FAILED ROOM furnishing (rows 2 to horizWallRow-1, cols divCol+1 to cols-2) ──
-          // Plants + bookshelf in failed room
+          // Rug in failed room too (visual consistency)
+          for (let r = 2; r < horizWallRow; r++) {
+            for (let c = divCol + 1; c < cols - 1; c++) {
+              if (grid[r][c] === 0) grid[r][c] = 11;
+            }
+          }
+          // Decorations
           grid[2][divCol+1] = 9;
           grid[2][cols-2] = 8;
           grid[horizWallRow-1][cols-2] = 8;
@@ -3311,44 +3318,84 @@
             }
           }
 
-          // ── Zone labels + room tints ──
+          // ── Zone tints + labels — each room visually reflects its status ──
           if (layout.zones) {
-            ctx.font = `bold ${Math.max(8, 2.5 * Z)}px monospace`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
+            const animPulse = Math.sin(Date.now() / 1200) * 0.03;
 
-            // Failed room — red tint floor
+            // ── WAITING ROOM — calm blue tint ──
+            const lz = layout.zones.lobby;
+            if (lz) {
+              const lx = ox + lz.startCol * T * Z;
+              const ly = oy + lz.startRow * T * Z;
+              const lw = (lz.endCol - lz.startCol + 1) * T * Z;
+              const lh = (lz.endRow - lz.startRow + 1) * T * Z;
+              // Soft blue floor tint
+              ctx.fillStyle = `rgba(60, 130, 220, ${0.08 + animPulse})`;
+              ctx.fillRect(lx, ly, lw, lh);
+              // Top accent bar
+              ctx.fillStyle = 'rgba(59, 130, 246, 0.35)';
+              ctx.fillRect(lx, ly, lw, 2 * Z);
+              // Label
+              ctx.font = `bold ${Math.max(8, 2.5 * Z)}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillStyle = 'rgba(100, 170, 255, 0.75)';
+              ctx.fillText('WAITING', lx + lw / 2, ly + 3 * Z);
+            }
+
+            // ── FAILED ROOM — pulsing red warning tint ──
             const fz = layout.zones.failed;
             if (fz) {
               const fx = ox + fz.startCol * T * Z;
               const fy = oy + fz.startRow * T * Z;
               const fw = (fz.endCol - fz.startCol + 1) * T * Z;
               const fh = (fz.endRow - fz.startRow + 1) * T * Z;
-              ctx.fillStyle = 'rgba(220, 50, 50, 0.12)';
+              // Red floor tint with subtle pulse
+              const redPulse = Math.sin(Date.now() / 800) * 0.04;
+              ctx.fillStyle = `rgba(200, 40, 40, ${0.15 + redPulse})`;
               ctx.fillRect(fx, fy, fw, fh);
-              ctx.fillStyle = 'rgba(220, 80, 80, 0.7)';
-              ctx.fillText('⚠ FAILED', fx + fw / 2, fy + 3 * Z);
+              // Top accent bar — danger stripe
+              ctx.fillStyle = 'rgba(220, 50, 50, 0.5)';
+              ctx.fillRect(fx, fy, fw, 2 * Z);
+              // Danger corner markers
+              const cm = 3 * Z;
+              ctx.strokeStyle = 'rgba(220, 60, 60, 0.4)';
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(fx + cm, fy); ctx.lineTo(fx, fy); ctx.lineTo(fx, fy + cm);
+              ctx.moveTo(fx + fw - cm, fy); ctx.lineTo(fx + fw, fy); ctx.lineTo(fx + fw, fy + cm);
+              ctx.moveTo(fx, fy + fh - cm); ctx.lineTo(fx, fy + fh); ctx.lineTo(fx + cm, fy + fh);
+              ctx.moveTo(fx + fw, fy + fh - cm); ctx.lineTo(fx + fw, fy + fh); ctx.lineTo(fx + fw - cm, fy + fh);
+              ctx.stroke();
+              // Label
+              ctx.font = `bold ${Math.max(8, 2.5 * Z)}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillStyle = 'rgba(240, 80, 80, 0.8)';
+              ctx.fillText('FAILED', fx + fw / 2, fy + 3 * Z);
             }
 
-            // Waiting room label
-            const lz = layout.zones.lobby;
-            if (lz) {
-              const lx = ox + lz.startCol * T * Z;
-              const ly = oy + lz.startRow * T * Z;
-              const lw = (lz.endCol - lz.startCol + 1) * T * Z;
-              ctx.fillStyle = 'rgba(100, 160, 255, 0.6)';
-              ctx.fillText('⏳ WAITING', lx + lw / 2, ly + 2 * Z);
-            }
-
-            // Work room label
+            // ── WORK ROOM — productive green-tinted glow ──
             const dz = layout.zones.desks;
             if (dz) {
               const dx = ox + dz.startCol * T * Z;
               const dy = oy + dz.startRow * T * Z;
               const dw = (dz.endCol - dz.startCol + 1) * T * Z;
-              ctx.fillStyle = 'rgba(200, 200, 200, 0.4)';
-              ctx.fillText('💻 WORKING', dx + dw / 2, dy + 2 * Z);
+              const dh = (dz.endRow - dz.startRow + 1) * T * Z;
+              // Subtle green floor tint
+              ctx.fillStyle = `rgba(40, 180, 80, ${0.05 + animPulse * 0.5})`;
+              ctx.fillRect(dx, dy, dw, dh);
+              // Top accent bar
+              ctx.fillStyle = 'rgba(34, 197, 94, 0.25)';
+              ctx.fillRect(dx, dy, dw, 2 * Z);
+              // Label
+              ctx.font = `bold ${Math.max(8, 2.5 * Z)}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillStyle = 'rgba(80, 200, 120, 0.55)';
+              ctx.fillText('WORKING', dx + dw / 2, dy + 3 * Z);
             }
+
             ctx.textAlign = 'left';
             ctx.textBaseline = 'alphabetic';
           }
