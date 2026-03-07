@@ -436,7 +436,10 @@ Estimated addition: ~800–1200 lines of JavaScript for the engine + sprites.
 8. Speech bubbles with ticket key + state icon
 9. Click character → DOM popup card (same info as kanban card)
 10. Sound effects via Web Audio API (toggleable, off by default)
-11. localStorage persistence (view preference, theme, sound settings)
+11. Zoom (mouse wheel) + pan (click-drag) for navigating large offices
+12. Drag characters between zones to change ticket state (mirrors kanban drag-drop)
+13. Unlimited characters — office auto-grows with ticket count
+14. localStorage persistence (view preference, theme, sound settings)
 
 ### Post-MVP Improvements
 
@@ -455,8 +458,8 @@ Estimated addition: ~800–1200 lines of JavaScript for the engine + sprites.
 
 ---
 
-## Open Questions
+## Resolved Decisions
 
-1. **Character limit:** Should we cap at ~12 characters on screen, or let it grow indefinitely?
-2. **Zoom controls:** Mouse wheel zoom + pan, or fixed zoom?
-3. **Kanban drag-drop in pixel view:** Should users be able to drag characters between zones to manually change ticket state, or is that kanban-only?
+1. **Character limit:** Unlimited. Office auto-grows to accommodate any number of tickets.
+2. **Zoom controls:** Mouse wheel zoom + click-drag pan. Allows navigating large offices with many characters.
+3. **Drag characters:** Yes — drag a character between zones (lobby/desk/exit) to manually change ticket state, mirroring kanban drag-drop functionality.
