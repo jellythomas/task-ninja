@@ -1750,23 +1750,253 @@
           }
         },
 
+        // ── Pixel Office Tile & Layout Constants ─────────────────
+        _PO_TILE: 16,
+        _PO_ZOOM: 3,
+        _PO_TILES: null,   // cached tile ImageData canvases
+        _PO_LAYOUT: null,  // current office grid + metadata
+        _PO_LAST_COUNT: -1, // last ticket count used for layout
+
+        _poInitTiles() {
+          if (this._PO_TILES) return;
+          const T = this._PO_TILE;
+          const make = (drawFn) => {
+            const c = document.createElement('canvas');
+            c.width = T; c.height = T;
+            const x = c.getContext('2d');
+            x.imageSmoothingEnabled = false;
+            drawFn(x, T);
+            return c;
+          };
+
+          this._PO_TILES = {
+            // Floor — subtle carpet pattern
+            floor_a: make((x, T) => {
+              x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T);
+              // subtle texture dots
+              x.fillStyle = '#222244';
+              for (let i = 2; i < T; i += 4) for (let j = 2; j < T; j += 4) x.fillRect(i, j, 1, 1);
+            }),
+            floor_b: make((x, T) => {
+              x.fillStyle = '#1c1c36'; x.fillRect(0, 0, T, T);
+              x.fillStyle = '#202042';
+              for (let i = 0; i < T; i += 4) for (let j = 0; j < T; j += 4) x.fillRect(i, j, 1, 1);
+            }),
+            // Wall — brick-like with top highlight
+            wall: make((x, T) => {
+              x.fillStyle = '#2a2a4e'; x.fillRect(0, 0, T, T);
+              // brick lines
+              x.fillStyle = '#333360';
+              x.fillRect(0, 0, T, 2); // top highlight
+              x.fillRect(0, 7, T, 1); // mortar line
+              x.fillRect(4, 0, 1, 7);
+              x.fillRect(8, 7, 1, T - 7);
+              x.fillRect(12, 0, 1, 7);
+              // bottom shadow
+              x.fillStyle = '#1a1a35';
+              x.fillRect(0, T - 1, T, 1);
+            }),
+            // Wall top (darker cap)
+            wall_top: make((x, T) => {
+              x.fillStyle = '#3a3a6a'; x.fillRect(0, 0, T, T);
+              x.fillStyle = '#4a4a7a'; x.fillRect(0, 0, T, 2);
+              x.fillStyle = '#2a2a50'; x.fillRect(0, T - 2, T, 2);
+            }),
+            // Desk (left half — has monitor)
+            desk_l: make((x, T) => {
+              // desk surface
+              x.fillStyle = '#5a4a3a'; x.fillRect(0, 2, T, 10);
+              x.fillStyle = '#6a5a48'; x.fillRect(0, 2, T, 2); // top edge
+              x.fillStyle = '#4a3a2a'; x.fillRect(0, 12, T, 1); // shadow
+              // monitor
+              x.fillStyle = '#222'; x.fillRect(3, 0, 10, 7);
+              x.fillStyle = '#1a3a5a'; x.fillRect(4, 1, 8, 5); // screen
+              // legs
+              x.fillStyle = '#4a3a2a';
+              x.fillRect(1, 13, 2, 3);
+              x.fillRect(13, 13, 2, 3);
+            }),
+            // Desk (right half)
+            desk_r: make((x, T) => {
+              // desk surface
+              x.fillStyle = '#5a4a3a'; x.fillRect(0, 2, T, 10);
+              x.fillStyle = '#6a5a48'; x.fillRect(0, 2, T, 2);
+              x.fillStyle = '#4a3a2a'; x.fillRect(0, 12, T, 1);
+              // keyboard area
+              x.fillStyle = '#333'; x.fillRect(2, 4, 8, 4);
+              x.fillStyle = '#444'; x.fillRect(3, 5, 6, 2); // keys
+              // legs
+              x.fillStyle = '#4a3a2a';
+              x.fillRect(1, 13, 2, 3);
+              x.fillRect(13, 13, 2, 3);
+            }),
+            // Chair (facing up — toward desk)
+            chair: make((x, T) => {
+              // seat
+              x.fillStyle = '#3a3a6a'; x.fillRect(3, 6, 10, 8);
+              x.fillStyle = '#4a4a7a'; x.fillRect(3, 6, 10, 2); // cushion top
+              // backrest
+              x.fillStyle = '#2a2a5a'; x.fillRect(4, 3, 8, 4);
+              x.fillStyle = '#3a3a6a'; x.fillRect(5, 4, 6, 2);
+              // wheels
+              x.fillStyle = '#222';
+              x.fillRect(4, 14, 2, 2);
+              x.fillRect(10, 14, 2, 2);
+              x.fillRect(7, 15, 2, 1);
+            }),
+            // Door
+            door: make((x, T) => {
+              x.fillStyle = '#5a3a2a'; x.fillRect(2, 0, 12, T);
+              x.fillStyle = '#6a4a38'; x.fillRect(3, 1, 10, T - 2);
+              // handle
+              x.fillStyle = '#daa520'; x.fillRect(10, 8, 2, 2);
+              // frame
+              x.fillStyle = '#4a2a1a';
+              x.fillRect(1, 0, 1, T); x.fillRect(14, 0, 1, T);
+              x.fillRect(1, 0, 14, 1);
+            }),
+            // Exit sign area
+            exit: make((x, T) => {
+              x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T);
+              // exit sign
+              x.fillStyle = '#2a5a2a'; x.fillRect(2, 2, 12, 6);
+              x.fillStyle = '#4ae44a'; x.fillRect(3, 3, 10, 4);
+              // arrow
+              x.fillStyle = '#2a5a2a';
+              x.fillRect(6, 4, 4, 2);
+              x.fillRect(8, 3, 2, 4);
+            }),
+            // Plant decoration
+            plant: make((x, T) => {
+              // pot
+              x.fillStyle = '#8a5a3a'; x.fillRect(4, 10, 8, 6);
+              x.fillStyle = '#9a6a48'; x.fillRect(3, 10, 10, 2);
+              // leaves
+              x.fillStyle = '#2a7a3a';
+              x.fillRect(6, 2, 4, 8);
+              x.fillRect(3, 4, 3, 4);
+              x.fillRect(10, 4, 3, 4);
+              x.fillStyle = '#3a9a4a';
+              x.fillRect(7, 3, 2, 6);
+              x.fillRect(4, 5, 2, 2);
+              x.fillRect(10, 5, 2, 2);
+            }),
+          };
+        },
+
+        _poGenerateLayout(ticketCount) {
+          const desks = Math.max(3, ticketCount);
+          const desksPerRow = 3;
+          const deskRows = Math.ceil(desks / desksPerRow);
+
+          // Office dimensions: walls + lobby + desk rows + exit
+          // Each desk row needs 3 tiles height (desk + chair + gap)
+          const cols = Math.max(12, desksPerRow * 4 + 4); // 4 tiles per desk (deskL + deskR + gap + gap) + margins
+          const rows = Math.max(8, 2 + 2 + deskRows * 3 + 2); // wall(2) + lobby(2) + desks + exit(2)
+
+          // Build grid: 0=floor, 1=wall, 2=wall_top, 3=desk_l, 4=desk_r, 5=chair, 6=door, 7=exit, 8=plant
+          const grid = [];
+          for (let r = 0; r < rows; r++) {
+            grid[r] = [];
+            for (let c = 0; c < cols; c++) {
+              grid[r][c] = 0; // floor
+            }
+          }
+
+          // Walls — top 2 rows
+          for (let c = 0; c < cols; c++) {
+            grid[0][c] = 2; // wall top cap
+            grid[1][c] = 1; // wall body
+          }
+
+          // Door — at col 1, row 1
+          grid[1][1] = 6;
+
+          // Side walls
+          for (let r = 2; r < rows; r++) {
+            grid[r][0] = 1;
+            grid[r][cols - 1] = 1;
+          }
+
+          // Bottom wall
+          for (let c = 0; c < cols; c++) {
+            grid[rows - 1][c] = 1;
+          }
+
+          // Exit — bottom right area
+          grid[rows - 1][cols - 2] = 7;
+
+          // Plants in corners
+          if (rows > 5 && cols > 5) {
+            grid[2][cols - 2] = 8;
+            grid[rows - 2][1] = 8;
+          }
+
+          // Place desks
+          const deskPositions = []; // {col, row} — the chair position (where character sits)
+          const lobbyPositions = []; // standing spots in lobby
+          const startRow = 4; // leave lobby space (rows 2-3)
+          const startCol = 2;
+
+          for (let dr = 0; dr < deskRows; dr++) {
+            for (let dc = 0; dc < desksPerRow; dc++) {
+              const deskIdx = dr * desksPerRow + dc;
+              if (deskIdx >= desks) break;
+
+              const c = startCol + dc * 4;
+              const r = startRow + dr * 3;
+
+              if (r + 1 < rows - 1 && c + 1 < cols - 1) {
+                grid[r][c] = 3;     // desk left (monitor)
+                grid[r][c + 1] = 4; // desk right (keyboard)
+                grid[r + 1][c] = 0; // floor under chair area
+                grid[r + 1][c + 1] = 5; // chair
+                deskPositions.push({ col: c + 1, row: r + 1 }); // chair tile
+              }
+            }
+          }
+
+          // Lobby positions (row 2-3, between walls)
+          for (let c = 2; c < cols - 2; c += 2) {
+            lobbyPositions.push({ col: c, row: 2 });
+            lobbyPositions.push({ col: c, row: 3 });
+          }
+
+          // Exit positions (bottom area, row rows-2)
+          const exitPositions = [];
+          for (let c = cols - 4; c < cols - 1; c++) {
+            exitPositions.push({ col: c, row: rows - 2 });
+          }
+
+          return { grid, cols, rows, deskPositions, lobbyPositions, exitPositions };
+        },
+
         _startPixelOffice() {
-          if (this.pixelOffice._engine) return; // already running
+          if (this.pixelOffice._engine) return;
           const canvas = document.getElementById('pixelOfficeCanvas');
           if (!canvas) return;
           const ctx = canvas.getContext('2d');
           ctx.imageSmoothingEnabled = false;
+
+          // Initialize tile sprite cache
+          this._poInitTiles();
+
+          // Generate initial layout
+          this._PO_LAYOUT = this._poGenerateLayout(this.tickets.length);
+          this._PO_LAST_COUNT = this.tickets.length;
+
+          // Pre-render static tiles to off-screen canvas for performance
+          this._poRenderStaticLayer();
 
           let lastTime = 0;
           let rafId = 0;
           let stopped = false;
 
           const resize = () => {
-            const parent = canvas.parentElement;
-            const dpr = 1; // pixel-art: always 1:1 native pixels
-            canvas.width = parent.clientWidth;
-            canvas.height = parent.clientHeight;
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
             ctx.imageSmoothingEnabled = false;
+            this._poRenderStaticLayer(); // re-render static layer on resize
           };
           resize();
           const resizeObserver = new ResizeObserver(resize);
@@ -1777,10 +2007,7 @@
             const dt = lastTime === 0 ? 0 : Math.min((time - lastTime) / 1000, 0.1);
             lastTime = time;
 
-            // Update phase (will be expanded in later phases)
             this._pixelOfficeUpdate(dt);
-
-            // Render phase
             ctx.imageSmoothingEnabled = false;
             this._pixelOfficeRender(ctx, canvas.width, canvas.height);
 
@@ -1804,83 +2031,88 @@
           }
         },
 
-        _pixelOfficeUpdate(dt) {
-          // Phase 1: no-op — will be filled in Phase 4 (state machine + movement)
-        },
+        _poRenderStaticLayer() {
+          // Render all static tiles (floor, walls, furniture) to an off-screen canvas
+          const layout = this._PO_LAYOUT;
+          if (!layout) return;
+          const T = this._PO_TILE;
+          const offscreen = document.createElement('canvas');
+          offscreen.width = layout.cols * T;
+          offscreen.height = layout.rows * T;
+          const ox = offscreen.getContext('2d');
+          ox.imageSmoothingEnabled = false;
 
-        _pixelOfficeRender(ctx, w, h) {
-          // Clear
-          ctx.fillStyle = '#0a0a1a';
-          ctx.fillRect(0, 0, w, h);
+          const tiles = this._PO_TILES;
+          const tileMap = { 0: null, 1: 'wall', 2: 'wall_top', 3: 'desk_l', 4: 'desk_r', 5: 'chair', 6: 'door', 7: 'exit', 8: 'plant' };
 
-          // Phase 1: draw a simple grid placeholder to confirm rendering works
-          const TILE = 16;
-          const zoom = 3;
-          const cols = Math.floor(w / (TILE * zoom));
-          const rows = Math.floor(h / (TILE * zoom));
-          const offsetX = Math.floor((w - cols * TILE * zoom) / 2);
-          const offsetY = Math.floor((h - rows * TILE * zoom) / 2);
+          for (let r = 0; r < layout.rows; r++) {
+            for (let c = 0; c < layout.cols; c++) {
+              const x = c * T;
+              const y = r * T;
 
-          // Draw floor tiles
-          for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-              const x = offsetX + c * TILE * zoom;
-              const y = offsetY + r * TILE * zoom;
-              // Checkerboard floor
-              ctx.fillStyle = (r + c) % 2 === 0 ? '#1a1a2e' : '#16162a';
-              ctx.fillRect(x, y, TILE * zoom, TILE * zoom);
+              // Always draw floor first
+              const floorTile = (r + c) % 2 === 0 ? tiles.floor_a : tiles.floor_b;
+              ox.drawImage(floorTile, x, y);
+
+              // Draw tile overlay
+              const tileType = layout.grid[r][c];
+              if (tileType !== 0) {
+                const tileName = tileMap[tileType];
+                if (tileName && tiles[tileName]) {
+                  ox.drawImage(tiles[tileName], x, y);
+                }
+              }
             }
           }
 
-          // Draw wall along top
-          for (let c = 0; c < cols; c++) {
-            const x = offsetX + c * TILE * zoom;
-            ctx.fillStyle = '#2a2a4a';
-            ctx.fillRect(x, offsetY, TILE * zoom, TILE * zoom);
-            // Wall top edge highlight
-            ctx.fillStyle = '#3a3a6a';
-            ctx.fillRect(x, offsetY, TILE * zoom, 2 * zoom);
+          this._PO_STATIC = offscreen;
+        },
+
+        _pixelOfficeUpdate(dt) {
+          // Re-generate layout if ticket count changed
+          const count = this.tickets.length;
+          if (count !== this._PO_LAST_COUNT) {
+            this._PO_LAYOUT = this._poGenerateLayout(count);
+            this._PO_LAST_COUNT = count;
+            this._poRenderStaticLayer();
+          }
+        },
+
+        _pixelOfficeRender(ctx, w, h) {
+          ctx.fillStyle = '#0a0a1a';
+          ctx.fillRect(0, 0, w, h);
+
+          const layout = this._PO_LAYOUT;
+          const staticCanvas = this._PO_STATIC;
+          if (!layout || !staticCanvas) return;
+
+          const T = this._PO_TILE;
+          const Z = this._PO_ZOOM;
+          const officeW = layout.cols * T * Z;
+          const officeH = layout.rows * T * Z;
+
+          // Center the office in the canvas
+          const ox = Math.floor((w - officeW) / 2);
+          const oy = Math.floor((h - officeH) / 2);
+
+          // Draw the pre-rendered static layer scaled up
+          ctx.drawImage(staticCanvas, 0, 0, staticCanvas.width, staticCanvas.height, ox, oy, officeW, officeH);
+
+          // Monitor screen glow animation (subtle flicker)
+          const glowPhase = Math.sin(Date.now() / 800) * 0.15 + 0.85;
+          for (let r = 0; r < layout.rows; r++) {
+            for (let c = 0; c < layout.cols; c++) {
+              if (layout.grid[r][c] === 3) { // desk_l has monitor
+                const sx = ox + (c * T + 4) * Z;
+                const sy = oy + (r * T + 1) * Z;
+                ctx.fillStyle = `rgba(40, 120, 200, ${glowPhase * 0.3})`;
+                ctx.fillRect(sx, sy, 8 * Z, 5 * Z);
+              }
+            }
           }
 
-          // Draw placeholder text
-          ctx.fillStyle = '#4a4a6a';
-          ctx.font = '14px monospace';
-          ctx.textAlign = 'center';
-          const ticketCount = this.tickets.length;
-          ctx.fillText(
-            ticketCount > 0 ? `Pixel Office — ${ticketCount} ticket${ticketCount !== 1 ? 's' : ''} — Phase 2 will add characters` : 'Pixel Office — Ready',
-            w / 2, h / 2
-          );
-
-          // Draw ticket count indicators as simple colored squares (preview of characters)
-          const activeTickets = this.tickets.filter(t => ['planning', 'developing'].includes(t.state));
-          const queuedTickets = this.tickets.filter(t => t.state === 'queued');
-          const doneTickets = this.tickets.filter(t => ['review', 'done'].includes(t.state));
-          const failedTickets = this.tickets.filter(t => t.state === 'failed');
-
-          let px = offsetX + TILE * zoom * 2;
-          const baseY = offsetY + TILE * zoom * 3;
-          const size = TILE * zoom - 4;
-
-          // Active = blue squares
-          activeTickets.forEach((t, i) => {
-            ctx.fillStyle = '#4a90d9';
-            ctx.fillRect(px + i * (size + 8), baseY, size, size);
-            ctx.fillStyle = '#fff';
-            ctx.font = '9px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(t.jira_key, px + i * (size + 8) + size/2, baseY + size + 12);
-          });
-
-          // Queued = yellow squares
-          queuedTickets.forEach((t, i) => {
-            ctx.fillStyle = '#eab308';
-            ctx.fillRect(px + i * (size + 8), baseY + size + 28, size, size);
-            ctx.fillStyle = '#fff';
-            ctx.font = '9px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(t.jira_key, px + i * (size + 8) + size/2, baseY + size + 28 + size + 12);
-          });
+          // Store rendering offset for click detection (Phase 5)
+          this.pixelOffice._renderOffset = { x: ox, y: oy, zoom: Z, tile: T };
         },
 
         // Computed
