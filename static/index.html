@@ -388,6 +388,7 @@
                 <template x-if="tab.id === 'profiles'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg></template>
                 <template x-if="tab.id === 'jira'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg></template>
                 <template x-if="tab.id === 'notifications'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg></template>
+                <template x-if="tab.id === 'scheduler'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></template>
                 <template x-if="tab.id === 'remote'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></template>
                 <span x-text="tab.label"></span>
               </button>
@@ -415,6 +416,9 @@
               </template>
               <template x-if="tab.id === 'notifications'">
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+              </template>
+              <template x-if="tab.id === 'scheduler'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
               </template>
               <template x-if="tab.id === 'remote'">
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -1494,7 +1498,21 @@
         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
-    <div id="interactive-terminal" class="flex-1 bg-black"></div>
+    <div id="interactive-terminal" class="flex-1 bg-black overflow-y-auto p-4 font-mono text-sm leading-6 scrollbar-thin">
+      <template x-for="(log, idx) in interactiveTerminal.logs" :key="idx">
+        <div class="text-gray-300"><span class="text-gray-600 select-none text-xs mr-2" x-text="((log.timestamp || '').replace(' ', 'T').split('T')[1] || '').split('.')[0]"></span><span x-text="log.line"></span></div>
+      </template>
+      <div x-show="interactiveTerminal.logs.length === 0" class="text-gray-600 italic">Waiting for output...</div>
+    </div>
+    <!-- Input bar -->
+    <div class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center gap-2">
+      <span class="text-cyan-400 text-sm font-mono select-none">$</span>
+      <input x-model="interactiveTerminal.inputText"
+             @keydown.enter="sendTerminalInput()"
+             type="text" placeholder="Type to send input to the process..."
+             class="flex-1 bg-black border border-gray-700 rounded px-3 py-1.5 text-sm font-mono text-gray-200 focus:border-cyan-500 focus:outline-none placeholder-gray-600">
+      <button @click="sendTerminalInput()" class="bg-cyan-600 hover:bg-cyan-700 px-3 py-1.5 text-xs rounded font-medium transition text-white">Send</button>
+    </div>
   </div>
 
   <script>
@@ -1527,7 +1545,7 @@
         confirmModal: { show: false, title: '', message: '', ticketId: null },
         editRepoModal: { show: false, id: null, data: {} },
         editProfileModal: { show: false, id: null, data: {} },
-        interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '', ws: null, term: null, fitAddon: null },
+        interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '', logs: [], inputText: '' },
         terminalHeight: 224,
         _terminalDragging: false,
         activeTerminal: null,
@@ -1976,7 +1994,7 @@
           return ticket && ['planning', 'developing'].includes(ticket.state);
         },
 
-        openInteractiveTerminal(ticketId) {
+        async openInteractiveTerminal(ticketId) {
           const ticket = this.tickets.find(t => t.id === ticketId);
           if (!ticket) return;
 
@@ -1984,108 +2002,46 @@
           this.interactiveTerminal.ticketId = ticketId;
           this.interactiveTerminal.ticketKey = ticket.jira_key;
           this.interactiveTerminal.cwd = ticket.worktree_path || '';
+          this.interactiveTerminal.logs = [];
 
+          // Fetch existing logs
+          const result = await this.api('GET', `/api/logs/${ticketId}?tail=1000`);
+          if (result && result.logs) {
+            this.interactiveTerminal.logs = result.logs;
+          }
+
+          // Auto-scroll to bottom
           this.$nextTick(() => {
-            const container = document.getElementById('interactive-terminal');
-            if (!container) return;
-            container.innerHTML = '';
-
-            const term = new Terminal({
-              cursorBlink: true,
-              fontSize: 13,
-              fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace',
-              theme: {
-                background: '#000000',
-                foreground: '#e2e8f0',
-                cursor: '#60a5fa',
-                selectionBackground: '#334155',
-              },
-            });
-            const fitAddon = new FitAddon.FitAddon();
-            term.loadAddon(fitAddon);
-            term.open(container);
-            fitAddon.fit();
-
-            term.write('\x1b[36mAttaching to live process...\x1b[0m\r\n');
-
-            this.interactiveTerminal.term = term;
-            this.interactiveTerminal.fitAddon = fitAddon;
-
-            // Connect WebSocket to worker's PTY
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const tokenParam = this._authToken ? `?token=${encodeURIComponent(this._authToken)}` : '';
-            const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal/${ticketId}${tokenParam}`);
-            ws.binaryType = 'arraybuffer';
-            this.interactiveTerminal.ws = ws;
-
-            ws.onopen = () => {
-              ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
-            };
-
-            ws.onmessage = (event) => {
-              if (event.data instanceof ArrayBuffer) {
-                term.write(new Uint8Array(event.data));
-              } else {
-                // JSON control messages (pong, process_exit)
-                try {
-                  const msg = JSON.parse(event.data);
-                  if (msg.type === 'process_exit') {
-                    const color = msg.code === 0 ? '32' : '31';
-                    const label = msg.code === 0 ? 'completed successfully' : `exited with code ${msg.code}`;
-                    term.write(`\r\n\x1b[${color}m[Process ${label}]\x1b[0m\r\n`);
-                  }
-                } catch {
-                  term.write(event.data);
-                }
-              }
-            };
-
-            ws.onclose = (event) => {
-              if (event.code === 4004) {
-                term.write(`\r\n\x1b[33m[No running process for this ticket]\x1b[0m\r\n`);
-              } else {
-                term.write('\r\n\x1b[90m[Detached from process]\x1b[0m\r\n');
-              }
-            };
-
-            ws.onerror = () => {
-              term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
-            };
-
-            // Terminal input -> worker's PTY
-            term.onData((data) => {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(new TextEncoder().encode(data));
-              }
-            });
-
-            // Handle resize
-            const resizeObserver = new ResizeObserver(() => {
-              fitAddon.fit();
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
-              }
-            });
-            resizeObserver.observe(container);
-            this.interactiveTerminal._resizeObserver = resizeObserver;
+            const el = document.getElementById('interactive-terminal');
+            if (el) el.scrollTop = el.scrollHeight;
           });
         },
 
+        _appendInteractiveLog(ticketId, log) {
+          if (!this.interactiveTerminal.show || this.interactiveTerminal.ticketId !== ticketId) return;
+          this.interactiveTerminal.logs.push(log);
+          // Keep max 2000 lines
+          if (this.interactiveTerminal.logs.length > 2000) {
+            this.interactiveTerminal.logs = this.interactiveTerminal.logs.slice(-1500);
+          }
+          this.$nextTick(() => {
+            const el = document.getElementById('interactive-terminal');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        },
+
+        async sendTerminalInput() {
+          const text = this.interactiveTerminal.inputText;
+          if (!text || !this.interactiveTerminal.ticketId) return;
+          // Send text + newline to the worker's PTY
+          await this.api('POST', `/api/tickets/${this.interactiveTerminal.ticketId}/terminal-input`, { input: text + '\n' });
+          this.interactiveTerminal.inputText = '';
+        },
+
         closeInteractiveTerminal() {
-          if (this.interactiveTerminal.ws) {
-            this.interactiveTerminal.ws.close();
-            this.interactiveTerminal.ws = null;
-          }
-          if (this.interactiveTerminal.term) {
-            this.interactiveTerminal.term.dispose();
-            this.interactiveTerminal.term = null;
-          }
-          if (this.interactiveTerminal._resizeObserver) {
-            this.interactiveTerminal._resizeObserver.disconnect();
-            this.interactiveTerminal._resizeObserver = null;
-          }
           this.interactiveTerminal.show = false;
           this.interactiveTerminal.ticketId = null;
+          this.interactiveTerminal.logs = [];
         },
 
         async openExternalTerminal(ticketId) {
@@ -2606,14 +2562,17 @@
             }
 
             if (evtType === 'log') {
+              const logEntry = { timestamp: new Date().toISOString(), line: data.line };
               const logs = [...(this.terminalLogs[data.ticket_id] || [])];
-              logs.push({ timestamp: new Date().toISOString(), line: data.line });
+              logs.push(logEntry);
               const trimmed = logs.length > 500 ? logs.slice(-500) : logs;
               this.terminalLogs = { ...this.terminalLogs, [data.ticket_id]: trimmed };
               this.$nextTick(() => {
                 const el = document.getElementById('terminal-output');
                 if (el) el.scrollTop = el.scrollHeight;
               });
+              // Also feed the Live Process overlay
+              this._appendInteractiveLog(data.ticket_id, logEntry);
             }
 
             if (evtType === 'run_status') {

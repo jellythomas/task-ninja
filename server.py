@@ -1,10 +1,68 @@
 #!/usr/bin/env python3
 """Autonomous Atlassian Task — FastAPI server + orchestrator."""
 
-import asyncio
+import subprocess
 import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
+
+
+def _check_python_version():
+    """Ensure Python version is compatible (3.10+)."""
+    if sys.version_info < (3, 10):
+        print(f"[server] Python 3.10+ required (found {sys.version})", file=sys.stderr)
+        print(f"[server] Install with: brew install python@3.12  (or python@3.11)", file=sys.stderr)
+        sys.exit(1)
+
+
+def _check_dependencies():
+    """Auto-install missing dependencies from requirements.txt on first run."""
+    req_file = Path(__file__).parent / "requirements.txt"
+    if not req_file.exists():
+        return
+    from importlib.metadata import distribution, PackageNotFoundError
+    import re
+    # Extract package names from requirements.txt (strip extras, versions)
+    missing = []
+    for line in req_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Extract base package name (before [extras] or version spec)
+        match = re.match(r"([a-zA-Z0-9_-]+)", line)
+        if not match:
+            continue
+        pkg = match.group(1)
+        try:
+            distribution(pkg)
+        except PackageNotFoundError:
+            missing.append(line)
+    if missing:
+        print(f"[server] Missing dependencies: {', '.join(missing)}", file=sys.stderr)
+        print(f"[server] Installing from requirements.txt...", file=sys.stderr)
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "-r", str(req_file), "-q"],
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError:
+            # Homebrew/system Python — needs --break-system-packages or --user
+            try:
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "-r", str(req_file),
+                     "-q", "--break-system-packages"],
+                )
+            except subprocess.CalledProcessError:
+                print(f"[server] Auto-install failed. Please run manually:", file=sys.stderr)
+                print(f"  pip3 install -r {req_file}", file=sys.stderr)
+                return
+        print(f"[server] Dependencies installed.", file=sys.stderr)
+
+
+_check_python_version()
+_check_dependencies()
+
+import asyncio
+from contextlib import asynccontextmanager
 
 import uvicorn
 import yaml
@@ -838,9 +896,16 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
         await websocket.close(code=4001, reason="Authentication required")
         return
 
-    # Find the live worker for this ticket
+    # Find the live worker for this ticket (with brief retry for startup race)
     worker = orchestrator._workers.get(ticket_id)
+    if worker and not worker.is_running:
+        # Worker exists but process not spawned yet — wait briefly
+        for _ in range(10):
+            await asyncio.sleep(0.5)
+            if worker.is_running:
+                break
     if not worker or not worker.is_running:
+        await websocket.accept()
         await websocket.close(code=4004, reason="No running process for this ticket")
         return
 
@@ -870,6 +935,18 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
         pass
     finally:
         worker.detach_viewer(websocket)
+
+
+@app.post("/api/tickets/{ticket_id}/terminal-input")
+async def terminal_input(ticket_id: str, req: dict):
+    """Send input text to a running worker's PTY."""
+    worker = orchestrator._workers.get(ticket_id)
+    if not worker or not worker.is_running:
+        raise HTTPException(404, "No running process for this ticket")
+    text = req.get("input", "")
+    if text:
+        worker.write_input(text.encode())
+    return {"status": "sent"}
 
 
 @app.post("/api/tickets/{ticket_id}/open-terminal")

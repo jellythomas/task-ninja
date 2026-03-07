@@ -69,6 +69,17 @@ All notable changes to Task Ninja are documented in this file.
 - **Working hours toggle** — enable/disable with start/end time and day-of-week selectors, saved to `.env`
 - **All features optional** — every scheduler feature can be independently toggled on/off
 
+#### Live Process Terminal (2026-03-07)
+- **Live Process overlay** — fullscreen terminal view showing clean parsed logs (same as bottom panel)
+- **Terminal input bar** — send text input to the worker's PTY when the AI agent needs confirmation
+- **`POST /api/tickets/:id/terminal-input`** — new endpoint to send input to running workers
+- **Works on mobile** — log-based rendering (no WebSocket dependency), accessible via remote access
+
+#### Startup & Dependencies (2026-03-07)
+- **Auto-install dependencies** — missing packages from `requirements.txt` installed automatically on first run
+- **Python version check** — enforces Python 3.10+ with helpful error message
+- **Homebrew Python support** — handles `--break-system-packages` automatically
+
 #### 3-Tier Assignment Cascade (2026-03-06)
 - Per-prefix-group and per-ticket assignment overrides in unified ticket modal
 - See [design doc](docs/plans/2026-03-06-unified-ticket-modal-design.md) for full spec

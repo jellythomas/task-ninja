@@ -23,13 +23,16 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 - **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
 - **Any AI agent** — Claude Code, Gemini CLI, or any CLI tool via configurable agent profiles
 - **Live terminal** — watch each worker's output in real-time, tab-switch between active workers
-- **Jira integration** — load tickets from epics, auto-sync status bidirectionally
+- **Live Process overlay** — fullscreen terminal view with input bar to interact with the AI agent when it needs confirmation
+- **Jira integration** — load tickets from epics or paste Jira URLs, auto-sync status bidirectionally
 - **Auto PR creation** — draft PRs opened automatically when workers finish
-- **Multi-repo support** — register multiple repositories, auto-match tickets by Jira key prefix
+- **Multi-repo support** — register multiple repositories, auto-match tickets by `[bracket]` tags in summaries
+- **3-tier assignment** — set repository, branch, and agent profile globally, per prefix group, or per ticket
 - **Smart watchdog** — auto-retry failed tickets, stale detection, working hours enforcement
 - **Push notifications** — browser alerts when tickets complete or fail (Web Push for background)
 - **Remote access** — access from your phone via Tailscale, ngrok, or Cloudflare Tunnel
-- **Scheduler** — one-time or recurring runs with cron expressions
+- **Scheduler** — one-time or recurring runs with visual cron builder, all features optional
+- **Auto-install** — missing Python dependencies installed automatically on first run
 
 ---
 
@@ -37,7 +40,7 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 ### Step 1: Install System Prerequisites
 
-You need **Python 3.11+**, **Git 2.20+**, and **Node.js 18+** (for AI CLI agents).
+You need **Python 3.10+** (3.10–3.14 tested), **Git 2.20+**, and **Node.js 18+** (for AI CLI agents). Dependencies are auto-installed on first run.
 
 **macOS (Homebrew):**
 
@@ -61,7 +64,7 @@ sudo apt install -y python3.11 python3.11-venv git nodejs npm
 Verify versions:
 
 ```bash
-python3 --version   # 3.11 or higher
+python3 --version   # 3.10 or higher
 git --version        # 2.20 or higher
 node --version       # 18 or higher
 npm --version        # 9 or higher
