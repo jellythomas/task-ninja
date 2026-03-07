@@ -357,6 +357,20 @@
             'bg-blue-900/50 text-blue-400 border-blue-800': currentRun.status === 'completed',
           }" class="px-2.5 py-0.5 text-xs font-medium rounded-full border" x-text="currentRun.status.toUpperCase()"></span>
         </template>
+
+        <div class="ml-auto"></div>
+
+        <!-- View Toggle -->
+        <div class="flex bg-gray-800 rounded-lg p-0.5">
+          <button @click="switchBoardView('kanban')" :class="boardView === 'kanban' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'" class="px-2.5 py-1 text-xs rounded-md transition font-medium flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+            <span class="hidden sm:inline">Kanban</span>
+          </button>
+          <button @click="switchBoardView('pixel')" :class="boardView === 'pixel' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'" class="px-2.5 py-1 text-xs rounded-md transition font-medium flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="3" height="3"/><rect x="5" y="1" width="3" height="3"/><rect x="1" y="5" width="3" height="3"/><rect x="5" y="5" width="3" height="3"/><rect x="9" y="1" width="3" height="3"/><rect x="9" y="5" width="3" height="3"/><rect x="1" y="9" width="3" height="3"/><rect x="5" y="9" width="3" height="3"/><rect x="9" y="9" width="3" height="3"/><rect x="12" y="3" width="2" height="2"/><rect x="12" y="7" width="2" height="2"/><rect x="3" y="12" width="2" height="2"/><rect x="7" y="12" width="2" height="2"/></svg>
+            <span class="hidden sm:inline">Pixel Office</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -973,8 +987,39 @@
       </div>
     </div>
 
+    <!-- Pixel Office View -->
+    <div x-show="boardView === 'pixel'" class="flex-1 relative overflow-hidden bg-gray-950" x-cloak>
+      <canvas id="pixelOfficeCanvas" class="w-full h-full" style="image-rendering: pixelated; image-rendering: crisp-edges;"></canvas>
+      <!-- Pixel Office Toolbar -->
+      <div class="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-gray-900/90 backdrop-blur border border-gray-700 rounded-lg px-3 py-1.5 shadow-lg z-10">
+        <select x-model="pixelOffice.theme" @change="localStorage.setItem('tn_pixelTheme', pixelOffice.theme)"
+                class="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-300 focus:outline-none">
+          <option value="office">Office Workers</option>
+          <option value="ninja">Ninja</option>
+        </select>
+        <div class="w-px h-4 bg-gray-700"></div>
+        <button @click="pixelOffice.soundEnabled = !pixelOffice.soundEnabled; localStorage.setItem('tn_pixelSound', pixelOffice.soundEnabled)"
+                :class="pixelOffice.soundEnabled ? 'text-indigo-400' : 'text-gray-500'" class="text-xs flex items-center gap-1 hover:text-white transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <template x-if="pixelOffice.soundEnabled"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.788l4.01-3.343A1 1 0 0112 6.28v11.44a1 1 0 01-1.49.866L6.5 15.212H4a1 1 0 01-1-1v-4.424a1 1 0 011-1h2.5z"/></template>
+            <template x-if="!pixelOffice.soundEnabled"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/></template>
+          </svg>
+          <span x-text="pixelOffice.soundEnabled ? 'On' : 'Off'"></span>
+        </button>
+        <template x-if="pixelOffice.soundEnabled">
+          <input type="range" min="0" max="100" x-model="pixelOffice.soundVolume"
+                 @input="localStorage.setItem('tn_pixelVolume', pixelOffice.soundVolume)"
+                 class="w-16 h-1 accent-indigo-500">
+        </template>
+      </div>
+      <!-- No tickets placeholder -->
+      <div x-show="tickets.length === 0" class="absolute inset-0 flex items-center justify-center">
+        <p class="text-gray-600 text-sm">Load an epic or paste tickets to populate the office</p>
+      </div>
+    </div>
+
     <!-- Desktop Kanban Board -->
-    <div class="kanban-board flex-1 overflow-x-auto p-4">
+    <div x-show="boardView === 'kanban'" class="kanban-board flex-1 overflow-x-auto p-4">
       <div class="flex gap-3 h-full min-w-max">
         <template x-for="col in columns" :key="col.id">
           <div class="w-64 flex-shrink-0 flex flex-col bg-gray-900/50 rounded-xl border border-gray-800">
@@ -1126,7 +1171,7 @@
     </div>
 
     <!-- Mobile List View -->
-    <div class="mobile-list flex-1 overflow-y-auto p-3 space-y-3">
+    <div x-show="boardView === 'kanban'" class="mobile-list flex-1 overflow-y-auto p-3 space-y-3">
       <template x-for="col in columns" :key="col.id">
         <div>
           <button @click="col._open = !col._open" class="flex items-center justify-between w-full px-3 py-2 bg-gray-900/50 rounded-lg border border-gray-800">
@@ -1541,6 +1586,7 @@
         epicTicketOverrides: {},  // jira_key -> { repoId, branch, profileId }
         epicEditingTicket: null,  // jira_key of ticket being edited
         epicFilter: { search: '', activeTags: [] },
+        boardView: localStorage.getItem('tn_boardView') || 'kanban',
         boardFilter: '',
         confirmModal: { show: false, title: '', message: '', ticketId: null },
         editRepoModal: { show: false, id: null, data: {} },
@@ -1568,6 +1614,16 @@
         newSchedule: { type: 'recurring', cron: '0 9 * * 1-5', startTime: '', endTime: '', cronDays: [1,2,3,4,5], cronHour: 9, cronMinute: 0 },
         autoRetry: { enabled: false, delay: 15, max: 3 },
         workingHours: { enabled: false, start: '09:00', end: '18:00', days: ['mon','tue','wed','thu','fri'] },
+
+        // Pixel Office
+        pixelOffice: {
+          _engine: null,
+          selectedCharacter: null,
+          popupPos: { x: 0, y: 0 },
+          theme: localStorage.getItem('tn_pixelTheme') || 'office',
+          soundEnabled: JSON.parse(localStorage.getItem('tn_pixelSound') || 'false'),
+          soundVolume: parseInt(localStorage.getItem('tn_pixelVolume') || '50'),
+        },
 
         settingsTabs: [
           { id: 'general', label: 'General' },
@@ -1639,6 +1695,11 @@
           this.loadSchedulerSettings();
           this.loadSchedules();
           this.$nextTick(() => this.initSortable());
+          if (this.boardView === 'pixel') this.$nextTick(() => this._startPixelOffice());
+          document.addEventListener('visibilitychange', () => {
+            if (document.hidden) this._stopPixelOffice();
+            else if (this.boardView === 'pixel') this._startPixelOffice();
+          });
           setInterval(() => this.tick++, 5000);
         },
 
@@ -1676,6 +1737,150 @@
           document.addEventListener('mouseup', onUp);
           document.addEventListener('touchmove', onMove);
           document.addEventListener('touchend', onUp);
+        },
+
+        // ── Pixel Office Engine ──────────────────────────────────
+        switchBoardView(view) {
+          this.boardView = view;
+          localStorage.setItem('tn_boardView', view);
+          if (view === 'pixel') {
+            this.$nextTick(() => this._startPixelOffice());
+          } else {
+            this._stopPixelOffice();
+          }
+        },
+
+        _startPixelOffice() {
+          if (this.pixelOffice._engine) return; // already running
+          const canvas = document.getElementById('pixelOfficeCanvas');
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = false;
+
+          let lastTime = 0;
+          let rafId = 0;
+          let stopped = false;
+
+          const resize = () => {
+            const parent = canvas.parentElement;
+            const dpr = 1; // pixel-art: always 1:1 native pixels
+            canvas.width = parent.clientWidth;
+            canvas.height = parent.clientHeight;
+            ctx.imageSmoothingEnabled = false;
+          };
+          resize();
+          const resizeObserver = new ResizeObserver(resize);
+          resizeObserver.observe(canvas.parentElement);
+
+          const frame = (time) => {
+            if (stopped) return;
+            const dt = lastTime === 0 ? 0 : Math.min((time - lastTime) / 1000, 0.1);
+            lastTime = time;
+
+            // Update phase (will be expanded in later phases)
+            this._pixelOfficeUpdate(dt);
+
+            // Render phase
+            ctx.imageSmoothingEnabled = false;
+            this._pixelOfficeRender(ctx, canvas.width, canvas.height);
+
+            rafId = requestAnimationFrame(frame);
+          };
+          rafId = requestAnimationFrame(frame);
+
+          this.pixelOffice._engine = {
+            stop() {
+              stopped = true;
+              cancelAnimationFrame(rafId);
+              resizeObserver.disconnect();
+            }
+          };
+        },
+
+        _stopPixelOffice() {
+          if (this.pixelOffice._engine) {
+            this.pixelOffice._engine.stop();
+            this.pixelOffice._engine = null;
+          }
+        },
+
+        _pixelOfficeUpdate(dt) {
+          // Phase 1: no-op — will be filled in Phase 4 (state machine + movement)
+        },
+
+        _pixelOfficeRender(ctx, w, h) {
+          // Clear
+          ctx.fillStyle = '#0a0a1a';
+          ctx.fillRect(0, 0, w, h);
+
+          // Phase 1: draw a simple grid placeholder to confirm rendering works
+          const TILE = 16;
+          const zoom = 3;
+          const cols = Math.floor(w / (TILE * zoom));
+          const rows = Math.floor(h / (TILE * zoom));
+          const offsetX = Math.floor((w - cols * TILE * zoom) / 2);
+          const offsetY = Math.floor((h - rows * TILE * zoom) / 2);
+
+          // Draw floor tiles
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              const x = offsetX + c * TILE * zoom;
+              const y = offsetY + r * TILE * zoom;
+              // Checkerboard floor
+              ctx.fillStyle = (r + c) % 2 === 0 ? '#1a1a2e' : '#16162a';
+              ctx.fillRect(x, y, TILE * zoom, TILE * zoom);
+            }
+          }
+
+          // Draw wall along top
+          for (let c = 0; c < cols; c++) {
+            const x = offsetX + c * TILE * zoom;
+            ctx.fillStyle = '#2a2a4a';
+            ctx.fillRect(x, offsetY, TILE * zoom, TILE * zoom);
+            // Wall top edge highlight
+            ctx.fillStyle = '#3a3a6a';
+            ctx.fillRect(x, offsetY, TILE * zoom, 2 * zoom);
+          }
+
+          // Draw placeholder text
+          ctx.fillStyle = '#4a4a6a';
+          ctx.font = '14px monospace';
+          ctx.textAlign = 'center';
+          const ticketCount = this.tickets.length;
+          ctx.fillText(
+            ticketCount > 0 ? `Pixel Office — ${ticketCount} ticket${ticketCount !== 1 ? 's' : ''} — Phase 2 will add characters` : 'Pixel Office — Ready',
+            w / 2, h / 2
+          );
+
+          // Draw ticket count indicators as simple colored squares (preview of characters)
+          const activeTickets = this.tickets.filter(t => ['planning', 'developing'].includes(t.state));
+          const queuedTickets = this.tickets.filter(t => t.state === 'queued');
+          const doneTickets = this.tickets.filter(t => ['review', 'done'].includes(t.state));
+          const failedTickets = this.tickets.filter(t => t.state === 'failed');
+
+          let px = offsetX + TILE * zoom * 2;
+          const baseY = offsetY + TILE * zoom * 3;
+          const size = TILE * zoom - 4;
+
+          // Active = blue squares
+          activeTickets.forEach((t, i) => {
+            ctx.fillStyle = '#4a90d9';
+            ctx.fillRect(px + i * (size + 8), baseY, size, size);
+            ctx.fillStyle = '#fff';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(t.jira_key, px + i * (size + 8) + size/2, baseY + size + 12);
+          });
+
+          // Queued = yellow squares
+          queuedTickets.forEach((t, i) => {
+            ctx.fillStyle = '#eab308';
+            ctx.fillRect(px + i * (size + 8), baseY + size + 28, size, size);
+            ctx.fillStyle = '#fff';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(t.jira_key, px + i * (size + 8) + size/2, baseY + size + 28 + size + 12);
+          });
         },
 
         // Computed
