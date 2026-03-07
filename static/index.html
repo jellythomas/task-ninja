@@ -1981,6 +1981,82 @@
           }
         },
 
+        // ── Sound System (Web Audio API) ─────────────────────────
+        _poEnsureAudio() {
+          if (!this._PO_AUDIO_CTX) {
+            this._PO_AUDIO_CTX = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          if (this._PO_AUDIO_CTX.state === 'suspended') {
+            this._PO_AUDIO_CTX.resume();
+          }
+          return this._PO_AUDIO_CTX;
+        },
+
+        _poPlaySound(type) {
+          if (!this.pixelOffice.soundEnabled) return;
+          const audioCtx = this._poEnsureAudio();
+          const vol = (this.pixelOffice.soundVolume || 50) / 100;
+          const now = audioCtx.currentTime;
+
+          const makeGain = (v) => {
+            const g = audioCtx.createGain();
+            g.gain.value = v;
+            g.connect(audioCtx.destination);
+            return g;
+          };
+
+          if (type === 'chime') {
+            // Ascending 3-note chime: C5-E5-G5 — ticket starts working
+            const osc = audioCtx.createOscillator();
+            const gain = makeGain(vol * 0.15);
+            osc.type = 'sine';
+            osc.connect(gain);
+            osc.frequency.setValueAtTime(523.25, now);
+            osc.frequency.setValueAtTime(659.25, now + 0.12);
+            osc.frequency.setValueAtTime(783.99, now + 0.24);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+            osc.start(now);
+            osc.stop(now + 0.5);
+          } else if (type === 'success') {
+            // Ascending arpeggio: C5-E5-G5-C6 — ticket completed
+            const osc = audioCtx.createOscillator();
+            const gain = makeGain(vol * 0.15);
+            osc.type = 'triangle';
+            osc.connect(gain);
+            osc.frequency.setValueAtTime(523.25, now);
+            osc.frequency.setValueAtTime(659.25, now + 0.1);
+            osc.frequency.setValueAtTime(783.99, now + 0.2);
+            osc.frequency.setValueAtTime(1046.50, now + 0.3);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+            osc.start(now);
+            osc.stop(now + 0.8);
+          } else if (type === 'error') {
+            // Low descending buzz: C3→A2 — ticket failed
+            const osc = audioCtx.createOscillator();
+            const gain = makeGain(vol * 0.1);
+            osc.type = 'sawtooth';
+            osc.connect(gain);
+            osc.frequency.setValueAtTime(130.81, now);
+            osc.frequency.linearRampToValueAtTime(110, now + 0.3);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+            osc.start(now);
+            osc.stop(now + 0.5);
+          } else if (type === 'typing') {
+            // Short noise burst — keyboard click
+            const bufferSize = Math.floor(audioCtx.sampleRate * 0.04);
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+              data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.15));
+            }
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            const gain = makeGain(vol * 0.03);
+            source.connect(gain);
+            source.start(now);
+          }
+        },
+
         _poHitTest(e) {
           const canvas = e.target;
           const rect = canvas.getBoundingClientRect();
@@ -2013,6 +2089,7 @@
         _PO_CAM: { x: 0, y: 0, zoom: 3 },  // camera: world center + zoom level
         _PO_MOUSE: null,  // { startX, startY, hitId, camX, camY, mode: null|'pan'|'drag' }
         _PO_DRAG: null,   // { ticketId, screenX, screenY } when dragging character
+        _PO_AUDIO_CTX: null, // Web Audio API context (lazy init)
 
         _poInitTiles() {
           if (this._PO_TILES) return;
@@ -2448,6 +2525,8 @@
                 lastTicketState: ticket.state,
                 facing: 'right',
                 celebrateT: 0,
+                spawnT: 0,        // fade-in timer
+                typingSoundT: 0,  // keyboard sound cooldown
               };
               // Path from door to lobby
               cs.path = this._poBFS(layout.grid, { col: 1, row: 1 }, lobby, layout.rows, layout.cols);
@@ -2469,10 +2548,11 @@
                 cs.path = this._poBFS(layout.grid, from, desk, layout.rows, layout.cols);
                 cs.pathIdx = 0;
                 cs.charState = 'walk_to_desk';
+                this._poPlaySound('chime');
               } else if (next === 'planning' && cs.charState === 'sit_type') {
-                cs.charState = 'sit_read'; // just change animation
+                cs.charState = 'sit_read';
               } else if (next === 'developing' && cs.charState === 'sit_read') {
-                cs.charState = 'sit_type'; // just change animation
+                cs.charState = 'sit_type';
               } else if (next === 'review' || next === 'done') {
                 // Walk to exit
                 const exitTile = cs.exitTile || layout.exitPositions[0];
@@ -2482,8 +2562,10 @@
                 cs.charState = 'walk_to_exit';
                 cs.deskIdx = null; // free desk
                 cs.celebrateT = 0;
+                this._poPlaySound('success');
               } else if (next === 'failed') {
                 cs.charState = 'failed';
+                this._poPlaySound('error');
               } else if (next === 'queued' && (prev === 'failed' || cs.charState === 'failed')) {
                 // Retry — walk back to lobby
                 const lobby = cs.lobbyTile || layout.lobbyPositions[0];
@@ -2532,9 +2614,20 @@
               }
             }
 
-            // Celebrate bounce timer
+            // Timers
+            cs.spawnT += dt;
             if (cs.charState === 'idle_exit') {
               cs.celebrateT += dt;
+            }
+            // Periodic typing sound
+            if (cs.charState === 'sit_type') {
+              cs.typingSoundT += dt;
+              if (cs.typingSoundT > 1.5 + Math.random() * 2) {
+                cs.typingSoundT = 0;
+                this._poPlaySound('typing');
+              }
+            } else {
+              cs.typingSoundT = 0;
             }
           });
 
@@ -2599,6 +2692,14 @@
             const sw = W * Z;
             const sh = H * Z;
 
+            // Opacity: fade-in on spawn, fade-out after celebrating
+            let alpha = 1;
+            if (cs.spawnT < 0.5) alpha = cs.spawnT / 0.5; // fade in
+            if (cs.charState === 'idle_exit' && cs.celebrateT > 3) {
+              alpha = Math.max(0, 1 - (cs.celebrateT - 3) / 1); // fade out after 3s
+            }
+            if (alpha < 1) ctx.globalAlpha = Math.max(0, alpha);
+
             // Draw character
             ctx.drawImage(sprite, 0, 0, W, H, drawPx, drawPy, sw, sh);
 
@@ -2620,6 +2721,9 @@
 
             // Speech bubble
             this._poDrawBubble(ctx, drawPx + sw / 2, drawPy - 4 * Z, ticket, Z);
+
+            // Restore alpha
+            if (alpha < 1) ctx.globalAlpha = 1;
 
             // Hit box for click detection
             if (!this.pixelOffice._hitBoxes) this.pixelOffice._hitBoxes = {};
