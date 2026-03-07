@@ -1289,14 +1289,16 @@
       </template>
     </div>
 
-    <!-- Terminal Panel (resizable) -->
-    <div class="bg-gray-800 cursor-row-resize flex items-center justify-center select-none hover:bg-gray-700 transition-colors group"
-         style="height: 6px;"
-         @mousedown.prevent="_terminalDragging = true; $event.target.setPointerCapture?.($event.pointerId)"
-         @touchstart.prevent="_terminalDragging = true">
-      <div class="w-10 h-1 rounded-full bg-gray-600 group-hover:bg-gray-400 transition-colors"></div>
-    </div>
-    <div :style="'height:' + terminalHeight + 'px'" class="bg-gray-950 border-t border-gray-800 flex flex-col min-h-[80px]">
+    <!-- Terminal Panel (collapsible + resizable) -->
+    <template x-if="terminalOpen">
+      <div class="bg-gray-800 cursor-row-resize flex items-center justify-center select-none hover:bg-gray-700 transition-colors group"
+           style="height: 6px;"
+           @mousedown.prevent="_terminalDragging = true; $event.target.setPointerCapture?.($event.pointerId)"
+           @touchstart.prevent="_terminalDragging = true">
+        <div class="w-10 h-1 rounded-full bg-gray-600 group-hover:bg-gray-400 transition-colors"></div>
+      </div>
+    </template>
+    <div x-show="terminalOpen" x-transition :style="'height:' + terminalHeight + 'px'" class="bg-gray-950 border-t border-gray-800 flex flex-col min-h-[80px]">
       <!-- Terminal Tabs -->
       <div class="flex items-center border-b border-gray-800 px-2 overflow-x-auto">
         <span class="text-xs text-gray-600 px-2 py-2 flex-shrink-0">Terminal</span>
@@ -1311,6 +1313,11 @@
             <span x-text="tab.jira_key"></span>
           </button>
         </template>
+        <!-- Close button -->
+        <button @click="terminalOpen = false; localStorage.setItem('tn_terminalOpen', 'false')"
+                class="ml-auto px-2 py-1 text-gray-500 hover:text-gray-300 transition flex-shrink-0" title="Close terminal">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
       </div>
       <!-- Terminal Output -->
       <div class="flex-1 overflow-y-auto p-3 font-mono text-xs scrollbar-thin" id="terminal-output">
@@ -1321,6 +1328,15 @@
           <div class="text-gray-600 italic">No output yet. Select a running ticket to view logs.</div>
         </template>
       </div>
+    </div>
+    <!-- Terminal collapsed bar — click to reopen -->
+    <div x-show="!terminalOpen" @click="terminalOpen = true; localStorage.setItem('tn_terminalOpen', 'true')"
+         class="bg-gray-900 border-t border-gray-800 px-4 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-gray-800 transition-colors">
+      <svg class="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+      <span class="text-xs text-gray-500">Terminal</span>
+      <template x-if="terminalTabs.length > 0">
+        <span class="text-xs text-gray-600" x-text="terminalTabs.length + ' tab' + (terminalTabs.length > 1 ? 's' : '')"></span>
+      </template>
     </div>
   </div>
 
@@ -1661,7 +1677,8 @@
         editRepoModal: { show: false, id: null, data: {} },
         editProfileModal: { show: false, id: null, data: {} },
         interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '', logs: [], inputText: '' },
-        terminalHeight: 224,
+        terminalHeight: parseInt(localStorage.getItem('tn_terminalHeight') || '224'),
+        terminalOpen: JSON.parse(localStorage.getItem('tn_terminalOpen') ?? 'true'),
         _terminalDragging: false,
         activeTerminal: null,
         terminalLogs: {},
@@ -1800,6 +1817,7 @@
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             const newH = window.innerHeight - clientY - 6;
             self.terminalHeight = Math.max(80, Math.min(newH, window.innerHeight * 0.7));
+            localStorage.setItem('tn_terminalHeight', self.terminalHeight);
           };
           const onUp = () => { self._terminalDragging = false; };
           document.addEventListener('mousemove', onMove);
@@ -2111,247 +2129,143 @@
           };
 
           this._PO_TILES = {
-            // Floor — wood grain pattern
+            // Floor — clean subtle tile pattern (dark blue-gray)
             floor_a: make((x, T) => {
-              x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T);
-              // wood grain streaks
-              x.fillStyle = '#222244';
-              for (let i = 0; i < T; i += 3) x.fillRect(i, 0, 1, T);
-              x.fillStyle = '#1c1c38';
-              for (let i = 1; i < T; i += 5) x.fillRect(i, 0, 1, T);
-              // subtle knot
-              x.fillStyle = '#252548'; x.fillRect(6, 6, 3, 2);
-              x.fillStyle = '#202040';
-              for (let j = 2; j < T; j += 4) x.fillRect(0, j, T, 1);
+              x.fillStyle = '#1a1a2e'; x.fillRect(0, 0, T, T);
+              x.fillStyle = '#1e1e32'; x.fillRect(0, 0, T, 1); // subtle grid line
+              x.fillStyle = '#1e1e32'; x.fillRect(0, 0, 1, T);
             }),
             floor_b: make((x, T) => {
-              x.fillStyle = '#1c1c36'; x.fillRect(0, 0, T, T);
-              // wood grain streaks offset
-              x.fillStyle = '#202042';
-              for (let i = 1; i < T; i += 3) x.fillRect(i, 0, 1, T);
-              x.fillStyle = '#1a1a34';
-              for (let i = 2; i < T; i += 5) x.fillRect(i, 0, 1, T);
-              x.fillStyle = '#232346'; x.fillRect(10, 4, 2, 3);
-              x.fillStyle = '#1e1e3e';
-              for (let j = 0; j < T; j += 4) x.fillRect(0, j, T, 1);
+              x.fillStyle = '#181828'; x.fillRect(0, 0, T, T);
+              x.fillStyle = '#1c1c2e'; x.fillRect(0, 0, T, 1);
+              x.fillStyle = '#1c1c2e'; x.fillRect(0, 0, 1, T);
             }),
-            // Wall — panel pattern with depth
+            // Wall — clean solid with subtle depth
             wall: make((x, T) => {
-              x.fillStyle = '#2a2a4e'; x.fillRect(0, 0, T, T);
-              // brick rows
-              x.fillStyle = '#333360';
-              x.fillRect(0, 0, T, 2); // top highlight
-              x.fillRect(0, 7, T, 1); // mortar h
-              x.fillStyle = '#2e2e55';
-              x.fillRect(4, 0, 1, 7); x.fillRect(12, 0, 1, 7); // mortar v top
-              x.fillRect(0, 7, 1, T-7); x.fillRect(8, 7, 1, T-7); // mortar v bot
-              // panel shading
-              x.fillStyle = '#2f2f58';
-              x.fillRect(1, 1, 3, 6); x.fillRect(5, 1, 7, 6);
-              x.fillStyle = '#28284a';
-              x.fillRect(1, 8, 7, T-9); x.fillRect(9, 8, 6, T-9);
-              // bottom shadow
-              x.fillStyle = '#1a1a35'; x.fillRect(0, T-1, T, 1);
+              x.fillStyle = '#2a2a48'; x.fillRect(0, 0, T, T);
+              x.fillStyle = '#303058'; x.fillRect(0, 0, T, 1); // top highlight
+              x.fillStyle = '#222240'; x.fillRect(0, T-1, T, 1); // bottom shadow
+              // subtle panel line
+              x.fillStyle = '#262646'; x.fillRect(T/2, 1, 1, T-2);
             }),
-            // Wall top — cap with highlight and shadow
+            // Wall top — cap
             wall_top: make((x, T) => {
-              x.fillStyle = '#3a3a6a'; x.fillRect(0, 0, T, T);
-              x.fillStyle = '#4a4a7a'; x.fillRect(0, 0, T, 3);
-              x.fillStyle = '#444474'; x.fillRect(0, 3, T, 2);
-              // subtle brick lines
-              x.fillStyle = '#3e3e6e';
-              x.fillRect(4, 0, 1, T); x.fillRect(10, 0, 1, T);
-              x.fillStyle = '#2a2a50'; x.fillRect(0, T-2, T, 2);
-              x.fillStyle = '#252548'; x.fillRect(0, T-1, T, 1);
+              x.fillStyle = '#353560'; x.fillRect(0, 0, T, T);
+              x.fillStyle = '#404070'; x.fillRect(0, 0, T, 2); // top highlight
+              x.fillStyle = '#2a2a4a'; x.fillRect(0, T-2, T, 2); // bottom shadow
             }),
-            // Desk left — wood desk with PC monitor
+            // Desk left — clean desk with monitor
             desk_l: make((x, T) => {
               // desk surface
-              x.fillStyle = '#5a4a3a'; x.fillRect(0, 4, T, 8);
-              x.fillStyle = '#6a5a48'; x.fillRect(0, 4, T, 2); // top edge highlight
-              x.fillStyle = '#5e4e3e'; x.fillRect(0, 6, T, 1); // grain
-              x.fillStyle = '#4a3a2a'; x.fillRect(0, 12, T, 1); // bottom shadow
-              // monitor frame
-              x.fillStyle = '#2a2a2a'; x.fillRect(2, 0, 12, 8);
-              x.fillStyle = '#333'; x.fillRect(3, 0, 10, 1); // top bezel
-              // screen with glow
-              x.fillStyle = '#1a3a6a'; x.fillRect(3, 1, 10, 6);
-              x.fillStyle = '#2a5a8a'; x.fillRect(4, 2, 8, 4); // inner glow
-              x.fillStyle = '#3a6a9a'; x.fillRect(5, 3, 4, 2); // screen highlight
-              // monitor stand
-              x.fillStyle = '#333'; x.fillRect(6, 8, 4, 1);
-              x.fillStyle = '#2a2a2a'; x.fillRect(5, 9, 6, 1);
+              x.fillStyle = '#4a3c2e'; x.fillRect(0, 6, T, 6);
+              x.fillStyle = '#564838'; x.fillRect(0, 6, T, 1); // top highlight
+              x.fillStyle = '#3e3020'; x.fillRect(0, 12, T, 1); // bottom shadow
+              // monitor
+              x.fillStyle = '#1a1a1a'; x.fillRect(3, 0, 10, 7);
+              x.fillStyle = '#1a3a5a'; x.fillRect(4, 1, 8, 5); // screen
+              x.fillStyle = '#2a5a8a'; x.fillRect(5, 2, 6, 3); // glow
+              // stand
+              x.fillStyle = '#222'; x.fillRect(6, 7, 4, 1);
               // legs
-              x.fillStyle = '#4a3a2a';
+              x.fillStyle = '#3e3020';
               x.fillRect(1, 13, 2, 3); x.fillRect(13, 13, 2, 3);
-              x.fillStyle = '#3a2a1a'; x.fillRect(1, 15, 2, 1); x.fillRect(13, 15, 2, 1);
             }),
-            // Desk right — keyboard and mouse
+            // Desk right — keyboard area
             desk_r: make((x, T) => {
               // desk surface
-              x.fillStyle = '#5a4a3a'; x.fillRect(0, 4, T, 8);
-              x.fillStyle = '#6a5a48'; x.fillRect(0, 4, T, 2);
-              x.fillStyle = '#5e4e3e'; x.fillRect(0, 6, T, 1);
-              x.fillStyle = '#4a3a2a'; x.fillRect(0, 12, T, 1);
+              x.fillStyle = '#4a3c2e'; x.fillRect(0, 6, T, 6);
+              x.fillStyle = '#564838'; x.fillRect(0, 6, T, 1);
+              x.fillStyle = '#3e3020'; x.fillRect(0, 12, T, 1);
               // keyboard
-              x.fillStyle = '#2a2a2a'; x.fillRect(1, 5, 9, 5);
-              x.fillStyle = '#444'; x.fillRect(2, 6, 7, 3); // key area
-              x.fillStyle = '#555';
-              for (let i = 2; i < 9; i += 2) x.fillRect(i, 6, 1, 1); // key dots row 1
-              for (let i = 3; i < 9; i += 2) x.fillRect(i, 8, 1, 1); // key dots row 2
+              x.fillStyle = '#222'; x.fillRect(2, 7, 8, 4);
+              x.fillStyle = '#333';
+              for (let i = 3; i < 9; i += 2) { x.fillRect(i, 8, 1, 1); x.fillRect(i, 10, 1, 1); }
               // mouse
-              x.fillStyle = '#3a3a3a'; x.fillRect(12, 6, 3, 4);
-              x.fillStyle = '#4a4a4a'; x.fillRect(12, 6, 3, 2); // mouse top
-              x.fillStyle = '#333'; x.fillRect(13, 6, 1, 1); // scroll wheel
+              x.fillStyle = '#2a2a2a'; x.fillRect(12, 8, 3, 3);
+              x.fillStyle = '#333'; x.fillRect(13, 8, 1, 1);
               // legs
-              x.fillStyle = '#4a3a2a';
+              x.fillStyle = '#3e3020';
               x.fillRect(1, 13, 2, 3); x.fillRect(13, 13, 2, 3);
-              x.fillStyle = '#3a2a1a'; x.fillRect(1, 15, 2, 1); x.fillRect(13, 15, 2, 1);
             }),
-            // Chair — wood frame with cushion
+            // Chair — simple office chair
             chair: make((x, T) => {
               // backrest
-              x.fillStyle = '#3a3068'; x.fillRect(4, 2, 8, 5);
-              x.fillStyle = '#4a4078'; x.fillRect(5, 3, 6, 3); // cushion highlight
-              x.fillStyle = '#353060'; x.fillRect(4, 2, 8, 1); // top edge
-              // seat cushion
-              x.fillStyle = '#3a3a6a'; x.fillRect(3, 7, 10, 6);
-              x.fillStyle = '#4a4a7a'; x.fillRect(3, 7, 10, 2); // cushion top highlight
-              x.fillStyle = '#353565'; x.fillRect(3, 12, 10, 1); // seat shadow
-              // arm rests
-              x.fillStyle = '#4a3a2a'; x.fillRect(2, 6, 1, 6); x.fillRect(13, 6, 1, 6);
-              // wheels / base
+              x.fillStyle = '#3a3060'; x.fillRect(5, 3, 6, 4);
+              x.fillStyle = '#4a4070'; x.fillRect(6, 4, 4, 2);
+              // seat
+              x.fillStyle = '#353560'; x.fillRect(4, 7, 8, 5);
+              x.fillStyle = '#404070'; x.fillRect(4, 7, 8, 1);
+              // base
               x.fillStyle = '#222';
-              x.fillRect(4, 14, 2, 2); x.fillRect(10, 14, 2, 2);
-              x.fillStyle = '#333'; x.fillRect(7, 14, 2, 1);
-              x.fillRect(6, 15, 4, 1); // center base
+              x.fillRect(5, 13, 2, 2); x.fillRect(9, 13, 2, 2);
+              x.fillRect(7, 14, 2, 1);
             }),
-            // Door — detailed with panels and knob
+            // Door — clean wooden door
             door: make((x, T) => {
-              // door frame
-              x.fillStyle = '#4a2a1a';
-              x.fillRect(1, 0, 1, T); x.fillRect(14, 0, 1, T);
-              x.fillRect(1, 0, 14, 1);
-              // door body
-              x.fillStyle = '#5a3a2a'; x.fillRect(2, 1, 12, T-1);
-              x.fillStyle = '#6a4a38'; x.fillRect(3, 2, 10, T-3);
-              // top panel
-              x.fillStyle = '#7a5a48'; x.fillRect(4, 2, 8, 5);
-              x.fillStyle = '#6a4a38'; x.fillRect(5, 3, 6, 3);
-              // bottom panel
-              x.fillStyle = '#7a5a48'; x.fillRect(4, 9, 8, 5);
-              x.fillStyle = '#6a4a38'; x.fillRect(5, 10, 6, 3);
+              x.fillStyle = '#4a3020'; x.fillRect(2, 0, 12, T);
+              x.fillStyle = '#5a4030'; x.fillRect(3, 1, 10, T-2);
+              // panels
+              x.fillStyle = '#6a5040'; x.fillRect(4, 2, 8, 5);
+              x.fillStyle = '#6a5040'; x.fillRect(4, 9, 8, 5);
               // handle
               x.fillStyle = '#daa520'; x.fillRect(10, 8, 2, 2);
-              x.fillStyle = '#c89418'; x.fillRect(10, 9, 2, 1); // handle shadow
             }),
-            // Exit sign — clear appearance
+            // Exit — green sign
             exit: make((x, T) => {
-              x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T);
-              // sign background
-              x.fillStyle = '#1a4a1a'; x.fillRect(1, 1, 14, 8);
-              x.fillStyle = '#2a6a2a'; x.fillRect(2, 2, 12, 6);
-              // EXIT text (simplified pixel letters)
+              x.fillStyle = '#1a1a2e'; x.fillRect(0, 0, T, T);
+              x.fillStyle = '#1a4a1a'; x.fillRect(2, 2, 12, 6);
+              x.fillStyle = '#2a6a2a'; x.fillRect(3, 3, 10, 4);
+              // E X arrow
               x.fillStyle = '#4ae44a';
-              // E
-              x.fillRect(3, 3, 1, 4); x.fillRect(4, 3, 1, 1); x.fillRect(4, 5, 1, 1); x.fillRect(4, 6, 1, 1);
-              // X
-              x.fillRect(6, 3, 1, 1); x.fillRect(8, 3, 1, 1); x.fillRect(7, 4, 1, 2); x.fillRect(6, 6, 1, 1); x.fillRect(8, 6, 1, 1);
-              // arrow below
+              x.fillRect(4, 4, 1, 3); x.fillRect(5, 4, 1, 1); x.fillRect(5, 5, 1, 1); x.fillRect(5, 6, 1, 1);
+              x.fillRect(7, 4, 1, 1); x.fillRect(9, 4, 1, 1); x.fillRect(8, 5, 1, 1); x.fillRect(7, 6, 1, 1); x.fillRect(9, 6, 1, 1);
               x.fillStyle = '#3ad43a';
-              x.fillRect(5, 11, 6, 2); x.fillRect(9, 10, 2, 1); x.fillRect(9, 13, 2, 1);
-              // glow
-              x.fillStyle = 'rgba(74,228,74,0.15)'; x.fillRect(0, 0, T, 10);
+              x.fillRect(6, 11, 4, 2); x.fillRect(9, 10, 1, 1); x.fillRect(9, 13, 1, 1);
             }),
-            // Plant — richer foliage, terracotta pot
+            // Plant — compact
             plant: make((x, T) => {
-              // terracotta pot
-              x.fillStyle = '#a0522d'; x.fillRect(5, 11, 6, 5);
-              x.fillStyle = '#b8653a'; x.fillRect(4, 11, 8, 2); // pot rim
-              x.fillStyle = '#8b4513'; x.fillRect(5, 15, 6, 1); // pot base shadow
-              // soil
-              x.fillStyle = '#3a2a1a'; x.fillRect(5, 11, 6, 1);
-              // leaves — lush foliage
-              x.fillStyle = '#1a6a2a';
-              x.fillRect(5, 2, 6, 9);
-              x.fillRect(3, 4, 3, 5);
-              x.fillRect(10, 4, 3, 5);
-              x.fillStyle = '#2a8a3a';
-              x.fillRect(6, 3, 4, 7);
-              x.fillRect(4, 5, 2, 3);
-              x.fillRect(10, 5, 2, 3);
-              // highlights
-              x.fillStyle = '#3aaa4a';
-              x.fillRect(7, 4, 2, 2);
-              x.fillRect(4, 6, 1, 1);
-              x.fillRect(11, 6, 1, 1);
-              // darker accents
-              x.fillStyle = '#155a20';
-              x.fillRect(5, 8, 1, 2); x.fillRect(10, 7, 1, 2);
+              x.fillStyle = '#8b5530'; x.fillRect(5, 11, 6, 4);
+              x.fillStyle = '#a06535'; x.fillRect(4, 11, 8, 1);
+              x.fillStyle = '#1a6a2a'; x.fillRect(5, 3, 6, 8);
+              x.fillRect(3, 5, 3, 4); x.fillRect(10, 5, 3, 4);
+              x.fillStyle = '#2a8a3a'; x.fillRect(6, 4, 4, 6);
+              x.fillStyle = '#3aaa4a'; x.fillRect(7, 5, 2, 2);
             }),
-            // Bookshelf — wood frame with colored spines
+            // Bookshelf — compact with book spines
             bookshelf: make((x, T) => {
-              // frame
-              x.fillStyle = '#5a3a1a'; x.fillRect(1, 0, 14, T);
-              x.fillStyle = '#6a4a2a'; x.fillRect(2, 0, 12, T);
-              // shelves
-              x.fillStyle = '#4a2a0a';
+              x.fillStyle = '#4a3018'; x.fillRect(1, 0, 14, T);
+              x.fillStyle = '#3a2008';
               x.fillRect(1, 0, 14, 1); x.fillRect(1, 5, 14, 1); x.fillRect(1, 10, 14, 1); x.fillRect(1, 15, 14, 1);
-              // books row 1
               x.fillStyle = '#cc4444'; x.fillRect(3, 1, 2, 4);
               x.fillStyle = '#4488cc'; x.fillRect(5, 1, 2, 4);
               x.fillStyle = '#44aa44'; x.fillRect(7, 2, 2, 3);
               x.fillStyle = '#ccaa33'; x.fillRect(9, 1, 2, 4);
-              x.fillStyle = '#aa44aa'; x.fillRect(11, 1, 2, 4);
-              // books row 2
               x.fillStyle = '#dd8833'; x.fillRect(3, 6, 2, 4);
               x.fillStyle = '#3366aa'; x.fillRect(5, 6, 3, 4);
               x.fillStyle = '#aa3333'; x.fillRect(8, 7, 2, 3);
-              x.fillStyle = '#33aa88'; x.fillRect(10, 6, 3, 4);
-              // books row 3
               x.fillStyle = '#8844aa'; x.fillRect(3, 11, 2, 4);
-              x.fillStyle = '#aaaa33'; x.fillRect(5, 11, 2, 4);
-              x.fillStyle = '#4488cc'; x.fillRect(7, 12, 3, 3);
-              x.fillStyle = '#cc6633'; x.fillRect(10, 11, 3, 4);
+              x.fillStyle = '#aaaa33'; x.fillRect(5, 11, 3, 4);
+              x.fillStyle = '#cc6633'; x.fillRect(9, 11, 3, 4);
             }),
             // Water cooler
             cooler: make((x, T) => {
-              // water bottle (light blue top)
-              x.fillStyle = '#88ccee'; x.fillRect(5, 0, 6, 5);
-              x.fillStyle = '#aaddff'; x.fillRect(6, 1, 4, 3); // water highlight
-              x.fillStyle = '#77bbdd'; x.fillRect(5, 4, 6, 1); // bottle base
-              // body (white/gray)
-              x.fillStyle = '#cccccc'; x.fillRect(4, 5, 8, 8);
-              x.fillStyle = '#dddddd'; x.fillRect(5, 5, 6, 7); // front face
-              x.fillStyle = '#bbbbbb'; x.fillRect(4, 5, 1, 8); // left shadow
-              // spout
+              x.fillStyle = '#88ccee'; x.fillRect(5, 1, 6, 4);
+              x.fillStyle = '#aaddff'; x.fillRect(6, 2, 4, 2);
+              x.fillStyle = '#ccc'; x.fillRect(4, 5, 8, 7);
+              x.fillStyle = '#ddd'; x.fillRect(5, 5, 6, 6);
               x.fillStyle = '#888'; x.fillRect(5, 8, 2, 1);
-              x.fillStyle = '#4488cc'; x.fillRect(5, 9, 1, 1); // cold
-              x.fillStyle = '#cc4444'; x.fillRect(6, 9, 1, 1); // hot
-              // base
-              x.fillStyle = '#444'; x.fillRect(3, 13, 10, 3);
-              x.fillStyle = '#555'; x.fillRect(4, 13, 8, 1);
+              x.fillStyle = '#444'; x.fillRect(3, 12, 10, 3);
             }),
-            // Rug — warm decorative pattern
+            // Rug — subtle warm carpet (not overwhelming)
             rug: make((x, T) => {
-              x.fillStyle = '#1e1e3a'; x.fillRect(0, 0, T, T); // floor base
-              // rug body
-              x.fillStyle = '#8b3a3a'; x.fillRect(1, 1, 14, 14);
-              x.fillStyle = '#a04040'; x.fillRect(2, 2, 12, 12);
-              // border pattern
-              x.fillStyle = '#cc8833';
-              x.fillRect(2, 2, 12, 1); x.fillRect(2, 13, 12, 1);
-              x.fillRect(2, 2, 1, 12); x.fillRect(13, 2, 1, 12);
-              // inner pattern
-              x.fillStyle = '#b85050';
-              x.fillRect(5, 5, 6, 6);
-              x.fillStyle = '#cc8833';
-              x.fillRect(7, 6, 2, 2); x.fillRect(6, 7, 4, 1); // diamond center
-              x.fillRect(7, 9, 2, 1);
-              // corner dots
-              x.fillStyle = '#ddaa44';
-              x.fillRect(4, 4, 1, 1); x.fillRect(11, 4, 1, 1);
-              x.fillRect(4, 11, 1, 1); x.fillRect(11, 11, 1, 1);
+              x.fillStyle = '#2a2038'; x.fillRect(0, 0, T, T);
+              // subtle border
+              x.fillStyle = '#332840';
+              x.fillRect(0, 0, T, 1); x.fillRect(0, T-1, T, 1);
+              x.fillRect(0, 0, 1, T); x.fillRect(T-1, 0, 1, T);
+              // center accent
+              x.fillStyle = '#2e2440';
+              x.fillRect(4, 4, 8, 8);
             }),
           };
         },
@@ -2738,9 +2652,16 @@
             let cs = this._PO_CHAR_MAP[ticket.id];
 
             if (!cs) {
-              // New ticket — spawn at door
-              const lobbyIdx = idx % layout.lobbyPositions.length;
+              // New ticket — spawn at door with staggered delay
+              // Assign unique lobby positions so characters don't overlap
+              const takenLobbies = new Set(Object.values(this._PO_CHAR_MAP).map(c => c._lobbyIdx));
+              let lobbyIdx = idx % layout.lobbyPositions.length;
+              for (let i = 0; i < layout.lobbyPositions.length; i++) {
+                if (!takenLobbies.has(i)) { lobbyIdx = i; break; }
+              }
               const lobby = layout.lobbyPositions[lobbyIdx];
+              // Speed variance: 42-54 px/sec so characters don't stack on paths
+              const speedVar = 42 + (idx * 7) % 13;
               cs = {
                 charState: 'idle_lobby',
                 variant: idx % 6,
@@ -2749,12 +2670,14 @@
                 path: null, pathIdx: 0,
                 deskIdx: null,
                 lobbyTile: lobby,
+                _lobbyIdx: lobbyIdx,
                 exitTile: layout.exitPositions[idx % layout.exitPositions.length],
                 lastTicketState: ticket.state,
                 facing: 'right',
                 celebrateT: 0,
-                spawnT: 0,        // fade-in timer
-                typingSoundT: 0,  // keyboard sound cooldown
+                spawnT: -idx * 0.4,  // stagger: each char waits 0.4s more
+                typingSoundT: 0,
+                _speed: speedVar,
               };
               // Path from door to lobby
               cs.path = this._poBFS(layout.grid, { col: 1, row: 1 }, lobby, layout.rows, layout.cols);
@@ -2813,15 +2736,16 @@
               }
             }
 
-            // Move along path
-            if (cs.path && cs.pathIdx < cs.path.length && (cs.charState.startsWith('walk_'))) {
+            // Move along path (wait for spawn stagger to complete)
+            if (cs.path && cs.pathIdx < cs.path.length && cs.charState.startsWith('walk_') && cs.spawnT >= 0) {
               const target = cs.path[cs.pathIdx];
               const tx = target.col * T;
               const ty = target.row * T;
               const dx = tx - cs.px;
               const dy = ty - cs.py;
               const dist = Math.sqrt(dx * dx + dy * dy);
-              const step = SPEED * dt;
+              const charSpeed = cs._speed || SPEED;
+              const step = charSpeed * dt;
 
               if (dist <= step) {
                 cs.px = tx;
@@ -2956,9 +2880,10 @@
             const sw = W * Z;
             const sh = H * Z;
 
-            // Opacity: fade-in on spawn, fade-out after celebrating
+            // Opacity: hidden during stagger wait, fade-in on spawn, fade-out after celebrating
             let alpha = 1;
-            if (cs.spawnT < 0.5) alpha = cs.spawnT / 0.5; // fade in
+            if (cs.spawnT < 0) alpha = 0; // waiting to spawn (stagger)
+            else if (cs.spawnT < 0.5) alpha = cs.spawnT / 0.5; // fade in
             if (cs.charState === 'idle_exit' && cs.celebrateT > 3) {
               alpha = Math.max(0, 1 - (cs.celebrateT - 3) / 1); // fade out after 3s
             }
@@ -3160,7 +3085,9 @@
           const ctx = canvas.getContext('2d');
           ctx.imageSmoothingEnabled = false;
 
-          // Initialize sprite caches
+          // Initialize sprite caches (force regen on code changes)
+          this._PO_TILES = null;
+          this._PO_CHARS = null;
           this._poInitTiles();
           this._poInitChars();
 
