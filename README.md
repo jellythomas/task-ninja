@@ -4,6 +4,8 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 > **Not another kanban board.** Task Ninja doesn't just track tickets — it *executes* them. Each ticket gets its own git worktree, its own AI agent worker, and its own live terminal. You supervise from the board while AI does the coding.
 
+**Works on macOS, Linux, and Windows.** Just install Python 3.10+ and run — everything else is auto-configured on first launch.
+
 ## What makes Task Ninja different
 
 | | Vibe Kanban / Trello / Linear | Task Ninja |
