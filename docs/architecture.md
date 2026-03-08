@@ -39,7 +39,7 @@ Detailed technical documentation for Task Ninja internals. For setup and usage, 
 |  Engine:      Worker pool, PTY-backed processes   |
 |  Scheduler:   APScheduler (cron/one-time)         |
 |  Watchdog:    Auto-retry, stale detect, hours     |
-|  State:       SQLite (autonomous_task.db)         |
+|  State:       SQLite (task_ninja.db)         |
 |  Startup:     Python version check + auto-install |
 +------------------------+--------------------------+
                          | spawns per ticket (PTY)
@@ -534,7 +534,7 @@ git:
   cleanup_worktrees: true
 
 database:
-  path: "autonomous_task.db"
+  path: "task_ninja.db"
 ```
 
 ---

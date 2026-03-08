@@ -13,7 +13,7 @@ from models.ticket import (
     VALID_TRANSITIONS,
 )
 
-DB_PATH = "autonomous_task.db"
+DB_PATH = "task_ninja.db"
 MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
 

@@ -38,142 +38,60 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 ## Installation
 
-### Step 1: Install System Prerequisites
+### Prerequisites
 
-You need **Python 3.10+** (3.10–3.14 tested), **Git 2.20+**, and **Node.js 18+** (for AI CLI agents). Dependencies are auto-installed on first run.
+You only need **Python 3.10+** installed. Everything else (dependencies, database, migrations) is handled automatically on first run.
 
-**macOS (Homebrew):**
+<details>
+<summary><strong>macOS</strong></summary>
 
 ```bash
-brew install python@3.11 git node
+brew install python@3.11 git
 ```
 
-**Ubuntu/Debian:**
+</details>
+
+<details>
+<summary><strong>Ubuntu / Debian</strong></summary>
 
 ```bash
 sudo apt update
-sudo apt install -y python3.11 python3.11-venv git nodejs npm
+sudo apt install -y python3.11 python3-pip git
 ```
 
-**Windows (WSL recommended):**
+</details>
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+1. Download and install [Python 3.11+](https://www.python.org/downloads/) — check **"Add to PATH"** during install
+2. Download and install [Git](https://git-scm.com/download/win)
+3. Open **Command Prompt** or **PowerShell**
+
+</details>
+
+Verify Python is installed:
 
 ```bash
-# Inside WSL (Ubuntu), follow the Ubuntu instructions above
+python3 --version   # macOS/Linux
+python --version    # Windows
 ```
 
-Verify versions:
-
-```bash
-python3 --version   # 3.10 or higher
-git --version        # 2.20 or higher
-node --version       # 18 or higher
-npm --version        # 9 or higher
-```
-
-### Step 2: Install an AI CLI Agent
-
-Task Ninja spawns AI agents to execute tickets. You need at least one installed.
-
-#### Option A: Claude Code (recommended)
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-Verify it works:
-
-```bash
-claude --version
-```
-
-> Claude Code requires an Anthropic API key or active subscription. Run `claude` once to authenticate if you haven't already.
-
-#### Option B: Gemini CLI
-
-```bash
-npm install -g @anthropic-ai/gemini-cli
-```
-
-#### Option C: Any custom CLI tool
-
-Any command-line tool that accepts a task prompt can be used. You'll configure it in the Agent Profile step.
-
-### Step 3: Install `mcp-atlassian-with-bitbucket` (Required for Claude Code)
-
-Task Ninja uses the [mcp-atlassian-with-bitbucket](https://github.com/sooperset/mcp-atlassian) MCP server to interact with Jira and Bitbucket. If you're using **Claude Code** as your AI agent, this MCP server **must** be installed and configured inside Claude Code.
-
-#### 3a. Install the MCP server
-
-```bash
-pip install mcp-atlassian
-```
-
-Or with uvx (no global install needed):
-
-```bash
-uvx mcp-atlassian
-```
-
-#### 3b. Configure it in Claude Code
-
-Add the server to your Claude Code MCP settings (`~/.claude/settings.json` or project-level `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "mcp-atlassian-with-bitbucket": {
-      "command": "uvx",
-      "args": ["mcp-atlassian"],
-      "env": {
-        "JIRA_URL": "https://yourcompany.atlassian.net",
-        "JIRA_USERNAME": "your-email@company.com",
-        "JIRA_API_TOKEN": "your-jira-api-token",
-        "BITBUCKET_URL": "https://api.bitbucket.org/2.0",
-        "BITBUCKET_USERNAME": "your-bitbucket-username",
-        "BITBUCKET_APP_PASSWORD": "your-bitbucket-app-password"
-      }
-    }
-  }
-}
-```
-
-#### 3c. Verify it works
-
-```bash
-claude
-# Inside Claude Code, try:
-# > "List my Jira projects"
-# If it returns projects, the MCP server is working.
-```
-
-> **Why is this needed?** Task Ninja's orchestrator reads the MCP server config from Claude Code's settings to connect to Jira for status sync, ticket loading, and PR creation. Without it, the Jira integration won't work.
-
-### Step 4: Clone and Install Task Ninja
+### Clone and Run
 
 ```bash
 git clone https://github.com/jellythomas/task-ninja.git
 cd task-ninja
-```
-
-Create a Python virtual environment and install dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate      # macOS/Linux
-# .venv\Scripts\activate       # Windows
-pip install -r requirements.txt
-```
-
-### Step 5: First Run
-
-```bash
-python server.py
+python3 server.py        # macOS/Linux
+python server.py         # Windows
 ```
 
 On first run, Task Ninja will:
 
-1. **Create `.env`** — configuration file with all settings (auto-generated)
-2. **Generate an auth token** — displayed once in the terminal, save it now:
+1. **Auto-install dependencies** — reads `requirements.txt` and installs missing packages
+2. **Create `.env`** — configuration file with default settings
+3. **Initialize the database** — SQLite database created at `task_ninja.db` with all migrations applied
+4. **Generate an auth token** — displayed once in the terminal:
 
 ```
   ╔══════════════════════════════════════════════════════╗
@@ -186,12 +104,11 @@ On first run, Task Ninja will:
   ╚══════════════════════════════════════════════════════╝
 ```
 
-3. **Initialize the database** — SQLite database created at `autonomous_task.db`
-4. **Start the server** — available at `http://localhost:8420`
+5. **Start the server** — available at **http://localhost:8420**
 
-> **Save your auth token!** It's hashed with PBKDF2-SHA256 and never stored in plain text. If you lose it, regenerate with `python server.py --regenerate-token`.
+> **Save your auth token!** It's hashed and never stored in plain text. If you lose it, regenerate with `python server.py --regenerate-token`.
 
-### Step 6: Open the Dashboard
+### Open the Dashboard
 
 Open **http://localhost:8420** in your browser. The **Setup Wizard** appears automatically on first visit.
 
@@ -228,12 +145,11 @@ Register the git repository where AI agents will create branches and worktrees:
 
 ### 3. Agent Profile
 
-Configure which AI agent executes tickets:
+Configure which AI CLI agent executes tickets:
 
 | Agent | Command | Args Template |
 |-------|---------|---------------|
 | Claude Code | `claude` | `--print "/execute-jira-task {JIRA_KEY}"` |
-| Gemini CLI | `gemini` | `-p "implement {JIRA_KEY}: {JIRA_SUMMARY}"` |
 | Custom | `your-cli` | `--task {JIRA_KEY} --cwd {WORKTREE_PATH}` |
 
 **Available template variables:**
@@ -345,7 +261,7 @@ For the full execution flow, architecture diagrams, API reference, database sche
 | Problem | Solution |
 |---------|----------|
 | `claude: command not found` | Install: `npm install -g @anthropic-ai/claude-code` |
-| `mcp-atlassian` not found by Claude | Add it to `~/.claude/settings.json` under `mcpServers` (see Step 3) |
+| `mcp-atlassian` not found by Claude | Add it to `~/.claude/settings.json` under `mcpServers` |
 | Claude can't access Jira | Verify `mcp-atlassian-with-bitbucket` works: open `claude` and ask "List my Jira projects" |
 | Git worktree creation failed | Run `git worktree list` and `git worktree prune` |
 | Jira API 401 | Check API token: [regenerate here](https://id.atlassian.com/manage-profile/security/api-tokens) |

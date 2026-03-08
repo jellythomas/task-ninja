@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Autonomous Atlassian Task — FastAPI server + orchestrator."""
+"""Task Ninja — FastAPI server + orchestrator."""
 
 import subprocess
 import sys
@@ -110,7 +110,7 @@ CONFIG_PATH = Path(__file__).parent / "config.yaml"
 config = yaml.safe_load(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
 
 # Shared instances
-state = StateManager(config.get("database", {}).get("path", "autonomous_task.db"))
+state = StateManager(config.get("database", {}).get("path", "task_ninja.db"))
 broadcaster = Broadcaster()
 orchestrator = Orchestrator(state, broadcaster, config)
 claude_cfg = config.get("claude", {})
@@ -124,7 +124,7 @@ run_scheduler = RunScheduler(state, orchestrator.start)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db_path = config.get("database", {}).get("path", "autonomous_task.db")
+    db_path = config.get("database", {}).get("path", "task_ninja.db")
     await init_db(db_path)
     print(f"[server] Database initialized at {db_path}", file=sys.stderr)
 
@@ -149,7 +149,7 @@ async def lifespan(app: FastAPI):
     terminal_manager.close_all()
 
 
-app = FastAPI(title="Autonomous Atlassian Task", lifespan=lifespan)
+app = FastAPI(title="Task Ninja", lifespan=lifespan)
 app.add_middleware(AuthMiddleware)
 
 
