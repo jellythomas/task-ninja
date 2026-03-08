@@ -8,19 +8,64 @@ from typing import Optional
 import aiosqlite
 
 from models.ticket import (
+    AgentProfile, LabelRepoMapping, Repository,
     Run, RunStatus, Schedule, Ticket, TicketState,
     VALID_TRANSITIONS,
 )
 
-DB_PATH = "autonomous_task.db"
-MIGRATIONS_PATH = Path(__file__).parent.parent / "migrations" / "init.sql"
+DB_PATH = "task_ninja.db"
+MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
 
 async def init_db(db_path: str = DB_PATH) -> None:
-    """Initialize the database with schema."""
+    """Initialize the database with schema and run migrations."""
     async with aiosqlite.connect(db_path) as db:
-        sql = MIGRATIONS_PATH.read_text()
-        await db.executescript(sql)
+        # Run base schema
+        init_sql = (MIGRATIONS_DIR / "init.sql").read_text()
+        await db.executescript(init_sql)
+
+        # Run v2 migration (idempotent)
+        v2_path = MIGRATIONS_DIR / "v2_project_based.sql"
+        if v2_path.exists():
+            v2_sql = v2_path.read_text()
+            await db.executescript(v2_sql)
+
+        # Add columns to existing tables if missing (ALTER TABLE is not idempotent in SQLite)
+        for col, tbl in [
+            ("parent_branch", "runs"), ("repository_id", "runs"),
+            ("repository_id", "tickets"), ("parent_branch", "tickets"), ("profile_id", "tickets"),
+            ("jira_label", "repositories"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT")
+            except Exception:
+                pass  # Column already exists
+
+        # Create indexes on new columns (safe after ALTER TABLE)
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_tickets_repo ON tickets(repository_id)",
+            "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_repo_mappings(repository_id)",
+        ]:
+            try:
+                await db.execute(idx_sql)
+            except Exception:
+                pass
+
+        # Seed default Claude Code agent profile if none exist
+        cursor = await db.execute("SELECT COUNT(*) FROM agent_profiles")
+        count = (await cursor.fetchone())[0]
+        if count == 0:
+            now = datetime.utcnow().isoformat()
+            await db.execute(
+                "INSERT INTO agent_profiles (name, command, args_template, log_format, is_default, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "Claude Code", "claude",
+                    "--print --verbose --output-format stream-json --dangerously-skip-permissions /execute-jira-task {JIRA_KEY}",
+                    "stream-json", 1, now, now,
+                ),
+            )
+
         await db.commit()
 
 
@@ -106,7 +151,7 @@ class StateManager:
 
     # --- Tickets ---
 
-    async def add_ticket(self, run_id: str, jira_key: str, summary: str = None, state: TicketState = TicketState.PENDING) -> Ticket:
+    async def add_ticket(self, run_id: str, jira_key: str, summary: str = None, state: TicketState = TicketState.TODO) -> Ticket:
         ticket_id = _generate_id()
         now = datetime.utcnow().isoformat()
         # Get next rank
@@ -181,7 +226,7 @@ class StateManager:
             updates["started_at"] = now
         if new_state == TicketState.DONE:
             updates["completed_at"] = now
-        if new_state in {TicketState.PENDING, TicketState.QUEUED}:
+        if new_state in {TicketState.TODO, TicketState.QUEUED}:
             updates["paused"] = False
             updates["worker_pid"] = None
             updates["error"] = None
@@ -295,8 +340,232 @@ class StateManager:
             rows = await cursor.fetchall()
             return [Schedule(**dict(r)) for r in rows]
 
+    async def update_schedule(self, schedule_id: str, **kwargs) -> Optional["Schedule"]:
+        from models.ticket import Schedule
+        updates = {k: v for k, v in kwargs.items() if v is not None}
+        if not updates:
+            return await self.get_schedule(schedule_id)
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [schedule_id]
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute(f"UPDATE schedules SET {set_clause} WHERE id = ?", values)
+            await db.commit()
+        return await self.get_schedule(schedule_id)
+
     async def delete_schedule(self, schedule_id: str) -> None:
         async with self._connect() as db:
             await self._setup_db(db)
             await db.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+            await db.commit()
+
+    # --- Repositories ---
+
+    async def create_repository(self, name: str, path: str, default_branch: str = "main",
+                                jira_label: str = None, default_profile_id: int = None) -> Repository:
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                "INSERT INTO repositories (name, path, default_branch, jira_label, default_profile_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (name, path, default_branch, jira_label, default_profile_id, now, now),
+            )
+            repo_id = cursor.lastrowid
+            await db.commit()
+        return await self.get_repository(repo_id)
+
+    async def get_repository(self, repo_id: int) -> Optional[Repository]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT * FROM repositories WHERE id = ?", (repo_id,))
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return Repository(**dict(row))
+
+    async def list_repositories(self, include_deleted: bool = False) -> list[Repository]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            if include_deleted:
+                cursor = await db.execute("SELECT * FROM repositories ORDER BY name")
+            else:
+                cursor = await db.execute("SELECT * FROM repositories WHERE is_deleted = 0 ORDER BY name")
+            rows = await cursor.fetchall()
+            return [Repository(**dict(r)) for r in rows]
+
+    async def update_repository(self, repo_id: int, **kwargs) -> Optional[Repository]:
+        now = datetime.utcnow().isoformat()
+        kwargs["updated_at"] = now
+        set_clause = ", ".join(f"{k} = ?" for k in kwargs)
+        vals = list(kwargs.values()) + [repo_id]
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute(f"UPDATE repositories SET {set_clause} WHERE id = ?", vals)
+            await db.commit()
+        return await self.get_repository(repo_id)
+
+    async def delete_repository(self, repo_id: int) -> None:
+        """Soft-delete if tickets reference this repo, hard-delete otherwise."""
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM tickets WHERE repository_id = ?", (repo_id,)
+            )
+            count = (await cursor.fetchone())[0]
+            if count > 0:
+                now = datetime.utcnow().isoformat()
+                await db.execute(
+                    "UPDATE repositories SET is_deleted = 1, updated_at = ? WHERE id = ?",
+                    (now, repo_id),
+                )
+            else:
+                await db.execute("DELETE FROM label_repo_mappings WHERE repository_id = ?", (repo_id,))
+                await db.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
+            await db.commit()
+
+    # --- Label-Repo Mappings ---
+
+    async def create_label_mapping(self, jira_label: str, repository_id: int) -> LabelRepoMapping:
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                "INSERT INTO label_repo_mappings (jira_label, repository_id, created_at) VALUES (?, ?, ?)",
+                (jira_label, repository_id, now),
+            )
+            mapping_id = cursor.lastrowid
+            await db.commit()
+        return await self.get_label_mapping(mapping_id)
+
+    async def get_label_mapping(self, mapping_id: int) -> Optional[LabelRepoMapping]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT * FROM label_repo_mappings WHERE id = ?", (mapping_id,))
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return LabelRepoMapping(**dict(row))
+
+    async def list_label_mappings(self) -> list[LabelRepoMapping]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT * FROM label_repo_mappings ORDER BY jira_label")
+            rows = await cursor.fetchall()
+            return [LabelRepoMapping(**dict(r)) for r in rows]
+
+    async def delete_label_mapping(self, mapping_id: int) -> None:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute("DELETE FROM label_repo_mappings WHERE id = ?", (mapping_id,))
+            await db.commit()
+
+    # --- Agent Profiles ---
+
+    async def create_agent_profile(self, name: str, command: str, args_template: str,
+                                   log_format: str = "plain-text") -> AgentProfile:
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                "INSERT INTO agent_profiles (name, command, args_template, log_format, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (name, command, args_template, log_format, now, now),
+            )
+            profile_id = cursor.lastrowid
+            await db.commit()
+        return await self.get_agent_profile(profile_id)
+
+    async def get_agent_profile(self, profile_id: int) -> Optional[AgentProfile]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT * FROM agent_profiles WHERE id = ?", (profile_id,))
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return AgentProfile(**dict(row))
+
+    async def get_default_agent_profile(self) -> Optional[AgentProfile]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT * FROM agent_profiles WHERE is_default = 1 LIMIT 1")
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return AgentProfile(**dict(row))
+
+    async def list_agent_profiles(self) -> list[AgentProfile]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT * FROM agent_profiles ORDER BY name")
+            rows = await cursor.fetchall()
+            return [AgentProfile(**dict(r)) for r in rows]
+
+    async def update_agent_profile(self, profile_id: int, **kwargs) -> Optional[AgentProfile]:
+        now = datetime.utcnow().isoformat()
+        kwargs["updated_at"] = now
+        set_clause = ", ".join(f"{k} = ?" for k in kwargs)
+        vals = list(kwargs.values()) + [profile_id]
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute(f"UPDATE agent_profiles SET {set_clause} WHERE id = ?", vals)
+            await db.commit()
+        return await self.get_agent_profile(profile_id)
+
+    async def set_default_agent_profile(self, profile_id: int) -> None:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute("UPDATE agent_profiles SET is_default = 0")
+            await db.execute("UPDATE agent_profiles SET is_default = 1 WHERE id = ?", (profile_id,))
+            await db.commit()
+
+    async def delete_agent_profile(self, profile_id: int) -> None:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute("DELETE FROM agent_profiles WHERE id = ?", (profile_id,))
+            await db.commit()
+
+    # --- Settings (key-value) ---
+
+    async def get_setting(self, key: str) -> Optional[str]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+    async def get_all_settings(self) -> dict[str, str]:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute("SELECT key, value FROM settings")
+            rows = await cursor.fetchall()
+            return {r["key"]: r["value"] for r in rows}
+
+    async def set_setting(self, key: str, value: str) -> None:
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute(
+                "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
+                (key, value, now, value, now),
+            )
+            await db.commit()
+
+    async def set_settings(self, settings: dict[str, str]) -> None:
+        now = datetime.utcnow().isoformat()
+        async with self._connect() as db:
+            await self._setup_db(db)
+            for key, value in settings.items():
+                await db.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
+                    (key, value, now, value, now),
+                )
+            await db.commit()
+
+    async def delete_setting(self, key: str) -> None:
+        async with self._connect() as db:
+            await self._setup_db(db)
+            await db.execute("DELETE FROM settings WHERE key = ?", (key,))
             await db.commit()

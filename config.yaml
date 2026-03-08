@@ -31,4 +31,4 @@ git:
   cleanup_worktrees: true
 
 database:
-  path: "autonomous_task.db"
+  path: "task_ninja.db"

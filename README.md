@@ -1,650 +1,279 @@
-# Autonomous Atlassian Task
+# Task Ninja
 
-Autonomous Jira ticket execution orchestrator with a visual kanban board. Load tickets from a Jira Epic or paste individual ticket keys, configure parallel workers, and let Claude Code implement them autonomously — complete with Jira status sync, draft PR creation, and live terminal streaming.
+An AI-powered ticket execution engine with a visual kanban board. Point it at a Jira Epic, pick your tickets, hit Start — and watch AI agents implement them in parallel with live terminal streaming, automatic PR creation, and Jira status sync.
 
----
+> **Not another kanban board.** Task Ninja doesn't just track tickets — it *executes* them. Each ticket gets its own git worktree, its own AI agent worker, and its own live terminal. You supervise from the board while AI does the coding.
 
-## Table of Contents
+**Works on macOS, Linux, and Windows.** Just install Python 3.10+ and run — everything else is auto-configured on first launch.
 
-- [Architecture Overview](#architecture-overview)
-- [Execution Flow](#execution-flow)
-- [Ticket Lifecycle](#ticket-lifecycle)
-- [Features](#features)
-- [Dependencies](#dependencies)
-- [Project Structure](#project-structure)
-- [Database Schema](#database-schema)
-- [API Reference](#api-reference)
-- [Setup & Installation](#setup--installation)
-- [Configuration](#configuration)
-- [Usage Guide](#usage-guide)
-- [MCP Integration](#mcp-integration)
-- [Troubleshooting](#troubleshooting)
+## What makes Task Ninja different
 
----
-
-## Architecture Overview
-
-```
-+---------------------------------------------------+
-|              Web UI (Kanban Dashboard)             |
-|                                                   |
-|  +--------+--------+------+------+------+------+  |
-|  |Pending |Queued  |Plan  |Dev   |Review|Done  |  |
-|  |        |        |      |      |      |      |  |
-|  |MC-9180 |MC-9177 |      |MC-917|MC-917|MC-917|  |
-|  |MC-9181 |MC-9178 |      |  4   |  3   |  2   |  |
-|  +--------+--------+------+------+------+------+  |
-|                                                   |
-|  [Max Parallel: 2]  [> Start]  [|| Pause]         |
-|                                                   |
-|  +--- Live Terminal (tab-switchable) -----------+  |
-|  | [MC-9174] [MC-9173]                          |  |
-|  | > Running specs: 42/67 passing...            |  |
-|  +----------------------------------------------+  |
-+------------------------+--------------------------+
-                         | SSE (real-time)
-+------------------------v--------------------------+
-|           FastAPI Server + Orchestrator            |
-|                                                   |
-|  HTTP API:    /api/runs, /api/tickets, /api/stream|
-|  MCP Tools:   load_epic, start_run, get_status    |
-|  Engine:      Worker pool, dependency resolver     |
-|  Scheduler:   APScheduler (cron/one-time)         |
-|  State:       SQLite (autonomous_task.db)         |
-+------------------------+--------------------------+
-                         | spawns per ticket
-+------------------------v--------------------------+
-|           Claude CLI Workers (git worktrees)      |
-|                                                   |
-|  Worker 1: worktree-mc-9174/                      |
-|    claude --print "/execute-jira-task MC-9174"    |
-|                                                   |
-|  Worker 2: worktree-mc-9173/                      |
-|    claude --print "/execute-jira-task MC-9173"    |
-+---------------------------------------------------+
-```
-
----
-
-## Execution Flow
-
-### 1. Input Phase
-
-```
-User provides input (one of):
-  A) Epic Key (e.g., MC-9056)
-     -> Fetch all child tickets from Jira
-     -> Display in UI with checkboxes
-     -> User selects which tickets to work on
-     -> Selected tickets go to Queued
-
-  B) Multiple Jira Keys (e.g., MC-9173, MC-9174, MC-9177)
-     -> Validate keys exist in Jira
-     -> All tickets go directly to Queued
-```
-
-### 2. Orchestration Phase
-
-```
-Orchestrator loop (runs continuously):
-  1. Check available worker slots (max_parallel - active_workers)
-  2. If slots available:
-     a. Pick next ticket from Queued (by rank order)
-     b. Check dependency graph — skip if blocked
-     c. Create git worktree for the ticket
-     d. Spawn Claude CLI worker in worktree
-     e. Move ticket to Planning
-     f. Sync Jira status -> In Progress
-  3. Monitor active workers:
-     a. Stream stdout to logs table + SSE
-     b. Detect phase transitions (Planning -> Developing)
-     c. On completion: open draft PR, move to Review
-     d. On failure: mark as failed, log error
-  4. Repeat every 5 seconds
-```
-
-### 3. Worker Phase (per ticket)
-
-```
-Claude CLI Worker lifecycle:
-  1. PLANNING
-     - Read Jira ticket description
-     - Analyze codebase for affected areas
-     - Create implementation plan (docs/plans/mc-XXXX-plan.md)
-     - Broadcast: state -> planning
-
-  2. DEVELOPING
-     - Create feature branch (feat/MC-XXXX)
-     - Implement code changes
-     - Run smart blast radius tests
-     - Fix any test failures
-     - Commit changes
-     - Broadcast: state -> developing
-
-  3. PR CREATION
-     - Push branch to remote
-     - Open draft PR on Bitbucket
-     - Notify Google Chat (optional)
-     - Broadcast: state -> review
-
-  4. CLEANUP
-     - Remove git worktree (keep branch)
-     - Update Jira status -> In Review
-     - Worker slot freed for next ticket
-```
-
-### 4. Review Phase (human)
-
-```
-Human reviews draft PR:
-  - If approved -> merge PR, drag card to Done
-  - If changes requested -> drag card back to Developing
-    -> Orchestrator spawns new worker to address feedback
-```
-
----
-
-## Ticket Lifecycle
-
-```
-Pending -----> Queued -----> Planning -----> Developing -----> Review -----> Done
-   ^                                            ^                |
-   |                                            |                |
-   +---- user drags back -----------------------+---- feedback --+
-```
-
-| State | Description | Jira Status | Draggable | Worker |
-|-------|-------------|-------------|-----------|--------|
-| Pending | Loaded but not selected for work | (no change) | Yes | None |
-| Queued | Waiting for available worker slot | (no change) | Yes | None |
-| Planning | Worker reading ticket, creating plan | In Progress | Pause first | Active |
-| Developing | Worker implementing, testing, committing | In Progress | Pause first | Active |
-| Review | Draft PR opened, awaiting human review | In Review | Yes | None |
-| Done | PR approved/merged | Done | Yes | None |
-
-### Interactive Controls
-
-- **Pause** (on Planning/Developing): Kills the Claude CLI process. Card becomes draggable.
-- **Resume** (on paused cards): Spawns a fresh Claude session to continue.
-- **Delete**: Removes ticket from board. Kills worker if running. Does not change Jira status.
-- **Drag-and-drop**: Move cards between any columns. Running cards must be paused first.
-
----
+| | Vibe Kanban / Trello / Linear | Task Ninja |
+|---|---|---|
+| **Tickets** | You track them manually | AI agents execute them autonomously |
+| **Parallelism** | One task at a time | Multiple AI workers in parallel (configurable) |
+| **Git isolation** | Manual branch management | Auto-creates git worktrees per ticket |
+| **PR creation** | You open PRs yourself | Auto-opens draft PRs on completion |
+| **Jira sync** | Copy-paste status updates | Bidirectional — board state syncs to Jira |
+| **Terminal** | Not applicable | Live terminal streaming per worker |
+| **Agent flexibility** | Locked to one tool | Pluggable — Claude Code, Gemini CLI, or custom |
+| **Retry on failure** | Manual re-run | Auto-retry with configurable delay and max attempts |
+| **Mobile access** | Cloud-hosted only | Run locally, access from phone via Tailscale/ngrok |
 
 ## Features
 
-### Core
-- Load tickets from Jira Epic (with checkbox selection) or paste multiple ticket keys
-- Visual kanban board with 6 columns and drag-and-drop
-- Configurable parallel workers (1-4 concurrent)
-- Per-ticket pause/resume/delete controls
-- Live terminal output with tab switching between active workers
-- Jira status sync (bidirectional)
-- Draft PR creation on Bitbucket via existing `/open-pr` command
-- Git worktree isolation per ticket (clean context, no conflicts)
-
-### Scheduler
-- One-time scheduled runs (start at specific datetime)
-- Recurring schedules (weekdays, daily, custom cron)
-- Optional end time (auto-pause workers when window closes)
-- Multiple schedules per run
-
-### Smart Blast Radius Testing
-- Analyzes what was changed (model constant? shared concern? factory?)
-- Expands test scope when shared code is modified
-- Runs related specs first, then broader scope if shared changes detected
-- Prevents the "distant spec failure" problem
-
-### Dependency Resolution
-- Reads Jira "blocks/blocked by" issue links
-- Respects Jira rank order as default execution sequence
-- Skips blocked tickets, picks next available
-- Manual reordering via drag-and-drop in Queued column
+- **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
+- **Any AI agent** — Claude Code, Gemini CLI, or any CLI tool via configurable agent profiles
+- **Live terminal** — watch each worker's output in real-time, tab-switch between active workers
+- **Live Process overlay** — fullscreen terminal view with input bar to interact with the AI agent when it needs confirmation
+- **Jira integration** — load tickets from epics or paste Jira URLs, auto-sync status bidirectionally
+- **Auto PR creation** — draft PRs opened automatically when workers finish
+- **Multi-repo support** — register multiple repositories, auto-match tickets by `[bracket]` tags in summaries
+- **3-tier assignment** — set repository, branch, and agent profile globally, per prefix group, or per ticket
+- **Smart watchdog** — auto-retry failed tickets, stale detection, working hours enforcement
+- **Push notifications** — browser alerts when tickets complete or fail (Web Push for background)
+- **Remote access** — access from your phone via Tailscale, ngrok, or Cloudflare Tunnel
+- **Scheduler** — one-time or recurring runs with visual cron builder, all features optional
+- **Auto-install** — missing Python dependencies installed automatically on first run
 
 ---
 
-## Dependencies
+## Installation
 
-### System Requirements
+### Prerequisites
 
-| Requirement | Version | Purpose |
-|-------------|---------|---------|
-| Python | >= 3.11 | Server runtime |
-| Claude CLI | latest | `claude` command for worker sessions |
-| Git | >= 2.20 | Worktree support |
-| Node.js | >= 18 | For Claude CLI (if installed via npm) |
+You only need **Python 3.10+** installed. Everything else (dependencies, database, migrations) is handled automatically on first run.
 
-### Python Packages
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `fastapi` | >= 0.115 | HTTP API server |
-| `uvicorn[standard]` | >= 0.34 | ASGI server for FastAPI |
-| `mcp[cli]` | >= 1.0 | MCP SDK — used as both server (exposes tools) and client (calls mcp-atlassian-with-bitbucket) |
-| `aiosqlite` | >= 0.20 | Async SQLite access |
-| `apscheduler` | >= 3.10 | Job scheduling (cron, one-time) |
-| `sse-starlette` | >= 2.0 | Server-Sent Events for FastAPI |
-| `pydantic` | >= 2.0 | Data validation (comes with FastAPI) |
-| `pyyaml` | >= 6.0 | Config file parsing |
-
-### MCP Servers (Required)
-
-This project depends entirely on `mcp-atlassian-with-bitbucket` for all Jira and Bitbucket operations. Both the orchestrator and Claude workers use MCP tools — no direct REST API calls.
-
-| MCP Server | Required | Used By | Purpose |
-|------------|----------|---------|---------|
-| `mcp-atlassian-with-bitbucket` | **Yes** | Orchestrator + Workers | Load epics (`jira_search`), read tickets (`jira_get_issue`), transition statuses (`jira_transition_issue`), create PRs (`bitbucket_create_pull_request`), read dependencies (`jira_get_issue` with links) |
-| `gchat-mcp` | Optional | Workers | Google Chat notifications for draft PR reviews |
-
-**How the orchestrator calls MCP tools:**
-
-The FastAPI server communicates with `mcp-atlassian-with-bitbucket` as an MCP client, calling tools like:
-- `jira_search` — load tickets from epic (`"Epic Link" = MC-9056`)
-- `jira_get_issue` — read ticket details and issue links for dependencies
-- `jira_get_transitions` — get available status transitions
-- `jira_transition_issue` — move tickets through lifecycle states
-- `bitbucket_create_pull_request` — open draft PRs
-
-**Claude CLI workers** inherit MCP server config from `~/.claude/settings.json` and use the same tools during `/execute-jira-task`.
-
-### Frontend (CDN, no build step)
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| Tailwind CSS | 3.x | Utility-first styling |
-| Alpine.js | 3.x | Reactive UI without build step |
-| SortableJS | 1.15 | Drag-and-drop between columns |
-| xterm.js | 5.x | Terminal emulator for live logs |
-
----
-
-## Project Structure
-
-```
-autonomous-atlassian-task/
-|-- server.py                  # FastAPI app + MCP server entry point
-|-- config.yaml                # Default configuration
-|-- requirements.txt           # Python dependencies
-|-- README.md                  # This file
-|
-|-- engine/
-|   |-- __init__.py
-|   |-- orchestrator.py        # Worker pool manager, main loop
-|   |-- worker.py              # Claude CLI process spawner
-|   |-- scheduler.py           # APScheduler integration
-|   |-- mcp_client.py          # MCP client for mcp-atlassian-with-bitbucket
-|   |-- git_manager.py         # Git worktree create/cleanup
-|   |-- dependency.py          # Dependency graph resolver
-|   |-- blast_radius.py        # Smart test scope detection
-|   `-- state.py               # State machine transitions
-|
-|-- models/
-|   |-- __init__.py
-|   |-- ticket.py              # Ticket state model
-|   |-- run.py                 # Run/session model
-|   `-- schedule.py            # Schedule model
-|
-|-- static/
-|   `-- index.html             # Single-file UI (Tailwind + Alpine + Sortable + xterm)
-|
-|-- migrations/
-|   `-- init.sql               # SQLite schema
-|
-`-- tests/
-    |-- test_orchestrator.py
-    |-- test_worker.py
-    |-- test_state.py
-    `-- test_api.py
-```
-
----
-
-## Database Schema
-
-```sql
--- Runs: a collection of tickets to execute (from an epic or manual input)
-CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    epic_key TEXT,
-    max_parallel INTEGER NOT NULL DEFAULT 2,
-    status TEXT NOT NULL DEFAULT 'idle',  -- idle | running | paused | completed
-    project_path TEXT,                    -- absolute path to the git repo
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Tickets: individual work items within a run
-CREATE TABLE IF NOT EXISTS tickets (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    jira_key TEXT NOT NULL,
-    summary TEXT,
-    state TEXT NOT NULL DEFAULT 'pending',  -- pending | queued | planning | developing | review | done | failed
-    rank INTEGER NOT NULL DEFAULT 0,
-    branch_name TEXT,
-    worktree_path TEXT,
-    pr_url TEXT,
-    pr_number INTEGER,
-    worker_pid INTEGER,
-    paused BOOLEAN DEFAULT FALSE,
-    log_file TEXT,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    error TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(run_id, jira_key)
-);
-
--- Schedules: timed execution of runs
-CREATE TABLE IF NOT EXISTS schedules (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    schedule_type TEXT NOT NULL,            -- one-time | recurring
-    cron_expression TEXT,                   -- e.g., "0 9 * * 1-5" (weekdays 9am)
-    start_time TIMESTAMP,
-    end_time TIMESTAMP,
-    next_run TIMESTAMP,
-    enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Logs: append-only terminal output per ticket
-CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    line TEXT NOT NULL
-);
-
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_tickets_run_id ON tickets(run_id);
-CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
-CREATE INDEX IF NOT EXISTS idx_logs_ticket_id ON logs(ticket_id);
-CREATE INDEX IF NOT EXISTS idx_schedules_run_id ON schedules(run_id);
-```
-
----
-
-## API Reference
-
-### Runs
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/runs` | Create a new run `{name, project_path, max_parallel}` |
-| `GET` | `/api/runs` | List all runs |
-| `GET` | `/api/runs/:id` | Get run with all tickets |
-| `DELETE` | `/api/runs/:id` | Delete run (kills all workers) |
-| `PUT` | `/api/runs/:id/config` | Update `{max_parallel}` |
-| `POST` | `/api/runs/:id/start` | Start orchestrator |
-| `POST` | `/api/runs/:id/pause` | Pause (finish current, stop picking new) |
-| `POST` | `/api/runs/:id/resume` | Resume orchestrator |
-
-### Tickets
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/runs/:id/load-epic` | Load tickets from Jira epic `{epic_key}` |
-| `POST` | `/api/runs/:id/add-tickets` | Add tickets by keys `{keys: ["MC-9173", ...]}` |
-| `PUT` | `/api/tickets/:id/state` | Move ticket `{state: "queued"}` |
-| `PUT` | `/api/tickets/:id/rank` | Reorder `{rank: 3}` |
-| `POST` | `/api/tickets/:id/pause` | Pause ticket (kill worker) |
-| `POST` | `/api/tickets/:id/resume` | Resume ticket (new worker) |
-| `DELETE` | `/api/tickets/:id` | Remove from board (kill worker if running) |
-
-### Schedules
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/schedules` | Create schedule `{run_id, type, cron, start_time, end_time}` |
-| `GET` | `/api/schedules` | List all schedules |
-| `DELETE` | `/api/schedules/:id` | Delete schedule |
-
-### Streaming
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/stream/:run_id` | SSE stream for real-time board updates |
-| `GET` | `/api/logs/:ticket_id` | Get terminal logs `?tail=100&follow=true` |
-
-### Static
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Serve the kanban UI (index.html) |
-
----
-
-## Setup & Installation
-
-### Step 1: Clone / Create the project
+<details>
+<summary><strong>macOS</strong></summary>
 
 ```bash
-cd ~/mcp-servers
-mkdir autonomous-atlassian-task && cd autonomous-atlassian-task
+brew install python@3.11 git
 ```
 
-### Step 2: Set up Python environment
+</details>
+
+<details>
+<summary><strong>Ubuntu / Debian</strong></summary>
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+sudo apt update
+sudo apt install -y python3.11 python3-pip git
 ```
 
-### Step 3: Verify mcp-atlassian-with-bitbucket is configured
+</details>
 
-The orchestrator connects to `mcp-atlassian-with-bitbucket` as an MCP client. Ensure it's configured in your Claude Code settings:
+<details>
+<summary><strong>Windows</strong></summary>
+
+1. Download and install [Python 3.11+](https://www.python.org/downloads/) — check **"Add to PATH"** during install
+2. Download and install [Git](https://git-scm.com/download/win)
+3. Open **Command Prompt** or **PowerShell**
+
+</details>
+
+Verify Python is installed:
 
 ```bash
-# Check it's in your MCP settings
-cat ~/.claude/settings.json | grep -A5 "mcp-atlassian"
+python3 --version   # macOS/Linux
+python --version    # Windows
 ```
 
-If not configured, add it to `~/.claude/settings.json` under `mcpServers`. The orchestrator reads this config to connect to the MCP server.
-
-### Step 4: Verify Claude CLI is available
+### Clone and Run
 
 ```bash
-# Check claude is installed and accessible
-claude --version
-
-# Verify it can run in print mode (headless)
-claude --print "echo hello"
+git clone https://github.com/jellythomas/task-ninja.git
+cd task-ninja
+python3 server.py        # macOS/Linux
+python server.py         # Windows
 ```
 
-### Step 5: Initialize the database
+On first run, Task Ninja will:
 
-```bash
-# The server auto-initializes on first run, or manually:
-sqlite3 autonomous_task.db < migrations/init.sql
-```
-
-### Step 6: Start the server
-
-```bash
-# Development mode (auto-reload)
-python server.py
-
-# Or with uvicorn directly
-uvicorn server:app --host 127.0.0.1 --port 8420 --reload
-```
-
-### Step 7: Open the dashboard
+1. **Auto-install dependencies** — reads `requirements.txt` and installs missing packages
+2. **Create `.env`** — configuration file with default settings
+3. **Initialize the database** — SQLite database created at `task_ninja.db` with all migrations applied
+4. **Generate an auth token** — displayed once in the terminal:
 
 ```
-http://localhost:8420
+  ╔══════════════════════════════════════════════════════╗
+  ║  Your Task Ninja auth token (save it now!):         ║
+  ║                                                      ║
+  ║  abc123...your-token-here...xyz789                   ║
+  ║                                                      ║
+  ║  This token is shown ONCE and never stored on disk.  ║
+  ║  To regenerate: python server.py --regenerate-token  ║
+  ╚══════════════════════════════════════════════════════╝
 ```
 
-### Step 8 (Optional): Register as MCP server in Claude Code
+5. **Start the server** — available at **http://localhost:8420**
 
-Add to `~/.claude/settings.json`:
+> **Save your auth token!** It's hashed and never stored in plain text. If you lose it, regenerate with `python server.py --regenerate-token`.
 
-```json
-{
-  "mcpServers": {
-    "autonomous-atlassian-task": {
-      "command": "python",
-      "args": ["/Users/you/mcp-servers/autonomous-atlassian-task/server.py", "--mcp"],
-      "env": {
-        "JIRA_URL": "https://jurnal.atlassian.net",
-        "JIRA_USERNAME": "your.email@mekari.com",
-        "JIRA_API_TOKEN": "your-api-token"
-      }
-    }
-  }
-}
-```
+### Open the Dashboard
+
+Open **http://localhost:8420** in your browser. The **Setup Wizard** appears automatically on first visit.
 
 ---
 
-## Configuration
+## Setup Wizard
 
-### config.yaml
+The wizard walks you through three required steps. You can re-open it anytime from the header icon.
 
-```yaml
-server:
-  host: "127.0.0.1"
-  port: 8420
+### 1. Jira Connection
 
-orchestrator:
-  max_parallel: 2                        # default concurrent workers
-  poll_interval: 5                       # seconds between orchestrator checks
-  worker_timeout: 1800                   # 30 min max per ticket (0 = unlimited)
+Connect to your Atlassian instance:
 
-claude:
-  command: "claude"                      # path to claude CLI
-  flags: ["--print"]                     # headless mode flags
-  skip_permissions: true                 # --dangerously-skip-permissions (toggle in UI settings)
-  execute_command: "/execute-jira-task"  # command to run per ticket
-  pr_command: "/open-pr --draft"         # command for draft PR
+| Field | Value | How to get it |
+|-------|-------|---------------|
+| **Jira Base URL** | `https://yourcompany.atlassian.net` | Your Jira cloud URL |
+| **Email** | `you@company.com` | Your Jira account email |
+| **API Token** | `ATATT3x...` | [Generate here](https://id.atlassian.com/manage-profile/security/api-tokens) → Create API token |
 
-mcp:
-  atlassian_server: "mcp-atlassian-with-bitbucket"  # MCP server name
-  jira_status_mapping:                   # board state -> Jira transition
-    planning: "In Progress"
-    developing: "In Progress"
-    review: "In Review"
-    done: "Done"
+Click **Test Connection** to verify. You should see a green checkmark.
 
-git:
-  worktree_dir: ".worktrees"             # relative to project root
-  branch_prefix: "feat"                  # feat/MC-XXXX
-  cleanup_worktrees: true                # remove worktrees after PR
+### 2. Repository
 
-database:
-  path: "autonomous_task.db"
-```
+Register the git repository where AI agents will create branches and worktrees:
 
----
+| Field | Value | Example |
+|-------|-------|---------|
+| **Name** | Display name | `my-app` |
+| **Path** | Absolute path on disk | `/Users/you/projects/my-app` |
+| **Default Branch** | Branch to fork from | `main` or `develop` |
+| **Jira Prefix** | Auto-match tickets by key | `MC` (matches `MC-1234`) |
 
-## Usage Guide
+> The repository must be a git repo. Task Ninja creates worktrees inside a `.worktrees/` directory at the repo root.
 
-### Workflow 1: Execute an entire Epic
+### 3. Agent Profile
 
-1. Open `http://localhost:8420`
-2. Enter Epic key: `MC-9056`
-3. Click "Load Epic" — all child tickets appear with checkboxes
-4. Check the [BE] tickets you want to work on
-5. Click "Queue Selected" — tickets move to Queued column
-6. Set max parallel workers (e.g., 2)
-7. Click "Start" — orchestrator begins picking tickets
+Configure which AI CLI agent executes tickets:
 
-### Workflow 2: Execute specific tickets
+| Agent | Command | Args Template |
+|-------|---------|---------------|
+| Claude Code | `claude` | `--print "/execute-jira-task {JIRA_KEY}"` |
+| Custom | `your-cli` | `--task {JIRA_KEY} --cwd {WORKTREE_PATH}` |
 
-1. Open `http://localhost:8420`
-2. Switch to "Paste Tickets" tab
-3. Enter ticket keys (one per line):
-   ```
-   MC-9173
-   MC-9174
-   MC-9177
-   ```
-4. Click "Queue All" — tickets go directly to Queued
-5. Click "Start"
+**Available template variables:**
 
-### Workflow 3: Scheduled execution
+| Variable | Description |
+|----------|-------------|
+| `{JIRA_KEY}` | Ticket key (e.g., `MC-1234`) |
+| `{JIRA_SUMMARY}` | Ticket title from Jira |
+| `{BRANCH_NAME}` | Git branch name created for this ticket |
+| `{WORKTREE_PATH}` | Absolute path to the git worktree |
+| `{PARENT_BRANCH}` | The branch the worktree was forked from |
+| `{PROJECT_PATH}` | Root path of the registered repository |
 
-1. Load tickets via Workflow 1 or 2
-2. Open Scheduler panel
-3. Set: Start at 09:00, End at 18:00, Repeat: Weekdays
-4. Save schedule — orchestrator will auto-start/stop daily
-
-### Managing active work
-
-- **Pause a ticket**: Click pause button on the card. Worker is killed. Card becomes draggable.
-- **Resume a ticket**: Click play button. A fresh Claude session spawns.
-- **Reorder**: Drag cards within the Queued column to change priority.
-- **Move back**: Drag a Review card back to Queued to re-implement with PR feedback.
-- **Delete**: Click delete on any card. Confirms, then removes from board.
-- **Switch terminal**: Click ticket tabs in the Live Terminal panel to view different worker outputs.
-
-### Settings (gear icon in config bar)
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Max Parallel | 2 | Concurrent Claude workers (1-4) |
-| Skip Permissions | ON | Adds `--dangerously-skip-permissions` to Claude CLI. Turn OFF if you want manual approval per tool call (slower but safer). |
-| Worker Timeout | 30 min | Max time per ticket before auto-kill (0 = unlimited) |
-| Cleanup Worktrees | ON | Remove git worktrees after PR creation |
+Click **Finish** — you're ready to go!
 
 ---
 
-## MCP Integration
+## Usage
 
-The server can also run as an MCP server, exposing tools that Claude Code can call directly:
+### Execute an Epic
 
-### MCP Tools
+1. Enter an Epic key (e.g., `MC-9056`) and click **Load Epic**
+2. Select which tickets to work on from the modal
+3. Click **Queue Selected** → tickets appear in the Queued column
+4. Set max parallel workers (default: 2) and click **Start**
 
-| Tool | Description |
-|------|-------------|
-| `load_epic` | Load tickets from a Jira epic into a run |
-| `add_tickets` | Add specific ticket keys to a run |
-| `start_run` | Start the orchestrator for a run |
-| `pause_run` | Pause the orchestrator |
-| `get_status` | Get current board state (all tickets + states) |
-| `get_ticket_logs` | Get terminal output for a specific ticket |
+### Execute Specific Tickets
 
-This allows Claude Code to orchestrate ticket execution conversationally:
+1. Switch to the **Paste Tickets** tab
+2. Enter Jira keys (e.g., `MC-9173, MC-9174`)
+3. Click **Queue All** → click **Start**
 
+### Board Controls
+
+- **Drag-and-drop** cards between columns to change status
+- **Pause/Resume** active workers from the card menu
+- **Live Terminal** — click any active ticket to view real-time worker output
+- **Delete** — remove any ticket from the board
+
+---
+
+## Optional Configuration
+
+### Remote Access
+
+Access Task Ninja from your phone — even when it's running on your local machine.
+
+**Enable it:** Settings > Remote Access > toggle on (or set `TASK_NINJA_REMOTE_ACCESS=true` in `.env`), then restart.
+
+**Connect via Tailscale (recommended):**
+
+```bash
+# On your computer
+brew install tailscale
+tailscale up
+tailscale ip -4          # Note the 100.x.x.x IP
 ```
-User: "Load the PDAM epic and start working on all BE tickets"
-Claude: [calls load_epic] -> [calls start_run]
-        "Started 2 parallel workers on MC-9173 and MC-9174.
-         6 more tickets queued. Dashboard: http://localhost:8420"
+
+On your phone: install [Tailscale](https://tailscale.com/download) and sign in with the same account. Open `http://100.x.x.x:8420` in your phone's browser and enter your auth token.
+
+See the [full remote access guide](docs/architecture.md) for ngrok and Cloudflare Tunnel options.
+
+### Push Notifications
+
+Get alerted when tickets complete or fail:
+
+1. Settings > Notifications > click **Enable** (grants browser permission)
+2. Toggle **Server Notifications** on
+
+For background notifications (tab closed), configure VAPID keys in `.env`. See [architecture docs](docs/architecture.md) for details.
+
+### Scheduler, Auto-Retry & Working Hours
+
+All scheduler features are **optional** and independently toggleable from the UI or `.env`.
+
+**UI setup:** Settings > Scheduler tab — toggle each feature on/off, configure schedules with a visual cron builder, and set auto-retry/working hours parameters.
+
+**`.env` setup:**
+
+```env
+# Auto-retry failed tickets (e.g., token exhaustion)
+AUTO_RETRY_ENABLED=true
+AUTO_RETRY_MAX=3
+AUTO_RETRY_DELAY_MINUTES=15
+
+# Only spawn workers during business hours
+WORKING_HOURS_ENABLED=true
+WORKING_HOURS_START=09:00
+WORKING_HOURS_END=18:00
+WORKING_HOURS_DAYS=mon,tue,wed,thu,fri
 ```
+
+**Schedules:** Create recurring (cron) or one-time schedules from the Scheduler tab. Schedules re-run tickets already on the board — they don't create new tickets.
+
+---
+
+## How It Works
+
+Each ticket goes through: **Todo → Queued → Planning → Developing → Review → Done**
+
+The orchestrator picks queued tickets, creates a git worktree for each, spawns an AI agent worker, and streams output to the dashboard in real-time. On completion, it opens a draft PR and moves the ticket to Review. On failure, the watchdog can auto-retry.
+
+For the full execution flow, architecture diagrams, API reference, database schema, and configuration options, see **[docs/architecture.md](docs/architecture.md)**.
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-**"claude: command not found"**
-- Ensure Claude CLI is installed: `npm install -g @anthropic-ai/claude-code`
-- Or add to PATH: `export PATH="$PATH:$(npm bin -g)"`
-
-**"Git worktree creation failed"**
-- Ensure you're in a git repository
-- Check for existing worktrees: `git worktree list`
-- Clean stale worktrees: `git worktree prune`
-
-**"Jira API 401 Unauthorized"**
-- Verify JIRA_API_TOKEN is valid
-- Generate new token: https://id.atlassian.com/manage-profile/security/api-tokens
-
-**Worker stuck in Planning/Developing**
-- Check live terminal for errors
-- Pause and resume the ticket (spawns fresh session)
-- If persistent, delete ticket and re-queue
-
-**Port 8420 already in use**
-- Change port in config.yaml or: `python server.py --port 8421`
+| Problem | Solution |
+|---------|----------|
+| `claude: command not found` | Install: `npm install -g @anthropic-ai/claude-code` |
+| `mcp-atlassian` not found by Claude | Add it to `~/.claude/settings.json` under `mcpServers` |
+| Claude can't access Jira | Verify `mcp-atlassian-with-bitbucket` works: open `claude` and ask "List my Jira projects" |
+| Git worktree creation failed | Run `git worktree list` and `git worktree prune` |
+| Jira API 401 | Check API token: [regenerate here](https://id.atlassian.com/manage-profile/security/api-tokens) |
+| Worker stuck in Planning/Developing | Pause and resume the ticket (spawns fresh session) |
+| Port 8420 in use | Set `TASK_NINJA_PORT=8421` in `.env` |
+| Lost auth token | Regenerate: `python server.py --regenerate-token` |
+| Bitbucket PR creation fails | Verify `BITBUCKET_APP_PASSWORD` in both `.env` and Claude Code MCP config |
 
 ---
 
 ## License
 
-Internal tool — Mekari engineering use only.
+MIT

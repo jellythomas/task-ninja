@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 
 class TicketState(str, Enum):
-    PENDING = "pending"
+    TODO = "todo"
     QUEUED = "queued"
     PLANNING = "planning"
     DEVELOPING = "developing"
@@ -26,13 +26,13 @@ class RunStatus(str, Enum):
 
 # Valid state transitions
 VALID_TRANSITIONS = {
-    TicketState.PENDING: {TicketState.QUEUED, TicketState.PENDING},
-    TicketState.QUEUED: {TicketState.PLANNING, TicketState.PENDING, TicketState.QUEUED, TicketState.FAILED},
-    TicketState.PLANNING: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.FAILED, TicketState.PENDING},
-    TicketState.DEVELOPING: {TicketState.REVIEW, TicketState.QUEUED, TicketState.FAILED, TicketState.PENDING},
-    TicketState.REVIEW: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.DONE, TicketState.PENDING},
-    TicketState.DONE: {TicketState.PENDING, TicketState.QUEUED},
-    TicketState.FAILED: {TicketState.QUEUED, TicketState.PENDING},
+    TicketState.TODO: {TicketState.QUEUED, TicketState.TODO},
+    TicketState.QUEUED: {TicketState.PLANNING, TicketState.TODO, TicketState.QUEUED, TicketState.FAILED},
+    TicketState.PLANNING: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.FAILED, TicketState.TODO},
+    TicketState.DEVELOPING: {TicketState.REVIEW, TicketState.QUEUED, TicketState.FAILED, TicketState.TODO},
+    TicketState.REVIEW: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.DONE, TicketState.TODO},
+    TicketState.DONE: {TicketState.TODO, TicketState.QUEUED},
+    TicketState.FAILED: {TicketState.QUEUED, TicketState.TODO},
 }
 
 # States where a worker is active
@@ -44,7 +44,7 @@ class Ticket(BaseModel):
     run_id: str
     jira_key: str
     summary: Optional[str] = None
-    state: TicketState = TicketState.PENDING
+    state: TicketState = TicketState.TODO
     rank: int = 0
     branch_name: Optional[str] = None
     worktree_path: Optional[str] = None
@@ -53,6 +53,9 @@ class Ticket(BaseModel):
     worker_pid: Optional[int] = None
     paused: bool = False
     log_file: Optional[str] = None
+    repository_id: Optional[int] = None
+    parent_branch: Optional[str] = None
+    profile_id: Optional[int] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
@@ -67,6 +70,38 @@ class Run(BaseModel):
     max_parallel: int = 2
     status: RunStatus = RunStatus.IDLE
     project_path: Optional[str] = None
+    parent_branch: Optional[str] = None
+    repository_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class Repository(BaseModel):
+    id: Optional[int] = None
+    name: str
+    path: str
+    default_branch: str = "main"
+    jira_label: Optional[str] = None  # e.g. "MC", "CKYC" — prefix for matching tickets
+    default_profile_id: Optional[int] = None
+    is_deleted: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class LabelRepoMapping(BaseModel):
+    id: Optional[int] = None
+    jira_label: str
+    repository_id: int
+    created_at: Optional[datetime] = None
+
+
+class AgentProfile(BaseModel):
+    id: Optional[int] = None
+    name: str
+    command: str
+    args_template: str
+    log_format: str = "plain-text"
+    is_default: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -87,7 +122,9 @@ class Schedule(BaseModel):
 
 class CreateRunRequest(BaseModel):
     name: str
-    project_path: str
+    project_path: Optional[str] = None
+    repository_id: Optional[int] = None
+    parent_branch: Optional[str] = None
     max_parallel: int = 2
 
 
@@ -95,9 +132,25 @@ class LoadEpicRequest(BaseModel):
     epic_key: str
 
 
+class FetchTicketsRequest(BaseModel):
+    keys: list[str]
+
+
+class TicketAssignment(BaseModel):
+    repository_id: Optional[int] = None
+    parent_branch: Optional[str] = None
+    profile_id: Optional[int] = None
+
+
 class AddTicketsRequest(BaseModel):
     keys: list[str]
     summaries: Optional[dict[str, str]] = None  # jira_key -> summary
+    # Global fallback fields
+    repository_id: Optional[int] = None
+    parent_branch: Optional[str] = None
+    profile_id: Optional[int] = None
+    # Per-ticket overrides (takes precedence over global)
+    assignments: Optional[dict[str, TicketAssignment]] = None
 
 
 class MoveTicketRequest(BaseModel):
@@ -120,3 +173,56 @@ class CreateScheduleRequest(BaseModel):
     cron_expression: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+
+
+class UpdateScheduleRequest(BaseModel):
+    enabled: Optional[bool] = None
+    cron_expression: Optional[str] = None
+    end_time: Optional[datetime] = None
+
+
+# --- Repository & Settings request models ---
+
+class CreateRepositoryRequest(BaseModel):
+    name: str
+    path: str
+    default_branch: str = "main"
+    jira_label: Optional[str] = None
+    default_profile_id: Optional[int] = None
+
+
+class UpdateRepositoryRequest(BaseModel):
+    name: Optional[str] = None
+    path: Optional[str] = None
+    default_branch: Optional[str] = None
+    jira_label: Optional[str] = None
+    default_profile_id: Optional[int] = None
+
+
+class CreateLabelMappingRequest(BaseModel):
+    jira_label: str
+    repository_id: int
+
+
+class CreateAgentProfileRequest(BaseModel):
+    name: str
+    command: str
+    args_template: str
+    log_format: str = "plain-text"
+
+
+class UpdateAgentProfileRequest(BaseModel):
+    name: Optional[str] = None
+    command: Optional[str] = None
+    args_template: Optional[str] = None
+    log_format: Optional[str] = None
+
+
+class UpdateSettingsRequest(BaseModel):
+    settings: dict[str, str]
+
+
+class UpdateTicketAssignmentRequest(BaseModel):
+    repository_id: Optional[int] = None
+    parent_branch: Optional[str] = None
+    profile_id: Optional[int] = None

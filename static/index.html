@@ -3,10 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Autonomous Atlassian Task</title>
+  <title>Task Ninja</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -19,6 +22,8 @@
     }
   </script>
   <style>
+    .scrollbar-hide::-webkit-scrollbar { display: none; }
+    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
     .sortable-ghost { opacity: 0.4; }
     .sortable-drag { transform: rotate(2deg); }
     .scrollbar-thin::-webkit-scrollbar { width: 6px; }
@@ -26,20 +31,212 @@
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
     @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+    /* Mobile list view */
+    @media (max-width: 639px) {
+      .kanban-board { display: none !important; }
+      .mobile-list { display: block !important; }
+    }
+    @media (min-width: 640px) {
+      .mobile-list { display: none !important; }
+    }
   </style>
 </head>
 <body class="h-full text-gray-200" x-data="app()" x-init="init()">
 
-  <!-- Header -->
-  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">AT</div>
-      <h1 class="text-lg font-semibold text-white">Autonomous Atlassian Task</h1>
+  <!-- Login Screen -->
+  <div x-show="showLogin" x-transition class="fixed inset-0 bg-gray-950 flex items-center justify-center z-[70]">
+    <div class="w-full max-w-sm mx-4 text-center" x-data="{ loginToken: '', loginError: '' }">
+      <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center font-bold text-2xl mx-auto mb-6">TN</div>
+      <h1 class="text-xl font-semibold text-white mb-1">Task Ninja</h1>
+      <p class="text-sm text-gray-500 mb-6">Enter your access token to continue</p>
+      <input x-model="loginToken" type="password" placeholder="Access token"
+             @keydown.enter="loginError = await doLogin(loginToken) || ''"
+             class="bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm w-full focus:border-blue-500 focus:outline-none mb-3">
+      <div x-show="loginError" class="text-xs text-red-400 mb-3" x-text="loginError"></div>
+      <button @click="loginError = await doLogin(loginToken) || ''"
+              class="bg-blue-600 hover:bg-blue-700 px-4 py-2.5 text-sm rounded-lg font-medium transition w-full">Sign In</button>
+      <p class="text-xs text-gray-600 mt-4">Token was shown once at first run. Regenerate: <code>python server.py --regenerate-token</code></p>
     </div>
+  </div>
+
+  <!-- Quick Setup Wizard -->
+  <div x-show="showJiraSetup" x-transition class="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4">
+      <!-- Wizard Header -->
+      <div class="px-5 py-4 border-b border-gray-800">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold text-white">Quick Setup</h2>
+          <span class="text-xs text-gray-500" x-text="'Step ' + setupStep + ' of 3'"></span>
+        </div>
+        <!-- Step indicators -->
+        <div class="flex gap-1.5">
+          <template x-for="s in 3" :key="s">
+            <div class="h-1 flex-1 rounded-full transition-all duration-300"
+                 :class="s <= setupStep ? 'bg-blue-500' : 'bg-gray-700'"></div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Step 1: Jira Connection -->
+      <div x-show="setupStep === 1" class="px-5 py-4 space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+          <h3 class="text-sm font-medium text-white">Jira Connection</h3>
+        </div>
+        <p class="text-xs text-gray-500">Connect Jira to fetch epics and sync ticket status.</p>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Jira Base URL</label>
+          <input x-model="jiraSetup.url" type="text" placeholder="https://yourcompany.atlassian.net"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Email</label>
+          <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">API Token</label>
+          <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
+        <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
+        <div class="flex gap-2">
+          <button @click="testJiraConnection()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test</button>
+          <button @click="saveJiraCredentials()" class="px-3 py-1.5 text-xs text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Save</button>
+        </div>
+      </div>
+
+      <!-- Step 2: First Repository -->
+      <div x-show="setupStep === 2" class="px-5 py-4 space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+          <h3 class="text-sm font-medium text-white">Add a Repository</h3>
+        </div>
+        <p class="text-xs text-gray-500">Register the project where AI agents will create branches and worktrees.</p>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Repository Name</label>
+          <input x-model="newRepo.name" type="text" placeholder="mekari_credit"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Local Path</label>
+          <input x-model="newRepo.path" type="text" placeholder="/Users/you/projects/mekari_credit"
+                 class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Default Branch</label>
+            <input x-model="newRepo.default_branch" type="text" placeholder="main"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Jira Prefix</label>
+            <input x-model="newRepo.jira_label" type="text" placeholder="MC"
+                   class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+          </div>
+        </div>
+        <!-- Already added repos -->
+        <template x-if="repositories.length > 0">
+          <div class="border-t border-gray-800 pt-2 mt-2">
+            <span class="text-[10px] text-gray-500 mb-1 block">Added:</span>
+            <template x-for="r in repositories" :key="r.id">
+              <div class="flex items-center gap-2 text-xs text-gray-400 py-0.5">
+                <span class="text-white font-medium" x-text="r.name"></span>
+                <span x-show="r.jira_label" class="text-violet-400 font-mono text-[10px]" x-text="r.jira_label"></span>
+                <span class="text-gray-600 font-mono truncate flex-1" x-text="r.path"></span>
+              </div>
+            </template>
+          </div>
+        </template>
+        <button @click="addRepo().then(() => {})" class="bg-violet-600 hover:bg-violet-700 px-4 py-1.5 text-sm rounded-lg font-medium transition w-full">Add Repository</button>
+      </div>
+
+      <!-- Step 3: Agent Profile -->
+      <div x-show="setupStep === 3" class="px-5 py-4 space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+          <h3 class="text-sm font-medium text-white">Agent Profile</h3>
+        </div>
+        <p class="text-xs text-gray-500">Choose the AI agent that will work on your tickets.</p>
+        <!-- Show existing profiles -->
+        <template x-if="agentProfiles.length > 0">
+          <div class="space-y-1.5">
+            <template x-for="p in agentProfiles" :key="p.id">
+              <div class="flex items-center gap-3 bg-gray-800/70 rounded-lg px-3 py-2.5 border transition"
+                   :class="p.is_default ? 'border-emerald-500/50' : 'border-gray-700 hover:border-gray-600 cursor-pointer'"
+                   @click="if (!p.is_default) setDefaultProfile(p.id)">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-medium text-white" x-text="p.name"></span>
+                    <template x-if="p.is_default">
+                      <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full">Active</span>
+                    </template>
+                  </div>
+                  <div class="text-[11px] text-gray-500 font-mono truncate mt-0.5" x-text="p.command + ' ' + p.args_template"></div>
+                </div>
+                <div x-show="!p.is_default" class="text-xs text-gray-500">Click to select</div>
+              </div>
+            </template>
+          </div>
+        </template>
+        <!-- Add new profile (collapsed) -->
+        <details class="group">
+          <summary class="text-xs text-blue-400 hover:text-blue-300 cursor-pointer py-1">+ Add custom agent profile</summary>
+          <div class="mt-2 space-y-2 bg-gray-800/30 rounded-lg p-3 border border-gray-800 border-dashed">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+                <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
+                <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-0.5">Args Template</label>
+              <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"' class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+            </div>
+            <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-xs rounded-lg font-medium transition w-full">Add Profile</button>
+          </div>
+        </details>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-between">
+        <div>
+          <button x-show="setupStep === 1" @click="showJiraSetup = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Skip for now</button>
+          <button x-show="setupStep > 1" @click="setupStep--" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            Back
+          </button>
+        </div>
+        <div class="flex gap-2">
+          <button x-show="setupStep < 3" @click="setupStep++" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1">
+            Next
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </button>
+          <button x-show="setupStep === 3" @click="showJiraSetup = false" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <span class="text-xs text-gray-500" x-text="currentRun ? `Run: ${currentRun.name}` : 'No active run'"></span>
-      <button @click="showSettings = !showSettings" class="p-2 hover:bg-gray-800 rounded-lg transition">
-        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">TN</div>
+      <h1 class="text-lg font-semibold text-white hidden sm:block">Task Ninja</h1>
+    </div>
+    <div class="flex items-center gap-2">
+      <button @click="openSetupWizard()" class="p-2 hover:bg-gray-800 rounded-lg transition text-gray-400" title="Setup Wizard">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+      </button>
+      <button @click="showSettings = !showSettings" :class="showSettings ? 'bg-gray-700 text-white' : 'text-gray-400'" class="p-2 hover:bg-gray-800 rounded-lg transition" title="Settings">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
         </svg>
@@ -49,9 +246,37 @@
 
   <div class="flex flex-col h-[calc(100vh-56px)]">
 
+    <!-- Project/Repo Tabs -->
+    <div class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6" x-show="repositories.length > 0">
+      <!-- Desktop tabs -->
+      <div class="hidden sm:flex items-center gap-1 overflow-x-auto py-1">
+        <button @click="activeRepoId = null"
+                :class="activeRepoId === null ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                class="px-3 py-1.5 text-xs rounded-md transition font-medium flex-shrink-0">All</button>
+        <template x-for="repo in repositories" :key="repo.id">
+          <button @click="activeRepoId = repo.id"
+                  :class="activeRepoId === repo.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                  class="px-3 py-1.5 text-xs rounded-md transition font-medium flex-shrink-0 flex items-center gap-1.5">
+            <span x-text="repo.name"></span>
+            <span class="bg-gray-700/50 text-gray-500 px-1 rounded text-[10px]" x-text="ticketCountForRepo(repo.id)"></span>
+          </button>
+        </template>
+      </div>
+      <!-- Mobile dropdown -->
+      <div class="sm:hidden py-2">
+        <select x-model.number="activeRepoId" @change="activeRepoId = $event.target.value === '' ? null : parseInt($event.target.value)"
+                class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          <option value="">All Projects</option>
+          <template x-for="repo in repositories" :key="repo.id">
+            <option :value="repo.id" x-text="repo.name + ' (' + ticketCountForRepo(repo.id) + ')'"></option>
+          </template>
+        </select>
+      </div>
+    </div>
+
     <!-- Config Bar -->
-    <div class="bg-gray-900/50 border-b border-gray-800 px-6 py-3">
-      <div class="flex flex-wrap items-center gap-4">
+    <div class="bg-gray-900/50 border-b border-gray-800 px-4 sm:px-6 py-3">
+      <div class="flex flex-wrap items-center gap-3 sm:gap-4">
 
         <!-- Input Mode Tabs -->
         <div class="flex bg-gray-800 rounded-lg p-0.5">
@@ -62,7 +287,7 @@
         <!-- Epic Input -->
         <template x-if="inputMode === 'epic'">
           <div class="flex items-center gap-2">
-            <input x-model="epicKey" type="text" placeholder="MC-9056" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-32 focus:border-blue-500 focus:outline-none">
+            <input x-model="epicKey" type="text" placeholder="MC-9056" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-28 sm:w-32 focus:border-blue-500 focus:outline-none">
             <button @click="loadEpic()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Load</button>
           </div>
         </template>
@@ -70,15 +295,15 @@
         <!-- Ticket Input -->
         <template x-if="inputMode === 'tickets'">
           <div class="flex items-center gap-2">
-            <input x-model="ticketInput" type="text" placeholder="MC-9173, MC-9174, MC-9177" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-72 focus:border-blue-500 focus:outline-none">
-            <button @click="addTickets()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Queue</button>
+            <input x-model="ticketInput" type="text" placeholder="MC-9173, MC-9174" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-48 sm:w-72 focus:border-blue-500 focus:outline-none">
+            <button @click="addTickets()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-sm rounded-lg font-medium transition">Load</button>
           </div>
         </template>
 
-        <div class="h-6 w-px bg-gray-700"></div>
+        <div class="h-6 w-px bg-gray-700 hidden sm:block"></div>
 
         <!-- Board Filter -->
-        <div class="flex items-center gap-1.5">
+        <div class="hidden sm:flex items-center gap-1.5">
           <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
           <input x-model="boardFilter" type="text" placeholder="Filter board..."
                  class="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs w-36 focus:border-blue-500 focus:outline-none focus:w-48 transition-all">
@@ -87,10 +312,10 @@
           </button>
         </div>
 
-        <div class="h-6 w-px bg-gray-700"></div>
+        <div class="h-6 w-px bg-gray-700 hidden sm:block"></div>
 
         <!-- Parallel Config -->
-        <div class="flex items-center gap-2">
+        <div class="hidden sm:flex items-center gap-2">
           <span class="text-xs text-gray-500">Parallel:</span>
           <div class="flex gap-1">
             <template x-for="n in [1,2,3,4]">
@@ -99,26 +324,26 @@
           </div>
         </div>
 
-        <div class="h-6 w-px bg-gray-700"></div>
+        <div class="h-6 w-px bg-gray-700 hidden sm:block"></div>
 
         <!-- Run Controls -->
         <div class="flex items-center gap-2">
           <template x-if="!currentRun || currentRun.status === 'idle' || currentRun.status === 'completed'">
-            <button @click="startRun()" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+            <button @click="startRun()" class="bg-emerald-600 hover:bg-emerald-700 px-3 sm:px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-              Start
+              <span class="hidden sm:inline">Start</span>
             </button>
           </template>
           <template x-if="currentRun && currentRun.status === 'running'">
-            <button @click="pauseRun()" class="bg-amber-600 hover:bg-amber-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+            <button @click="pauseRun()" class="bg-amber-600 hover:bg-amber-700 px-3 sm:px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z"/></svg>
-              Pause
+              <span class="hidden sm:inline">Pause</span>
             </button>
           </template>
           <template x-if="currentRun && currentRun.status === 'paused'">
-            <button @click="resumeRun()" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
+            <button @click="resumeRun()" class="bg-emerald-600 hover:bg-emerald-700 px-3 sm:px-4 py-1.5 text-sm rounded-lg font-medium transition flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-              Resume
+              <span class="hidden sm:inline">Resume</span>
             </button>
           </template>
         </div>
@@ -132,29 +357,627 @@
             'bg-blue-900/50 text-blue-400 border-blue-800': currentRun.status === 'completed',
           }" class="px-2.5 py-0.5 text-xs font-medium rounded-full border" x-text="currentRun.status.toUpperCase()"></span>
         </template>
+
+        <div class="ml-auto"></div>
+
       </div>
     </div>
 
-    <!-- Settings Panel (collapsible) -->
-    <div x-show="showSettings" x-transition class="bg-gray-900/80 border-b border-gray-800 px-6 py-4">
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl">
-        <label class="flex items-center gap-2">
-          <input type="checkbox" x-model="settings.skipPermissions" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
-          <span class="text-sm text-gray-300">Skip Permissions</span>
-        </label>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">Worker Timeout (min)</label>
-          <input type="number" x-model.number="settings.workerTimeout" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-20">
+    <!-- Settings Drawer (slide-out from right) -->
+    <div x-show="showSettings" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+         class="fixed inset-0 bg-black/50 z-40" @click="showSettings = false"></div>
+    <div x-show="showSettings" x-transition:enter="transition ease-out duration-300 transform" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+         x-transition:leave="transition ease-in duration-200 transform" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
+         class="fixed top-0 right-0 h-full w-full sm:w-[480px] bg-gray-900 border-l border-gray-800 z-50 flex flex-col shadow-2xl">
+      <!-- Drawer Header -->
+      <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
+        <h2 class="text-base font-semibold text-white">Settings</h2>
+        <button @click="showSettings = false" class="p-1.5 hover:bg-gray-800 rounded-lg transition text-gray-400 hover:text-white">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="flex flex-col sm:flex-row flex-1 overflow-hidden">
+        <!-- Mobile: Horizontal scrollable tab strip -->
+        <div class="sm:hidden flex-shrink-0 border-b border-gray-800">
+          <div class="flex overflow-x-auto px-2 py-2 gap-1 scrollbar-hide">
+            <template x-for="tab in settingsTabs" :key="tab.id">
+              <button @click="activeSettingsTab = tab.id"
+                      :class="activeSettingsTab === tab.id ? 'bg-blue-600/10 text-blue-400 border-blue-500 border' : 'text-gray-400 hover:text-gray-200 border-transparent border'"
+                      class="px-3 py-1.5 text-xs rounded-lg transition flex items-center gap-1.5 whitespace-nowrap flex-shrink-0">
+                <!-- Icons for each tab (mobile) -->
+                <template x-if="tab.id === 'general'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg></template>
+                <template x-if="tab.id === 'repositories'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></template>
+                <template x-if="tab.id === 'profiles'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg></template>
+                <template x-if="tab.id === 'jira'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg></template>
+                <template x-if="tab.id === 'notifications'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg></template>
+                <template x-if="tab.id === 'scheduler'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></template>
+                <template x-if="tab.id === 'remote'"><svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></template>
+                <span x-text="tab.label"></span>
+              </button>
+            </template>
+          </div>
         </div>
-        <label class="flex items-center gap-2">
-          <input type="checkbox" x-model="settings.cleanupWorktrees" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
-          <span class="text-sm text-gray-300">Cleanup Worktrees</span>
-        </label>
+        <!-- Desktop: Vertical sidebar -->
+        <div class="hidden sm:block w-44 border-r border-gray-800 py-3 flex-shrink-0">
+          <template x-for="tab in settingsTabs" :key="tab.id">
+            <button @click="activeSettingsTab = tab.id"
+                    :class="activeSettingsTab === tab.id ? 'bg-blue-600/10 text-blue-400 border-r-2 border-blue-500' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'"
+                    class="w-full text-left px-4 py-2.5 text-sm transition flex items-center gap-2.5">
+              <!-- Icons for each tab -->
+              <template x-if="tab.id === 'general'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+              </template>
+              <template x-if="tab.id === 'repositories'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+              </template>
+              <template x-if="tab.id === 'profiles'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+              </template>
+              <template x-if="tab.id === 'jira'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+              </template>
+              <template x-if="tab.id === 'notifications'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+              </template>
+              <template x-if="tab.id === 'scheduler'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </template>
+              <template x-if="tab.id === 'remote'">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </template>
+              <span x-text="tab.label"></span>
+            </button>
+          </template>
+        </div>
+        <!-- Content Area -->
+        <div class="flex-1 overflow-y-auto p-4 sm:p-5">
+          <!-- General -->
+          <div x-show="activeSettingsTab === 'general'" class="space-y-4">
+            <h3 class="text-sm font-medium text-gray-300 mb-3">General Settings</h3>
+            <label class="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg hover:bg-gray-800 transition cursor-pointer">
+              <input type="checkbox" x-model="settings.cleanupWorktrees" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+              <div>
+                <span class="text-sm text-gray-200 block">Cleanup Worktrees</span>
+                <span class="text-xs text-gray-500">Remove git worktrees after ticket completion</span>
+              </div>
+            </label>
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <label class="text-sm text-gray-200 block mb-1.5">Worker Timeout</label>
+              <div class="flex items-center gap-2">
+                <input type="number" x-model.number="settings.workerTimeout" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-24 focus:border-blue-500 focus:outline-none">
+                <span class="text-xs text-gray-500">minutes</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Repositories -->
+          <div x-show="activeSettingsTab === 'repositories'">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Repositories</h3>
+            <p class="text-xs text-gray-500 mb-4">Register repositories and their Jira key prefix for auto-matching tickets.</p>
+            <div class="space-y-2 mb-4">
+              <template x-for="repo in repositories" :key="repo.id">
+                <div class="bg-gray-800/70 rounded-lg px-4 py-3 hover:bg-gray-800 transition space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="text-sm font-medium text-white truncate" x-text="repo.name"></span>
+                      <span x-show="repo.jira_label" class="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 font-semibold flex-shrink-0" x-text="repo.jira_label"></span>
+                      <span class="text-[10px] text-gray-600 px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 flex-shrink-0" x-text="repo.default_branch"></span>
+                    </div>
+                    <div class="flex items-center gap-1 flex-shrink-0">
+                      <button @click="editRepo(repo)" class="text-gray-500 hover:text-blue-400 transition p-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                      </button>
+                      <button @click="removeRepo(repo.id)" class="text-gray-500 hover:text-red-400 transition p-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="text-xs text-gray-500 font-mono truncate" x-text="repo.path"></div>
+                </div>
+              </template>
+            </div>
+            <div class="bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
+              <span class="text-xs text-gray-500 font-medium">Add Repository</span>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+                  <input x-model="newRepo.name" type="text" placeholder="mekari_credit" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Jira Prefix</label>
+                  <input x-model="newRepo.jira_label" type="text" placeholder="MC" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Path</label>
+                <input x-model="newRepo.path" type="text" placeholder="/Users/you/mekari_credit" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Default Branch</label>
+                <input x-model="newRepo.default_branch" type="text" placeholder="main" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-32 focus:border-blue-500 focus:outline-none">
+              </div>
+              <button @click="addRepo()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition w-full">Add Repository</button>
+            </div>
+          </div>
+
+          <!-- Agent Profiles -->
+          <div x-show="activeSettingsTab === 'profiles'">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Agent Profiles</h3>
+            <p class="text-xs text-gray-500 mb-4">Configure AI agents (Claude Code, Gemini CLI, etc.) for task execution.</p>
+            <div class="space-y-2 mb-4">
+              <template x-for="p in agentProfiles" :key="p.id">
+                <div class="bg-gray-800/70 rounded-lg px-4 py-3 hover:bg-gray-800 transition space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm font-medium text-white" x-text="p.name"></span>
+                      <template x-if="p.is_default">
+                        <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full font-medium">Default</span>
+                      </template>
+                      <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400" x-text="p.log_format"></span>
+                    </div>
+                    <div class="flex items-center gap-1">
+                      <button x-show="!p.is_default" @click="setDefaultProfile(p.id)" class="text-[10px] text-gray-500 hover:text-blue-400 transition px-1.5 py-0.5 rounded hover:bg-gray-700">Set Default</button>
+                      <button @click="editProfile(p)" class="text-gray-500 hover:text-blue-400 transition p-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                      </button>
+                      <button @click="removeProfile(p.id)" class="text-gray-500 hover:text-red-400 transition p-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="text-xs text-gray-500 font-mono truncate" x-text="p.command + ' ' + p.args_template"></div>
+                </div>
+              </template>
+            </div>
+            <div class="bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
+              <span class="text-xs text-gray-500 font-medium">Add Profile</span>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
+                  <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
+                  <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+                </div>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Log Format</label>
+                <select x-model="newProfile.log_format" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
+                  <option value="plain-text">plain-text</option>
+                  <option value="stream-json">stream-json</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-0.5">Args Template <span class="text-gray-600">({JIRA_KEY}, {BRANCH_NAME}, {WORKTREE_PATH}, {PARENT_BRANCH}, {PROJECT_PATH}, {JIRA_SUMMARY})</span></label>
+                <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"'
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition w-full">Add Profile</button>
+            </div>
+          </div>
+
+          <!-- Jira Credentials -->
+          <div x-show="activeSettingsTab === 'jira'">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Jira Connection</h3>
+            <p class="text-xs text-gray-500 mb-4">Connect your Jira account to fetch epics and sync ticket status.</p>
+            <div class="space-y-3">
+              <div>
+                <label class="text-xs text-gray-400 block mb-1">Jira Base URL</label>
+                <input x-model="jiraSetup.url" type="text" placeholder="https://yourcompany.atlassian.net"
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-xs text-gray-400 block mb-1">Email</label>
+                <input x-model="jiraSetup.email" type="email" placeholder="you@company.com"
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="text-xs text-gray-400 block mb-1">API Token</label>
+                <input x-model="jiraSetup.token" type="password" placeholder="Your Jira API token"
+                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full focus:border-blue-500 focus:outline-none">
+              </div>
+              <div class="flex gap-2 pt-1">
+                <button @click="testJiraConnection()" class="px-4 py-2 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg transition">Test Connection</button>
+                <button @click="saveJiraCredentials()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 text-sm rounded-lg font-medium transition">Save</button>
+              </div>
+              <div x-show="jiraSetup.error" class="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.error"></div>
+              <div x-show="jiraSetup.success" class="text-xs text-emerald-400 bg-emerald-900/20 rounded-lg px-3 py-2" x-text="jiraSetup.success"></div>
+            </div>
+          </div>
+
+          <!-- Notifications -->
+          <div x-show="activeSettingsTab === 'notifications'" class="space-y-4">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Push Notifications</h3>
+            <p class="text-xs text-gray-500 mb-4">Get notified when tickets complete, fail, or when a run finishes.</p>
+
+            <!-- Browser permission status -->
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <div class="flex items-center justify-between">
+                <div>
+                  <span class="text-sm text-gray-200 block">Browser Notifications</span>
+                  <span class="text-xs text-gray-500" x-text="notificationState.permission === 'granted' ? 'Notifications are enabled' : notificationState.permission === 'denied' ? 'Notifications are blocked — check browser settings' : 'Click to enable browser notifications'"></span>
+                </div>
+                <template x-if="notificationState.permission === 'granted'">
+                  <span class="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full font-medium">Enabled</span>
+                </template>
+                <template x-if="notificationState.permission === 'denied'">
+                  <span class="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded-full font-medium">Blocked</span>
+                </template>
+                <template x-if="notificationState.permission === 'default'">
+                  <button @click="requestNotificationPermission()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-xs rounded-lg font-medium transition">Enable</button>
+                </template>
+              </div>
+            </div>
+
+            <!-- Server-side toggle -->
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" :checked="notificationState.enabled"
+                       @change="toggleServerNotifications($event.target.checked)"
+                       class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+                <div>
+                  <span class="text-sm text-gray-200 block">Server Notifications</span>
+                  <span class="text-xs text-gray-500">Enable notification events from the server (.env NOTIFICATIONS_ENABLED)</span>
+                </div>
+              </label>
+            </div>
+
+            <!-- Web Push (VAPID) info -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-2">
+              <span class="text-sm text-gray-200 block">Web Push (Optional)</span>
+              <p class="text-xs text-gray-500">For notifications even when the tab is closed, configure VAPID keys in your .env file. Without VAPID keys, notifications only work while the tab is open.</p>
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full" :class="notificationState.vapidKey ? 'bg-emerald-500' : 'bg-gray-600'"></div>
+                <span class="text-xs" :class="notificationState.vapidKey ? 'text-emerald-400' : 'text-gray-500'" x-text="notificationState.vapidKey ? 'VAPID keys configured' : 'VAPID keys not configured'"></span>
+              </div>
+              <template x-if="notificationState.vapidKey && notificationState.permission === 'granted'">
+                <button @click="subscribePush()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-xs rounded-lg font-medium transition mt-1">Subscribe to Push</button>
+              </template>
+            </div>
+
+            <!-- Test notification -->
+            <template x-if="notificationState.permission === 'granted'">
+              <div class="space-y-2">
+                <button @click="testNotification()" class="text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg px-4 py-2 transition w-full">Send Test Notification</button>
+                <p x-show="_testNotifSent" class="text-xs text-emerald-400 text-center">Notification sent! Check your system notifications.</p>
+              </div>
+            </template>
+          </div>
+
+          <!-- Scheduler -->
+          <div x-show="activeSettingsTab === 'scheduler'" class="space-y-6">
+            <h3 class="text-sm font-medium text-gray-300">Scheduler</h3>
+
+            <!-- Schedules List -->
+            <div class="space-y-2">
+              <span class="text-xs text-gray-500 font-medium">Active Schedules</span>
+              <template x-if="schedules.length === 0">
+                <p class="text-xs text-gray-600 italic">No schedules configured.</p>
+              </template>
+              <template x-for="s in schedules" :key="s.id">
+                <div class="bg-gray-800/50 rounded-lg p-3 border border-gray-800 flex items-center justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                            :class="s.schedule_type === 'recurring' ? 'bg-blue-500/20 text-blue-400' : 'bg-amber-500/20 text-amber-400'"
+                            x-text="s.schedule_type"></span>
+                      <span class="text-xs text-gray-300 font-mono" x-text="s.cron_expression || (s.start_time ? new Date(s.start_time).toLocaleString() : '-')"></span>
+                    </div>
+                    <div class="text-[10px] text-gray-500" x-text="s.next_run ? 'Next: ' + new Date(s.next_run).toLocaleString() : ''"></div>
+                  </div>
+                  <div class="flex items-center gap-2 flex-shrink-0">
+                    <button @click="toggleSchedule(s)" class="text-[10px] px-2 py-0.5 rounded border transition"
+                            :class="s.enabled ? 'border-emerald-600 text-emerald-400' : 'border-gray-700 text-gray-500'">
+                      <span x-text="s.enabled ? 'On' : 'Off'"></span>
+                    </button>
+                    <button @click="deleteSchedule(s.id)" class="text-red-400/60 hover:text-red-400 transition">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Create Schedule -->
+            <details class="group">
+              <summary class="text-xs text-blue-400 hover:text-blue-300 cursor-pointer py-1">+ Add schedule</summary>
+              <div class="mt-2 bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
+                <!-- Type -->
+                <div class="flex items-center gap-3">
+                  <label class="text-xs text-gray-500">Type:</label>
+                  <button @click="newSchedule.type = 'recurring'"
+                          :class="newSchedule.type === 'recurring' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'"
+                          class="px-3 py-1 text-xs rounded-md transition">Recurring</button>
+                  <button @click="newSchedule.type = 'one-time'"
+                          :class="newSchedule.type === 'one-time' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'"
+                          class="px-3 py-1 text-xs rounded-md transition">One-time</button>
+                </div>
+
+                <!-- Recurring: Visual Cron Builder -->
+                <template x-if="newSchedule.type === 'recurring'">
+                  <div class="space-y-3">
+                    <!-- Presets -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">Presets</label>
+                      <div class="flex flex-wrap gap-1.5">
+                        <button @click="newSchedule.cronDays=[1,2,3,4,5]; newSchedule.cronHour=9; newSchedule.cronMinute=0; buildCron()"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Weekdays 9AM</button>
+                        <button @click="newSchedule.cronDays=[1,2,3,4,5]; newSchedule.cronHour=0; newSchedule.cronMinute=0; buildCron()"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Weekdays midnight</button>
+                        <button @click="newSchedule.cronDays=[0,1,2,3,4,5,6]; newSchedule.cronHour=9; newSchedule.cronMinute=0; buildCron()"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Daily 9AM</button>
+                        <button @click="newSchedule.cron='0 */6 * * *'"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Every 6h</button>
+                        <button @click="newSchedule.cron='0 * * * *'"
+                                class="text-[10px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500 transition">Every hour</button>
+                      </div>
+                    </div>
+                    <!-- Day toggles -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">Days</label>
+                      <div class="flex gap-1">
+                        <template x-for="(day, i) in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']" :key="i">
+                          <button @click="const idx = newSchedule.cronDays.indexOf(i); idx >= 0 ? newSchedule.cronDays.splice(idx,1) : newSchedule.cronDays.push(i); buildCron()"
+                                  :class="newSchedule.cronDays.includes(i) ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-800 text-gray-500 border-gray-700'"
+                                  class="w-8 h-7 text-[10px] rounded border transition font-medium" x-text="day"></button>
+                        </template>
+                      </div>
+                    </div>
+                    <!-- Time -->
+                    <div class="flex items-center gap-3">
+                      <div>
+                        <label class="text-[10px] text-gray-500 block mb-1">Hour</label>
+                        <select x-model.number="newSchedule.cronHour" @change="buildCron()"
+                                class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                          <template x-for="h in 24" :key="h">
+                            <option :value="h-1" x-text="String(h-1).padStart(2,'0')"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <span class="text-gray-500 mt-4">:</span>
+                      <div>
+                        <label class="text-[10px] text-gray-500 block mb-1">Minute</label>
+                        <select x-model.number="newSchedule.cronMinute" @change="buildCron()"
+                                class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                          <template x-for="m in [0,5,10,15,20,25,30,35,40,45,50,55]" :key="m">
+                            <option :value="m" x-text="String(m).padStart(2,'0')"></option>
+                          </template>
+                        </select>
+                      </div>
+                    </div>
+                    <!-- Raw cron -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">Cron Expression</label>
+                      <input x-model="newSchedule.cron" type="text" placeholder="0 9 * * 1-5"
+                             class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm font-mono w-full focus:border-blue-500 focus:outline-none">
+                      <p class="text-[10px] text-gray-600 mt-1" x-text="describeCron(newSchedule.cron)"></p>
+                    </div>
+                    <!-- End time (optional) -->
+                    <div>
+                      <label class="text-[10px] text-gray-500 block mb-1">End Date (optional)</label>
+                      <input x-model="newSchedule.endTime" type="datetime-local"
+                             class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs w-full focus:border-blue-500 focus:outline-none">
+                    </div>
+                  </div>
+                </template>
+
+                <!-- One-time: Datetime picker -->
+                <template x-if="newSchedule.type === 'one-time'">
+                  <div>
+                    <label class="text-[10px] text-gray-500 block mb-1">Run At</label>
+                    <input x-model="newSchedule.startTime" type="datetime-local"
+                           class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs w-full focus:border-blue-500 focus:outline-none">
+                  </div>
+                </template>
+
+                <button @click="createSchedule()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-xs rounded-lg font-medium transition w-full">Create Schedule</button>
+              </div>
+            </details>
+
+            <!-- Auto-Retry -->
+            <div class="border-t border-gray-800 pt-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-300 font-medium">Auto-Retry</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" x-model="autoRetry.enabled" @change="saveSchedulerSettings()" class="sr-only peer">
+                  <div class="w-8 h-4 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+              <p class="text-[10px] text-gray-600">Automatically retry failed tickets after a delay.</p>
+              <div x-show="autoRetry.enabled" class="flex items-center gap-4 mt-1">
+                <div class="flex items-center gap-2">
+                  <label class="text-[10px] text-gray-500">Delay:</label>
+                  <input x-model.number="autoRetry.delay" @change="saveSchedulerSettings()" type="number" min="1" max="120"
+                         class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-16 focus:border-blue-500 focus:outline-none">
+                  <span class="text-[10px] text-gray-600">min</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <label class="text-[10px] text-gray-500">Max:</label>
+                  <input x-model.number="autoRetry.max" @change="saveSchedulerSettings()" type="number" min="1" max="10"
+                         class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-16 focus:border-blue-500 focus:outline-none">
+                  <span class="text-[10px] text-gray-600">retries</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Working Hours -->
+            <div class="border-t border-gray-800 pt-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-300 font-medium">Working Hours</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" x-model="workingHours.enabled" @change="saveSchedulerSettings()" class="sr-only peer">
+                  <div class="w-8 h-4 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+              <p class="text-[10px] text-gray-600">Only spawn new workers during these hours.</p>
+              <div x-show="workingHours.enabled" class="space-y-2 mt-1">
+                <div class="flex items-center gap-3">
+                  <div class="flex items-center gap-2">
+                    <label class="text-[10px] text-gray-500">Start:</label>
+                    <input x-model="workingHours.start" @change="saveSchedulerSettings()" type="time"
+                           class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <label class="text-[10px] text-gray-500">End:</label>
+                    <input x-model="workingHours.end" @change="saveSchedulerSettings()" type="time"
+                           class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-1">Days</label>
+                  <div class="flex gap-1">
+                    <template x-for="(day, code) in {mon:'Mon',tue:'Tue',wed:'Wed',thu:'Thu',fri:'Fri',sat:'Sat',sun:'Sun'}">
+                      <button @click="const idx = workingHours.days.indexOf(code); idx >= 0 ? workingHours.days.splice(idx,1) : workingHours.days.push(code); saveSchedulerSettings()"
+                              :class="workingHours.days.includes(code) ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-800 text-gray-500 border-gray-700'"
+                              class="w-8 h-7 text-[10px] rounded border transition font-medium" x-text="day"></button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Remote Access -->
+          <div x-show="activeSettingsTab === 'remote'" class="space-y-4">
+            <h3 class="text-sm font-medium text-gray-300 mb-1">Remote Access</h3>
+            <p class="text-xs text-gray-500 mb-4">Access Task Ninja from your phone or another device, even when running locally.</p>
+
+            <!-- Enable toggle -->
+            <div class="p-3 bg-gray-800/50 rounded-lg">
+              <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" x-model="remoteAccess.enabled"
+                       @change="toggleRemoteAccess($event.target.checked)"
+                       class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500">
+                <div>
+                  <span class="text-sm text-gray-200 block">Enable Remote Access</span>
+                  <span class="text-xs text-gray-500">Bind to 0.0.0.0 and require auth token (restart required)</span>
+                </div>
+              </label>
+            </div>
+
+            <!-- Auth token info -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-2" x-show="remoteAccess.enabled">
+              <span class="text-sm text-gray-200 block">Auth Token</span>
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full" :class="remoteAccess.hasToken ? 'bg-emerald-500' : 'bg-red-500'"></div>
+                <span class="text-xs" :class="remoteAccess.hasToken ? 'text-emerald-400' : 'text-red-400'" x-text="remoteAccess.hasToken ? 'Token hash configured' : 'No token configured'"></span>
+              </div>
+              <p class="text-xs text-gray-500">The raw token was shown once at generation and is never stored on disk. Only a salted SHA-256 hash is saved in <code>.env</code>.</p>
+              <p class="text-xs text-gray-500">Lost your token? Regenerate:</p>
+              <code class="text-xs bg-gray-900 px-3 py-1.5 rounded block text-gray-400">python server.py --regenerate-token</code>
+            </div>
+
+            <!-- Tailscale Auto-Setup -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-3" x-show="remoteAccess.enabled">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm text-gray-200">Tailscale</span>
+                  <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full">Recommended</span>
+                </div>
+                <button @click="checkTailscale()" class="text-xs text-gray-400 hover:text-white transition" :disabled="tailscale.loading">
+                  <svg class="w-3.5 h-3.5 inline" :class="tailscale.loading && 'animate-spin'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                  Refresh
+                </button>
+              </div>
+
+              <!-- Status: Connected with URL -->
+              <template x-if="tailscale.running && tailscale.url">
+                <div class="space-y-2">
+                  <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                    <span class="text-xs text-emerald-400">Connected</span>
+                  </div>
+                  <div class="bg-gray-900 rounded-lg p-3 space-y-2">
+                    <span class="text-xs text-gray-500 block">Access from your phone:</span>
+                    <code class="text-xs bg-gray-950 px-3 py-2 rounded text-emerald-400 select-all block break-all" x-text="tailscale.url"></code>
+                    <button @click="navigator.clipboard.writeText(tailscale.url); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
+                            class="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1.5 rounded transition w-full">Copy</button>
+                    <p class="text-xs text-gray-500">Open this URL on any device connected to your Tailscale network.</p>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Status: Installed but not running -->
+              <template x-if="tailscale.installed && !tailscale.running">
+                <div class="space-y-2">
+                  <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-yellow-500"></div>
+                    <span class="text-xs text-yellow-400">Installed but not connected</span>
+                  </div>
+                  <p class="text-xs text-gray-500">Open the Tailscale app and log in, then click Refresh above.</p>
+                  <button @click="startTailscale()" :disabled="tailscale.loading"
+                          class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded transition disabled:opacity-50">
+                    <span x-show="!tailscale.loading">Start Tailscale</span>
+                    <span x-show="tailscale.loading">Starting...</span>
+                  </button>
+                </div>
+              </template>
+
+              <!-- Status: Not installed -->
+              <template x-if="!tailscale.installed">
+                <div class="space-y-2">
+                  <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-gray-500"></div>
+                    <span class="text-xs text-gray-400">Not installed</span>
+                  </div>
+                  <p class="text-xs text-gray-500">Tailscale creates a private network between your devices. Install it on your computer and phone.</p>
+                  <button @click="installTailscale()" :disabled="tailscale.installing"
+                          class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded transition disabled:opacity-50 w-full">
+                    <span x-show="!tailscale.installing">Install Tailscale</span>
+                    <span x-show="tailscale.installing" class="flex items-center justify-center gap-2">
+                      <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+                      Installing... (this may take a minute)
+                    </span>
+                  </button>
+                  <p class="text-xs text-gray-600">On your phone: install <a href="https://tailscale.com/download" target="_blank" class="text-blue-400 hover:underline">Tailscale</a> and sign in with the same account.</p>
+                </div>
+              </template>
+
+              <!-- Error -->
+              <template x-if="tailscale.error">
+                <div class="bg-red-900/20 border border-red-800/30 rounded-lg p-2">
+                  <p class="text-xs text-red-400" x-text="tailscale.error"></p>
+                </div>
+              </template>
+            </div>
+
+            <!-- Other tunneling options -->
+            <div class="p-3 bg-gray-800/50 rounded-lg space-y-3" x-show="remoteAccess.enabled">
+              <span class="text-sm text-gray-200 block">Other options</span>
+
+              <!-- ngrok -->
+              <div class="bg-gray-900/70 rounded-lg p-3 space-y-1.5">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0"></span>
+                  <span class="text-sm font-medium text-white">ngrok</span>
+                </div>
+                <p class="text-xs text-gray-500">Creates a public URL tunneled to your local server.</p>
+                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400">ngrok http 8420</code>
+              </div>
+
+              <!-- Cloudflare Tunnel -->
+              <div class="bg-gray-900/70 rounded-lg p-3 space-y-1.5">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="w-2 h-2 rounded-full bg-orange-500 flex-shrink-0"></span>
+                  <span class="text-sm font-medium text-white">Cloudflare Tunnel</span>
+                </div>
+                <p class="text-xs text-gray-500">Route through Cloudflare with your own domain.</p>
+                <code class="text-xs bg-gray-950 px-2 py-1 rounded block text-gray-400 break-all">cloudflared tunnel --url http://localhost:8420</code>
+              </div>
+            </div>
+
+            <div x-show="remoteAccess.enabled" class="p-3 bg-amber-900/20 border border-amber-800/30 rounded-lg">
+              <p class="text-xs text-amber-400">After toggling remote access, restart the server for changes to take effect.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- Kanban Board -->
-    <div class="flex-1 overflow-x-auto p-4">
+    <!-- Desktop Kanban Board -->
+    <div class="kanban-board flex-1 overflow-x-auto p-4">
       <div class="flex gap-3 h-full min-w-max">
         <template x-for="col in columns" :key="col.id">
           <div class="w-64 flex-shrink-0 flex flex-col bg-gray-900/50 rounded-xl border border-gray-800">
@@ -176,7 +999,7 @@
                   <div class="p-3" @click="expanded = !expanded; if(['planning','developing','failed'].includes(ticket.state)) switchTerminal(ticket.id)">
                     <!-- Header -->
                     <div class="flex items-center justify-between mb-1.5">
-                      <a :href="'https://mfrlab.atlassian.net/browse/' + ticket.jira_key" target="_blank" @click.stop
+                      <a :href="(jiraSetup.url || 'https://yourcompany.atlassian.net').replace(/\/$/, '') + '/browse/' + ticket.jira_key" target="_blank" @click.stop
                          class="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline" x-text="ticket.jira_key"></a>
                       <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                         <template x-if="(ticket.state === 'planning' || ticket.state === 'developing') && !ticket.paused">
@@ -218,6 +1041,21 @@
                           <span x-text="ticket.pr_number ? 'PR #' + ticket.pr_number : 'Draft PR'"></span>
                         </a>
                       </template>
+                      <!-- Repo badge -->
+                      <template x-if="ticket.repository_id && repoNameById(ticket.repository_id)">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium" x-text="repoNameById(ticket.repository_id)"></span>
+                      </template>
+                      <!-- Agent badge -->
+                      <template x-if="ticket.profile_id && profileNameById(ticket.profile_id)">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-medium" x-text="profileNameById(ticket.profile_id)"></span>
+                      </template>
+                      <!-- Live terminal shortcut for active tickets -->
+                      <template x-if="isTicketActive(ticket)">
+                        <button @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 transition flex items-center gap-1" title="Attach to live process">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                          Terminal
+                        </button>
+                      </template>
                     </div>
                   </div>
                   <!-- Expanded detail panel -->
@@ -232,6 +1070,12 @@
                       <div>
                         <span class="text-gray-500">Branch:</span>
                         <span class="text-gray-300 font-mono ml-1" x-text="ticket.branch_name"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.parent_branch">
+                      <div>
+                        <span class="text-gray-500">Parent:</span>
+                        <span class="text-gray-300 font-mono ml-1" x-text="ticket.parent_branch"></span>
                       </div>
                     </template>
                     <template x-if="ticket.worktree_path">
@@ -252,12 +1096,29 @@
                         <span class="text-gray-300 ml-1" x-text="new Date(ticket.completed_at).toLocaleString()"></span>
                       </div>
                     </template>
+                    <template x-if="ticket.profile_id && profileNameById(ticket.profile_id)">
+                      <div>
+                        <span class="text-gray-500">Agent:</span>
+                        <span class="text-gray-300 ml-1" x-text="profileNameById(ticket.profile_id)"></span>
+                      </div>
+                    </template>
                     <template x-if="ticket.worker_pid">
                       <div>
                         <span class="text-gray-500">PID:</span>
                         <span class="text-gray-300 font-mono ml-1" x-text="ticket.worker_pid"></span>
                       </div>
                     </template>
+                    <!-- Terminal buttons (only for active tickets) -->
+                    <div class="flex gap-2 mt-1.5 pt-1.5 border-t border-gray-700/50">
+                      <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-cyan-400 hover:text-cyan-300 transition">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        Live Terminal
+                      </button>
+                      <button x-show="isLocalAccess" @click.stop="openExternalTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 transition">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                        External
+                      </button>
+                    </div>
                   </div>
                 </div>
               </template>
@@ -267,8 +1128,66 @@
       </div>
     </div>
 
-    <!-- Terminal Panel -->
-    <div class="h-56 bg-gray-950 border-t border-gray-800 flex flex-col">
+    <!-- Mobile List View -->
+    <div class="mobile-list flex-1 overflow-y-auto p-3 space-y-3">
+      <template x-for="col in columns" :key="col.id">
+        <div>
+          <button @click="col._open = !col._open" class="flex items-center justify-between w-full px-3 py-2 bg-gray-900/50 rounded-lg border border-gray-800">
+            <div class="flex items-center gap-2">
+              <div :class="col.dotColor" class="w-2 h-2 rounded-full"></div>
+              <span class="text-sm font-semibold text-gray-300" x-text="col.label"></span>
+              <span class="text-xs text-gray-500" x-text="'(' + ticketsInColumn(col.id).length + ')'"></span>
+            </div>
+            <svg :class="col._open ? 'rotate-180' : ''" class="w-4 h-4 text-gray-500 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div x-show="col._open !== false" class="mt-1 space-y-1.5 pl-1">
+            <template x-for="ticket in ticketsInColumn(col.id)" :key="ticket.id">
+              <div class="bg-gray-800 rounded-lg border border-gray-700 p-3" @click="switchTerminal(ticket.id)">
+                <div class="flex items-center justify-between mb-1">
+                  <a :href="(jiraSetup.url || 'https://yourcompany.atlassian.net').replace(/\/$/, '') + '/browse/' + ticket.jira_key" target="_blank" @click.stop
+                     class="text-xs font-bold text-blue-400" x-text="ticket.jira_key"></a>
+                  <div class="flex items-center gap-2">
+                    <template x-if="ticket.state === 'planning' || ticket.state === 'developing'">
+                      <div class="flex items-center gap-1">
+                        <div :class="ticket.paused ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse-dot'" class="w-1.5 h-1.5 rounded-full"></div>
+                        <span class="text-[10px] text-gray-500" x-text="ticket.paused ? 'Paused' : (tick, elapsedTime(ticket.started_at))"></span>
+                      </div>
+                    </template>
+                    <template x-if="ticket.state === 'failed'">
+                      <button @click.stop="moveTicket(ticket.id, 'queued')" class="text-[10px] text-blue-400 px-1.5 py-0.5 bg-blue-900/30 rounded">Retry</button>
+                    </template>
+                  </div>
+                </div>
+                <p class="text-xs text-gray-400 line-clamp-2" x-text="ticket.summary || 'No summary'"></p>
+                <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <template x-if="ticket.repository_id && repoNameById(ticket.repository_id)">
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium" x-text="repoNameById(ticket.repository_id)"></span>
+                  </template>
+                  <template x-if="ticket.pr_url">
+                    <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400 hover:text-purple-300">View PR</a>
+                  </template>
+                  <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 transition flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    Terminal
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Terminal Panel (collapsible + resizable) -->
+    <template x-if="terminalOpen">
+      <div class="bg-gray-800 cursor-row-resize flex items-center justify-center select-none hover:bg-gray-700 transition-colors group"
+           style="height: 6px;"
+           @mousedown.prevent="_terminalDragging = true; $event.target.setPointerCapture?.($event.pointerId)"
+           @touchstart.prevent="_terminalDragging = true">
+        <div class="w-10 h-1 rounded-full bg-gray-600 group-hover:bg-gray-400 transition-colors"></div>
+      </div>
+    </template>
+    <div x-show="terminalOpen" x-transition :style="'height:' + terminalHeight + 'px'" class="bg-gray-950 border-t border-gray-800 flex flex-col min-h-[80px]">
       <!-- Terminal Tabs -->
       <div class="flex items-center border-b border-gray-800 px-2 overflow-x-auto">
         <span class="text-xs text-gray-600 px-2 py-2 flex-shrink-0">Terminal</span>
@@ -283,6 +1202,11 @@
             <span x-text="tab.jira_key"></span>
           </button>
         </template>
+        <!-- Close button -->
+        <button @click="terminalOpen = false; localStorage.setItem('tn_terminalOpen', 'false')"
+                class="ml-auto px-2 py-1 text-gray-500 hover:text-gray-300 transition flex-shrink-0" title="Close terminal">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
       </div>
       <!-- Terminal Output -->
       <div class="flex-1 overflow-y-auto p-3 font-mono text-xs scrollbar-thin" id="terminal-output">
@@ -294,6 +1218,15 @@
         </template>
       </div>
     </div>
+    <!-- Terminal collapsed bar — click to reopen -->
+    <div x-show="!terminalOpen" @click="terminalOpen = true; localStorage.setItem('tn_terminalOpen', 'true')"
+         class="bg-gray-900 border-t border-gray-800 px-4 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-gray-800 transition-colors">
+      <svg class="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+      <span class="text-xs text-gray-500">Terminal</span>
+      <template x-if="terminalTabs.length > 0">
+        <span class="text-xs text-gray-600" x-text="terminalTabs.length + ' tab' + (terminalTabs.length > 1 ? 's' : '')"></span>
+      </template>
+    </div>
   </div>
 
   <!-- Epic Ticket Selector Modal -->
@@ -302,6 +1235,24 @@
       <div class="px-5 py-4 border-b border-gray-800">
         <h2 class="text-lg font-semibold text-white">Select Tickets from <span class="text-blue-400" x-text="epicKey"></span></h2>
         <p class="text-xs text-gray-500 mt-1">Filter and pick the tickets you want to queue for execution.</p>
+        <!-- Parent Branch + Agent Profile -->
+        <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Parent Branch:</label>
+            <input x-model="epicParentBranch" type="text" placeholder="main (default)"
+                   class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-36 focus:border-blue-500 focus:outline-none">
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Agent:</label>
+            <select x-model="epicProfileId"
+                    class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:border-blue-500 focus:outline-none">
+              <option :value="null">Default</option>
+              <template x-for="p in agentProfiles" :key="p.id">
+                <option :value="p.id" x-text="p.name + (p.is_default ? ' ★' : '')"></option>
+              </template>
+            </select>
+          </div>
+        </div>
         <!-- Search + Quick Filters -->
         <div class="mt-3 flex flex-col gap-2">
           <input x-model="epicFilter.search" type="text" placeholder="Search by key or summary..."
@@ -325,24 +1276,119 @@
         </span>
         <span class="text-[11px] text-blue-400" x-text="epicTickets.filter(t => t.selected && !t.alreadyAdded).length + ' selected'"></span>
       </div>
-      <div class="flex-1 overflow-y-auto p-4 space-y-1">
-        <template x-for="t in filteredEpicTickets" :key="t.key">
-          <label :class="{'opacity-50': t.alreadyAdded}" class="flex items-center gap-3 p-2.5 rounded-lg hover:bg-gray-800/50 cursor-pointer transition">
-            <input type="checkbox" x-model="t.selected" :disabled="t.alreadyAdded" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 flex-shrink-0">
-            <span class="text-sm font-mono text-blue-400 flex-shrink-0 w-20" x-text="t.key"></span>
-            <span class="text-sm text-gray-300 truncate flex-1" x-text="t.summary"></span>
-            <template x-if="t.alreadyAdded">
-              <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 text-emerald-400 bg-emerald-900/30">On Board</span>
+      <div class="flex-1 overflow-y-auto p-4 space-y-3">
+        <template x-for="group in epicGroups" :key="group.prefix">
+          <div class="border border-gray-800 rounded-lg overflow-hidden">
+            <!-- Group header -->
+            <div class="bg-gray-800/60 px-3 py-2 flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xs font-bold font-mono text-violet-400" x-text="group.prefix"></span>
+                <span class="text-[10px] text-gray-500" x-text="group.tickets.length + ' ticket' + (group.tickets.length !== 1 ? 's' : '')"></span>
+                <template x-if="group.repoName">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 truncate max-w-[120px]" x-text="group.repoName"></span>
+                </template>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-gray-500 font-mono" x-text="effectiveGroupBranch(group)"></span>
+              </div>
+              <button @click="epicExpandedGroups[group.prefix] = !epicExpandedGroups[group.prefix]; if(epicExpandedGroups[group.prefix] && !epicGroupOverrides[group.prefix]) epicGroupOverrides[group.prefix] = { repoId: group.repoId, branch: '', profileId: group.profileId }"
+                      class="text-[10px] px-2 py-0.5 rounded border transition flex-shrink-0"
+                      :class="epicExpandedGroups[group.prefix] ? 'border-blue-500 text-blue-400' : 'border-gray-700 text-gray-500 hover:border-gray-500'">
+                <span x-text="epicExpandedGroups[group.prefix] ? 'Close' : 'Override'"></span>
+              </button>
+            </div>
+            <!-- Group override config (collapsible) -->
+            <template x-if="epicExpandedGroups[group.prefix]">
+              <div class="bg-gray-800/30 px-3 py-2 border-t border-gray-800 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <div class="flex items-center gap-1.5">
+                  <label class="text-[10px] text-gray-500">Repo:</label>
+                  <select x-model="epicGroupOverrides[group.prefix].repoId"
+                          @change="epicGroupOverrides[group.prefix].branch = (repositories.find(r => r.id == epicGroupOverrides[group.prefix].repoId) || {}).default_branch || ''"
+                          class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] focus:border-blue-500 focus:outline-none">
+                    <option :value="null">None</option>
+                    <template x-for="r in repositories" :key="r.id">
+                      <option :value="r.id" x-text="r.name" :selected="r.id == epicGroupOverrides[group.prefix]?.repoId"></option>
+                    </template>
+                  </select>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <label class="text-[10px] text-gray-500">Branch:</label>
+                  <input x-model="epicGroupOverrides[group.prefix].branch" type="text" :placeholder="epicParentBranch || group.repoBranch || 'inherit from global'"
+                         class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] w-24 focus:border-blue-500 focus:outline-none">
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <label class="text-[10px] text-gray-500">Agent:</label>
+                  <select x-model="epicGroupOverrides[group.prefix].profileId"
+                          class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[11px] focus:border-blue-500 focus:outline-none">
+                    <option :value="null">Global default</option>
+                    <template x-for="p in agentProfiles" :key="p.id">
+                      <option :value="p.id" x-text="p.name"></option>
+                    </template>
+                  </select>
+                </div>
+              </div>
             </template>
-            <template x-if="!t.alreadyAdded">
-              <span :class="{
-                'text-green-400 bg-green-900/30': t.status === 'Done',
-                'text-blue-400 bg-blue-900/30': t.status === 'In Progress',
-                'text-gray-400 bg-gray-800': t.status === 'To Do' || t.status === 'Open',
-                'text-amber-400 bg-amber-900/30': t.status === 'In Review',
-              }" class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" x-text="t.status"></span>
-            </template>
-          </label>
+            <!-- Tickets in this group -->
+            <div class="divide-y divide-gray-800/50">
+              <template x-for="t in group.tickets" :key="t.key">
+                <div>
+                  <label :class="{'opacity-50': t.alreadyAdded}" class="flex items-center gap-3 px-3 py-2 hover:bg-gray-800/50 cursor-pointer transition">
+                    <input type="checkbox" x-model="t.selected" :disabled="t.alreadyAdded" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500 flex-shrink-0">
+                    <span class="text-sm font-mono text-blue-400 flex-shrink-0 w-20" x-text="t.key"></span>
+                    <span class="text-sm text-gray-300 truncate flex-1" x-text="t.summary"></span>
+                    <template x-if="epicTicketOverrides[t.key]">
+                      <span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Has override"></span>
+                    </template>
+                    <template x-if="t.alreadyAdded">
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 text-emerald-400 bg-emerald-900/30">On Board</span>
+                    </template>
+                    <template x-if="!t.alreadyAdded">
+                      <span :class="{
+                        'text-green-400 bg-green-900/30': t.status === 'Done',
+                        'text-blue-400 bg-blue-900/30': t.status === 'In Progress',
+                        'text-gray-400 bg-gray-800': t.status === 'To Do' || t.status === 'Open',
+                        'text-amber-400 bg-amber-900/30': t.status === 'In Review',
+                      }" class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" x-text="t.status"></span>
+                    </template>
+                    <button @click.prevent.stop="epicEditingTicket = epicEditingTicket === t.key ? null : t.key; if(epicEditingTicket && !epicTicketOverrides[t.key]) { const a = resolveTicketAssignment(t); epicTicketOverrides[t.key] = { repoId: a.repository_id, branch: a.parent_branch, profileId: a.profile_id }; }"
+                            class="text-[10px] text-gray-600 hover:text-gray-300 flex-shrink-0 p-0.5" title="Override">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                    </button>
+                  </label>
+                  <!-- Per-ticket override row -->
+                  <template x-if="epicEditingTicket === t.key">
+                    <div class="bg-gray-800/40 px-3 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-gray-800/50">
+                      <div class="flex items-center gap-1.5">
+                        <label class="text-[10px] text-gray-500">Repo:</label>
+                        <select x-model="epicTicketOverrides[t.key].repoId"
+                                class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] focus:border-blue-500 focus:outline-none">
+                          <option :value="null">Group default</option>
+                          <template x-for="r in repositories" :key="r.id">
+                            <option :value="r.id" x-text="r.name"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <label class="text-[10px] text-gray-500">Branch:</label>
+                        <input x-model="epicTicketOverrides[t.key].branch" type="text" placeholder="inherit"
+                               class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] w-20 focus:border-blue-500 focus:outline-none">
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <label class="text-[10px] text-gray-500">Agent:</label>
+                        <select x-model="epicTicketOverrides[t.key].profileId"
+                                class="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-[10px] focus:border-blue-500 focus:outline-none">
+                          <option :value="null">Group default</option>
+                          <template x-for="p in agentProfiles" :key="p.id">
+                            <option :value="p.id" x-text="p.name"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <button @click="delete epicTicketOverrides[t.key]; epicEditingTicket = null"
+                              class="text-[10px] text-red-400 hover:text-red-300 ml-auto">Clear</button>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
         </template>
         <template x-if="filteredEpicTickets.length === 0 && epicTickets.length > 0">
           <div class="text-center py-6 text-gray-500 text-sm">No tickets match your filter.</div>
@@ -367,20 +1413,6 @@
   </div>
 
   <!-- Confirm Delete Modal -->
-  <div x-show="confirmModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="confirmModal.show = false">
-    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm mx-4 overflow-hidden">
-      <div class="px-5 py-4">
-        <h3 class="text-base font-semibold text-white" x-text="confirmModal.title"></h3>
-        <p class="text-sm text-gray-400 mt-2" x-text="confirmModal.message"></p>
-      </div>
-      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
-        <button @click="confirmModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition rounded-lg">Cancel</button>
-        <button @click="confirmDelete()" class="bg-red-600 hover:bg-red-700 px-4 py-1.5 text-sm rounded-lg font-medium transition text-white">Remove</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Confirm Delete Modal -->
   <div x-show="confirmModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="confirmModal.show = false" @keydown.escape.window="confirmModal.show = false">
     <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm mx-4 overflow-hidden">
       <div class="px-5 py-4">
@@ -394,71 +1426,248 @@
     </div>
   </div>
 
+  <!-- Edit Repo Modal -->
+  <div x-show="editRepoModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="editRepoModal.show = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md mx-4">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h3 class="text-base font-semibold text-white">Edit Repository</h3>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Name</label>
+          <input x-model="editRepoModal.data.name" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Path</label>
+          <input x-model="editRepoModal.data.path" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+        </div>
+        <div class="flex gap-3">
+          <div class="flex-1">
+            <label class="text-xs text-gray-400 block mb-1">Default Branch</label>
+            <input x-model="editRepoModal.data.default_branch" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+          <div class="w-28">
+            <label class="text-xs text-gray-400 block mb-1">Jira Prefix</label>
+            <input x-model="editRepoModal.data.jira_label" type="text" placeholder="MC" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Default Agent Profile</label>
+          <select x-model.number="editRepoModal.data.default_profile_id" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+            <option value="">None (use global default)</option>
+            <template x-for="p in agentProfiles" :key="p.id">
+              <option :value="p.id" x-text="p.name"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
+        <button @click="editRepoModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Cancel</button>
+        <button @click="saveRepoEdit()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Profile Modal -->
+  <div x-show="editProfileModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="editProfileModal.show = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h3 class="text-base font-semibold text-white">Edit Agent Profile</h3>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div class="flex gap-3">
+          <div class="flex-1">
+            <label class="text-xs text-gray-400 block mb-1">Name</label>
+            <input x-model="editProfileModal.data.name" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Command</label>
+            <input x-model="editProfileModal.data.command" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-32">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Args Template</label>
+          <input x-model="editProfileModal.data.args_template" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full font-mono">
+        </div>
+        <div>
+          <label class="text-xs text-gray-400 block mb-1">Log Format</label>
+          <select x-model="editProfileModal.data.log_format" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm">
+            <option value="plain-text">plain-text</option>
+            <option value="stream-json">stream-json</option>
+          </select>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
+        <button @click="editProfileModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Cancel</button>
+        <button @click="saveProfileEdit()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Terminal Overlay -->
+  <div x-show="interactiveTerminal.show" x-transition class="fixed inset-0 bg-black/80 flex flex-col z-50">
+    <div class="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
+      <div class="flex items-center gap-3">
+        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        <span class="text-sm font-medium text-white" x-text="(interactiveTerminal.ticketKey || 'Terminal') + ' — Live Process'"></span>
+        <span class="text-xs text-gray-500 font-mono" x-text="interactiveTerminal.cwd || ''"></span>
+        <span class="text-[10px] text-gray-600 italic">Closing this window will NOT stop the process</span>
+      </div>
+      <button @click="closeInteractiveTerminal()" class="p-1.5 hover:bg-gray-800 rounded-lg transition">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="interactive-terminal" class="flex-1 bg-black overflow-y-auto p-4 font-mono text-sm leading-6 scrollbar-thin">
+      <template x-for="(log, idx) in interactiveTerminal.logs" :key="idx">
+        <div class="text-gray-300"><span class="text-gray-600 select-none text-xs mr-2" x-text="((log.timestamp || '').replace(' ', 'T').split('T')[1] || '').split('.')[0]"></span><span x-text="log.line"></span></div>
+      </template>
+      <div x-show="interactiveTerminal.logs.length === 0" class="text-gray-600 italic">Waiting for output...</div>
+    </div>
+    <!-- Input bar -->
+    <div class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center gap-2">
+      <span class="text-cyan-400 text-sm font-mono select-none">$</span>
+      <input x-model="interactiveTerminal.inputText"
+             @keydown.enter="sendTerminalInput()"
+             type="text" placeholder="Type to send input to the process..."
+             class="flex-1 bg-black border border-gray-700 rounded px-3 py-1.5 text-sm font-mono text-gray-200 focus:border-cyan-500 focus:outline-none placeholder-gray-600">
+      <button @click="sendTerminalInput()" class="bg-cyan-600 hover:bg-cyan-700 px-3 py-1.5 text-xs rounded font-medium transition text-white">Send</button>
+    </div>
+  </div>
+
   <script>
     function app() {
       return {
         // State
         currentRun: null,
         tickets: [],
+        repositories: [],
+        agentProfiles: [],
+        activeRepoId: null,
         inputMode: 'epic',
         epicKey: '',
+        epicParentBranch: '',
+        epicProfileId: null,
         ticketInput: '',
         maxParallel: 2,
         showSettings: false,
+        activeSettingsTab: 'general',
         showEpicModal: false,
+        showJiraSetup: false,
+        setupStep: 1,
         epicTickets: [],
+        epicGroupOverrides: {},   // prefix -> { repoId, branch, profileId }
+        epicExpandedGroups: {},   // prefix -> boolean
+        epicTicketOverrides: {},  // jira_key -> { repoId, branch, profileId }
+        epicEditingTicket: null,  // jira_key of ticket being edited
         epicFilter: { search: '', activeTags: [] },
         boardFilter: '',
         confirmModal: { show: false, title: '', message: '', ticketId: null },
+        editRepoModal: { show: false, id: null, data: {} },
+        editProfileModal: { show: false, id: null, data: {} },
+        interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '', logs: [], inputText: '' },
+        terminalHeight: parseInt(localStorage.getItem('tn_terminalHeight') || '224'),
+        terminalOpen: JSON.parse(localStorage.getItem('tn_terminalOpen') ?? 'true'),
+        _terminalDragging: false,
         activeTerminal: null,
-        terminalLogs: {},  // ticket_id -> logs[]
-        terminalFetched: {},  // ticket_id -> true if logs loaded from API
+        terminalLogs: {},
+        terminalFetched: {},
         settings: {
-          skipPermissions: true,
           workerTimeout: 30,
           cleanupWorktrees: true,
         },
+        jiraSetup: { url: '', email: '', token: '', error: '', success: '' },
+        newRepo: { name: '', path: '', default_branch: 'main', jira_label: '' },
+        newProfile: { name: '', command: '', args_template: '', log_format: 'plain-text' },
         eventSource: null,
         tick: 0,
+        notificationState: { permission: typeof Notification !== 'undefined' ? Notification.permission : 'denied', enabled: false, vapidKey: null },
+        remoteAccess: { enabled: false, hasToken: false },
+        tailscale: { installed: false, running: false, ip: null, url: null, loading: false, installing: false, error: null },
+        _testNotifSent: false,
+        schedules: [],
+        newSchedule: { type: 'recurring', cron: '0 9 * * 1-5', startTime: '', endTime: '', cronDays: [1,2,3,4,5], cronHour: 9, cronMinute: 0 },
+        autoRetry: { enabled: false, delay: 15, max: 3 },
+        workingHours: { enabled: false, start: '09:00', end: '18:00', days: ['mon','tue','wed','thu','fri'] },
+
+        settingsTabs: [
+          { id: 'general', label: 'General' },
+          { id: 'repositories', label: 'Repositories' },
+          { id: 'profiles', label: 'Agent Profiles' },
+          { id: 'jira', label: 'Jira Credentials' },
+          { id: 'notifications', label: 'Notifications' },
+          { id: 'scheduler', label: 'Scheduler' },
+          { id: 'remote', label: 'Remote Access' },
+        ],
 
         columns: [
-          { id: 'pending', label: 'Pending', dotColor: 'bg-gray-500' },
-          { id: 'queued', label: 'Queued', dotColor: 'bg-yellow-500' },
-          { id: 'planning', label: 'Planning', dotColor: 'bg-cyan-500' },
-          { id: 'developing', label: 'Developing', dotColor: 'bg-blue-500' },
-          { id: 'review', label: 'Review', dotColor: 'bg-purple-500' },
-          { id: 'done', label: 'Done', dotColor: 'bg-emerald-500' },
-          { id: 'failed', label: 'Failed', dotColor: 'bg-red-500' },
+          { id: 'todo', label: 'Todo', dotColor: 'bg-gray-500', _open: true },
+          { id: 'queued', label: 'Queued', dotColor: 'bg-yellow-500', _open: true },
+          { id: 'planning', label: 'Planning', dotColor: 'bg-cyan-500', _open: true },
+          { id: 'developing', label: 'Developing', dotColor: 'bg-blue-500', _open: true },
+          { id: 'review', label: 'Review', dotColor: 'bg-purple-500', _open: true },
+          { id: 'done', label: 'Done', dotColor: 'bg-emerald-500', _open: true },
+          { id: 'failed', label: 'Failed', dotColor: 'bg-red-500', _open: true },
         ],
 
         async init() {
-          // Load existing runs
-          const runs = await this.api('GET', '/api/runs');
+          // Check if auth is required
+          const authStatus = await this.api('GET', '/api/auth/status');
+          if (authStatus?.auth_required && !this._authToken) {
+            this.showLogin = true;
+            return;
+          }
+
+          // Load settings data in parallel
+          const [runs, repos, profiles, jiraStatus, envConfig] = await Promise.all([
+            this.api('GET', '/api/runs'),
+            this.api('GET', '/api/repositories'),
+            this.api('GET', '/api/profiles'),
+            this.api('GET', '/api/settings/jira-status'),
+            this.api('GET', '/api/env'),
+          ]);
+
+          this.repositories = repos || [];
+          this.agentProfiles = profiles || [];
+
+          // Show Quick Setup wizard if not configured
+          if (jiraStatus && !jiraStatus.configured) {
+            this.showJiraSetup = true;
+          }
+
+          // Load settings from .env for forms
+          if (envConfig) {
+            this.jiraSetup.url = envConfig.JIRA_BASE_URL || '';
+            this.jiraSetup.email = envConfig.JIRA_EMAIL || '';
+            // Load masked token so user sees it's configured
+            if (envConfig.JIRA_API_TOKEN && !this.jiraSetup.token) {
+              this.jiraSetup.token = envConfig.JIRA_API_TOKEN;
+            }
+            this.remoteAccess.enabled = (envConfig.TASK_NINJA_REMOTE_ACCESS || '').toLowerCase() === 'true';
+            this.remoteAccess.hasToken = !!(envConfig.TASK_NINJA_SECRET_HASH);
+            if (this.remoteAccess.enabled) this.checkTailscale();
+          }
+
           if (runs && runs.length > 0) {
             this.currentRun = runs[0];
             await this.loadRunTickets();
             this.connectSSE();
-
-            // Auto-select first active ticket for terminal and load its logs
             const active = this.tickets.find(t => ['planning', 'developing'].includes(t.state));
-            if (active) {
-              await this.switchTerminal(active.id);
-            }
+            if (active) await this.switchTerminal(active.id);
           }
 
-          // Init sortable on each column after DOM ready
+          await this.initNotifications();
+          this.loadSchedulerSettings();
+          this.loadSchedules();
           this.$nextTick(() => this.initSortable());
-
-          // Update elapsed times every 5 seconds via reactive tick
           setInterval(() => this.tick++, 5000);
-
         },
 
         initSortable() {
           this.columns.forEach(col => {
             const el = document.getElementById('col-' + col.id);
             if (!el) return;
-            Sortable.create(el, {
+            if (el._sortable) return; // already initialized
+            el._sortable = Sortable.create(el, {
               group: 'kanban',
               animation: 150,
               ghostClass: 'sortable-ghost',
@@ -473,11 +1682,29 @@
               },
             });
           });
-        },
 
+          // Terminal panel resize via drag
+          const self = this;
+          const onMove = (e) => {
+            if (!self._terminalDragging) return;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const newH = window.innerHeight - clientY - 6;
+            self.terminalHeight = Math.max(80, Math.min(newH, window.innerHeight * 0.7));
+            localStorage.setItem('tn_terminalHeight', self.terminalHeight);
+          };
+          const onUp = () => { self._terminalDragging = false; };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+          document.addEventListener('touchmove', onMove);
+          document.addEventListener('touchend', onUp);
+        },
         // Computed
         ticketsInColumn(state) {
           let filtered = this.tickets.filter(t => t.state === state);
+          // Filter by active repo tab
+          if (this.activeRepoId !== null) {
+            filtered = filtered.filter(t => t.repository_id === this.activeRepoId);
+          }
           if (this.boardFilter) {
             const q = this.boardFilter.toLowerCase();
             filtered = filtered.filter(t =>
@@ -489,42 +1716,124 @@
           return filtered.sort((a, b) => a.rank - b.rank);
         },
 
+        ticketCountForRepo(repoId) {
+          return this.tickets.filter(t => t.repository_id === repoId).length;
+        },
+
+        repoNameById(id) {
+          const repo = this.repositories.find(r => r.id === id);
+          return repo ? repo.name : '';
+        },
+
+        profileNameById(id) {
+          const p = this.agentProfiles.find(p => p.id === id);
+          return p ? p.name : '';
+        },
+
+        get isLocalAccess() {
+          const h = window.location.hostname;
+          return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+        },
+
         get epicFilterTags() {
-          // Auto-detect tags from ticket summaries: [BE], [FE], [QA], etc.
           const tags = new Set();
           for (const t of this.epicTickets) {
             const matches = (t.summary || '').match(/\[([A-Za-z0-9-]+)\]/g);
             if (matches) matches.forEach(m => tags.add(m));
           }
-          // Add common defaults if not found
           ['[BE]', '[FE]', '[QA]'].forEach(d => {
             if (this.epicTickets.some(t => (t.summary || '').includes(d))) tags.add(d);
           });
           return [...tags].sort();
         },
 
+        // Match a ticket to a repo by checking summary tags against repo jira_label and name
+        _matchTicketRepo(ticket) {
+          // Only match bracket tags from summary: [Flex], [MOBILE], [BE], etc.
+          const tags = (ticket.summary || '').match(/\[([A-Za-z0-9_-]+)\]/g) || [];
+          const tagValues = tags.map(t => t.slice(1, -1).toLowerCase());
+          if (tagValues.length === 0) return null;
+
+          for (const repo of this.repositories) {
+            const label = (repo.jira_label || '').toLowerCase();
+            const name = (repo.name || '').toLowerCase();
+            if (!label && !name) continue;
+            if (label && tagValues.includes(label)) return repo;
+            if (name && tagValues.includes(name)) return repo;
+          }
+          return null;
+        },
+
+        get epicGroups() {
+          const groups = {};
+          for (const t of this.filteredEpicTickets) {
+            const matchedRepo = this._matchTicketRepo(t);
+            const groupKey = matchedRepo ? matchedRepo.name : 'Others';
+            if (!groups[groupKey]) {
+              groups[groupKey] = {
+                prefix: groupKey,
+                repoId: matchedRepo?.id || null,
+                repoName: matchedRepo?.name || null,
+                repoBranch: matchedRepo?.default_branch || '',  // repo's configured default (display only)
+                branch: '',      // explicit override (empty = inherit from global)
+                profileId: null, // explicit override (null = inherit from global)
+                tickets: [],
+              };
+            }
+            groups[groupKey].tickets.push(t);
+          }
+          // Apply group overrides
+          for (const [key, override] of Object.entries(this.epicGroupOverrides)) {
+            if (groups[key]) Object.assign(groups[key], override);
+          }
+          // Sort: named groups first, Others last
+          return Object.values(groups).sort((a, b) => {
+            if (a.prefix === 'Others') return 1;
+            if (b.prefix === 'Others') return -1;
+            return a.prefix.localeCompare(b.prefix);
+          });
+        },
+
+        // Effective branch for display on group header
+        effectiveGroupBranch(group) {
+          return group.branch || this.epicParentBranch || group.repoBranch || 'HEAD';
+        },
+
+        resolveTicketAssignment(ticket) {
+          const matchedRepo = this._matchTicketRepo(ticket);
+          const groupKey = matchedRepo ? matchedRepo.name : 'Others';
+          const group = this.epicGroups.find(g => g.prefix === groupKey) || {};
+          const override = this.epicTicketOverrides[ticket.key] || {};
+          return {
+            repository_id: override.repoId || group.repoId || null,
+            // Cascade: ticket > group explicit > global > repo default
+            parent_branch: override.branch || group.branch || this.epicParentBranch || group.repoBranch || null,
+            profile_id: override.profileId || group.profileId || this.epicProfileId || null,
+          };
+        },
+
         get filteredEpicTickets() {
           return this.epicTickets.filter(t => {
-            // Text search
             if (this.epicFilter.search) {
               const q = this.epicFilter.search.toLowerCase();
-              const matchesSearch = t.key.toLowerCase().includes(q) || (t.summary || '').toLowerCase().includes(q);
-              if (!matchesSearch) return false;
+              if (!t.key.toLowerCase().includes(q) && !(t.summary || '').toLowerCase().includes(q)) return false;
             }
-            // Tag filter (OR logic — show if matches ANY active tag)
             if (this.epicFilter.activeTags.length > 0) {
               const summary = (t.summary || '').toLowerCase();
-              const matchesTag = this.epicFilter.activeTags.some(tag => summary.includes(tag.toLowerCase()));
-              if (!matchesTag) return false;
+              if (!this.epicFilter.activeTags.some(tag => summary.includes(tag.toLowerCase()))) return false;
             }
             return true;
           });
         },
 
         get terminalTabs() {
-          return this.tickets.filter(t =>
+          let tabs = this.tickets.filter(t =>
             ['planning', 'developing', 'review', 'failed', 'done'].includes(t.state)
           );
+          if (this.activeRepoId !== null) {
+            tabs = tabs.filter(t => t.repository_id === this.activeRepoId);
+          }
+          return tabs;
         },
 
         get activeTerminalLogs() {
@@ -540,25 +1849,34 @@
             const existing = this.terminalLogs[ticketId] || [];
             const lastApiTs = result.logs[result.logs.length - 1]?.timestamp;
             const newFromSSE = existing.filter(l => l.timestamp > lastApiTs);
-            // Replace entire object to trigger Alpine.js reactivity
             this.terminalLogs = { ...this.terminalLogs, [ticketId]: [...result.logs, ...newFromSSE] };
           }
         },
 
-
         async switchTerminal(ticketId) {
           this.activeTerminal = ticketId;
-          // Always fetch if no logs yet, or force on explicit switch
           const hasLogs = (this.terminalLogs[ticketId]?.length || 0) > 0;
           await this.fetchLogsForTicket(ticketId, !hasLogs);
+          this.$nextTick(() => {
+            const el = document.getElementById('terminal-output');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
         },
 
         // API
+        _authToken: localStorage.getItem('tn_auth_token') || '',
+        showLogin: false,
+
         async api(method, path, body = null) {
           try {
             const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            if (this._authToken) opts.headers['Authorization'] = `Bearer ${this._authToken}`;
             if (body) opts.body = JSON.stringify(body);
             const res = await fetch(path, opts);
+            if (res.status === 401) {
+              this.showLogin = true;
+              return null;
+            }
             return await res.json();
           } catch (e) {
             console.error(`API ${method} ${path} failed:`, e);
@@ -566,12 +1884,42 @@
           }
         },
 
+        async doLogin(token) {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          });
+          if (res.ok) {
+            this._authToken = token;
+            localStorage.setItem('tn_auth_token', token);
+            this.showLogin = false;
+            await this.init();
+          } else {
+            return 'Invalid token';
+          }
+        },
+
         async ensureRun() {
           if (!this.currentRun) {
-            const projectPath = prompt('Enter the project path (e.g., /Users/you/project):');
-            if (!projectPath) return false;
+            // If repos available, use the first one. Otherwise prompt for path.
+            let projectPath = '';
+            let repoId = null;
+            if (this.repositories.length > 0) {
+              const repo = this.activeRepoId ? this.repositories.find(r => r.id === this.activeRepoId) : this.repositories[0];
+              if (repo) {
+                projectPath = repo.path;
+                repoId = repo.id;
+              }
+            }
+            if (!projectPath) {
+              projectPath = prompt('Enter the project path (e.g., /Users/you/project):');
+              if (!projectPath) return false;
+            }
             const name = this.epicKey || 'Manual Run';
-            this.currentRun = await this.api('POST', '/api/runs', { name, project_path: projectPath, max_parallel: this.maxParallel });
+            this.currentRun = await this.api('POST', '/api/runs', {
+              name, project_path: projectPath, max_parallel: this.maxParallel,
+              repository_id: repoId,
+            });
             this.connectSSE();
           }
           return true;
@@ -587,35 +1935,432 @@
           }
         },
 
+        // Repo Management
+        async addRepo() {
+          if (!this.newRepo.name || !this.newRepo.path) return;
+          const repo = await this.api('POST', '/api/repositories', this.newRepo);
+          if (repo) {
+            this.repositories.push(repo);
+            this.newRepo = { name: '', path: '', default_branch: 'main', jira_label: '' };
+          }
+        },
+
+        editRepo(repo) {
+          this.editRepoModal = {
+            show: true, id: repo.id,
+            data: { name: repo.name, path: repo.path, default_branch: repo.default_branch, jira_label: repo.jira_label || '', default_profile_id: repo.default_profile_id || '' },
+          };
+        },
+
+        async saveRepoEdit() {
+          const updates = { ...this.editRepoModal.data };
+          if (updates.default_profile_id === '') updates.default_profile_id = null;
+          const repo = await this.api('PUT', `/api/repositories/${this.editRepoModal.id}`, updates);
+          if (repo) {
+            const idx = this.repositories.findIndex(r => r.id === this.editRepoModal.id);
+            if (idx >= 0) this.repositories[idx] = repo;
+          }
+          this.editRepoModal.show = false;
+        },
+
+        async removeRepo(id) {
+          await this.api('DELETE', `/api/repositories/${id}`);
+          this.repositories = this.repositories.filter(r => r.id !== id);
+        },
+
+        // Label Mappings (legacy — now handled via repo.jira_label)
+        async removeLabelMapping(id) {
+          await this.api('DELETE', `/api/label-mappings/${id}`);
+        },
+
+        // Agent Profiles
+        async addProfile() {
+          if (!this.newProfile.name || !this.newProfile.command || !this.newProfile.args_template) return;
+          const p = await this.api('POST', '/api/profiles', this.newProfile);
+          if (p) {
+            this.agentProfiles.push(p);
+            this.newProfile = { name: '', command: '', args_template: '', log_format: 'plain-text' };
+          }
+        },
+
+        editProfile(profile) {
+          this.editProfileModal = {
+            show: true, id: profile.id,
+            data: { name: profile.name, command: profile.command, args_template: profile.args_template, log_format: profile.log_format },
+          };
+        },
+
+        async saveProfileEdit() {
+          const p = await this.api('PUT', `/api/profiles/${this.editProfileModal.id}`, this.editProfileModal.data);
+          if (p) {
+            const idx = this.agentProfiles.findIndex(x => x.id === this.editProfileModal.id);
+            if (idx >= 0) this.agentProfiles[idx] = p;
+          }
+          this.editProfileModal.show = false;
+        },
+
+        async setDefaultProfile(id) {
+          await this.api('PUT', `/api/profiles/${id}/default`);
+          this.agentProfiles.forEach(p => p.is_default = (p.id === id));
+        },
+
+        async removeProfile(id) {
+          await this.api('DELETE', `/api/profiles/${id}`);
+          this.agentProfiles = this.agentProfiles.filter(p => p.id !== id);
+        },
+
+        // Interactive Terminal (attach/detach to live worker process)
+        isTicketActive(ticket) {
+          return ticket && ['planning', 'developing'].includes(ticket.state);
+        },
+
+        async openInteractiveTerminal(ticketId) {
+          const ticket = this.tickets.find(t => t.id === ticketId);
+          if (!ticket) return;
+
+          this.interactiveTerminal.show = true;
+          this.interactiveTerminal.ticketId = ticketId;
+          this.interactiveTerminal.ticketKey = ticket.jira_key;
+          this.interactiveTerminal.cwd = ticket.worktree_path || '';
+          this.interactiveTerminal.logs = [];
+
+          // Fetch existing logs
+          const result = await this.api('GET', `/api/logs/${ticketId}?tail=1000`);
+          if (result && result.logs) {
+            this.interactiveTerminal.logs = result.logs;
+          }
+
+          // Auto-scroll to bottom
+          this.$nextTick(() => {
+            const el = document.getElementById('interactive-terminal');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        },
+
+        _appendInteractiveLog(ticketId, log) {
+          if (!this.interactiveTerminal.show || this.interactiveTerminal.ticketId !== ticketId) return;
+          this.interactiveTerminal.logs.push(log);
+          // Keep max 2000 lines
+          if (this.interactiveTerminal.logs.length > 2000) {
+            this.interactiveTerminal.logs = this.interactiveTerminal.logs.slice(-1500);
+          }
+          this.$nextTick(() => {
+            const el = document.getElementById('interactive-terminal');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        },
+
+        async sendTerminalInput() {
+          const text = this.interactiveTerminal.inputText;
+          if (!text || !this.interactiveTerminal.ticketId) return;
+          // Send text + newline to the worker's PTY
+          await this.api('POST', `/api/tickets/${this.interactiveTerminal.ticketId}/terminal-input`, { input: text + '\n' });
+          this.interactiveTerminal.inputText = '';
+        },
+
+        closeInteractiveTerminal() {
+          this.interactiveTerminal.show = false;
+          this.interactiveTerminal.ticketId = null;
+          this.interactiveTerminal.logs = [];
+        },
+
+        async openExternalTerminal(ticketId) {
+          const result = await this.api('POST', `/api/tickets/${ticketId}/open-terminal`);
+          if (!result || result.detail) {
+            alert(result?.detail || 'Failed to open external terminal');
+          }
+        },
+
+        // Jira Credentials (stored in .env)
+        async testJiraConnection() {
+          this.jiraSetup.error = '';
+          this.jiraSetup.success = '';
+          // Save to .env first, then test (skip token if masked)
+          const envUpdate = {
+            JIRA_BASE_URL: this.jiraSetup.url,
+            JIRA_EMAIL: this.jiraSetup.email,
+          };
+          if (this.jiraSetup.token && !this.jiraSetup.token.includes('****')) {
+            envUpdate.JIRA_API_TOKEN = this.jiraSetup.token;
+          }
+          await this.api('PUT', '/api/env', envUpdate);
+          const result = await this.api('POST', '/api/settings/test-jira');
+          if (result && result.status === 'connected') {
+            this.jiraSetup.success = `Connected as ${result.user}`;
+            this.jiraSetup.error = '';
+          } else {
+            this.jiraSetup.error = result?.detail || 'Connection failed';
+            this.jiraSetup.success = '';
+          }
+        },
+
+        async saveJiraCredentials() {
+          if (!this.jiraSetup.url || !this.jiraSetup.email || !this.jiraSetup.token) {
+            this.jiraSetup.error = 'All fields are required';
+            return;
+          }
+          const envUpdate = {
+            JIRA_BASE_URL: this.jiraSetup.url,
+            JIRA_EMAIL: this.jiraSetup.email,
+          };
+          // Only send token if user entered a new one (not the masked value)
+          if (!this.jiraSetup.token.includes('****')) {
+            envUpdate.JIRA_API_TOKEN = this.jiraSetup.token;
+          }
+          await this.api('PUT', '/api/env', envUpdate);
+          this.showJiraSetup = false;
+          this.jiraSetup.success = 'Saved';
+        },
+
+        // Notifications
+        async initNotifications() {
+          if (typeof Notification !== 'undefined') {
+            this.notificationState.permission = Notification.permission;
+          }
+          const info = await this.api('GET', '/api/notifications/vapid-key');
+          if (info) {
+            this.notificationState.vapidKey = info.key;
+            this.notificationState.enabled = info.enabled;
+          }
+        },
+
+        async requestNotificationPermission() {
+          if (typeof Notification === 'undefined') return;
+          const result = await Notification.requestPermission();
+          this.notificationState.permission = result;
+          if (result === 'granted' && this.notificationState.vapidKey) {
+            await this.subscribePush();
+          }
+        },
+
+        async toggleServerNotifications(enabled) {
+          await this.api('PUT', '/api/env', { NOTIFICATIONS_ENABLED: enabled ? 'true' : 'false' });
+          this.notificationState.enabled = enabled;
+        },
+
+        async subscribePush() {
+          if (!this.notificationState.vapidKey || !('serviceWorker' in navigator)) return;
+          try {
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: this._urlBase64ToUint8Array(this.notificationState.vapidKey),
+            });
+            await this.api('POST', '/api/notifications/subscribe', { subscription: sub.toJSON() });
+          } catch (e) {
+            console.error('[notifications] Push subscribe failed:', e);
+          }
+        },
+
+        _urlBase64ToUint8Array(base64String) {
+          const padding = '='.repeat((4 - base64String.length % 4) % 4);
+          const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+          const raw = window.atob(base64);
+          const arr = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+          return arr;
+        },
+
+        testNotification() {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification('Task Ninja', { body: 'Notifications are working!', icon: '/favicon.ico' });
+            this._testNotifSent = true;
+            setTimeout(() => { this._testNotifSent = false; }, 3000);
+          }
+        },
+
+        // Setup Wizard
+        openSetupWizard() {
+          this.setupStep = 1;
+          // Prefill from existing data
+          // Jira is already loaded from .env in init()
+          // If a repo exists, prefill newRepo for reference
+          if (this.repositories.length > 0 && !this.newRepo.name) {
+            // Leave empty so user can add another, but show existing below
+          }
+          this.showJiraSetup = true;
+        },
+
+        // Remote Access
+        async toggleRemoteAccess(enabled) {
+          await this.api('PUT', '/api/env', { TASK_NINJA_REMOTE_ACCESS: enabled ? 'true' : 'false' });
+          this.remoteAccess.enabled = enabled;
+          if (enabled) this.checkTailscale();
+        },
+
+        async checkTailscale() {
+          this.tailscale.loading = true;
+          this.tailscale.error = null;
+          try {
+            const data = await this.api('GET', '/api/tailscale/status');
+            Object.assign(this.tailscale, data);
+          } catch (e) {
+            this.tailscale.error = 'Failed to check Tailscale status';
+          } finally {
+            this.tailscale.loading = false;
+          }
+        },
+
+        async installTailscale() {
+          this.tailscale.installing = true;
+          this.tailscale.error = null;
+          try {
+            const data = await this.api('POST', '/api/tailscale/install');
+            if (data.status === 'installed' || data.status === 'already_installed') {
+              await this.checkTailscale();
+            }
+          } catch (e) {
+            this.tailscale.error = e.message || 'Installation failed. Install manually from https://tailscale.com/download';
+          } finally {
+            this.tailscale.installing = false;
+          }
+        },
+
+        async startTailscale() {
+          this.tailscale.loading = true;
+          this.tailscale.error = null;
+          try {
+            const data = await this.api('POST', '/api/tailscale/up');
+            if (data.status === 'needs_login') {
+              this.tailscale.error = data.message;
+            } else {
+              await this.checkTailscale();
+            }
+          } catch (e) {
+            this.tailscale.error = e.message || 'Failed to start Tailscale';
+          } finally {
+            this.tailscale.loading = false;
+          }
+        },
+
+        // --- Scheduler ---
+
+        buildCron() {
+          const days = this.newSchedule.cronDays.sort((a, b) => a - b);
+          const dayStr = days.length === 7 ? '*' : days.join(',');
+          this.newSchedule.cron = `${this.newSchedule.cronMinute} ${this.newSchedule.cronHour} * * ${dayStr}`;
+        },
+
+        describeCron(cron) {
+          if (!cron) return '';
+          const parts = cron.split(' ');
+          if (parts.length < 5) return cron;
+          const [min, hour, , , dow] = parts;
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          let dayDesc = 'every day';
+          if (dow !== '*') {
+            const days = dow.split(',').map(d => dayNames[parseInt(d)] || d);
+            if (days.length === 5 && !days.includes('Sun') && !days.includes('Sat')) dayDesc = 'weekdays';
+            else dayDesc = days.join(', ');
+          }
+          const h = String(hour).padStart(2, '0');
+          const m = String(min).padStart(2, '0');
+          return `Runs ${dayDesc} at ${h}:${m}`;
+        },
+
+        async loadSchedules() {
+          const runId = this.currentRun?.id;
+          if (!runId) return;
+          const data = await this.api('GET', `/api/schedules?run_id=${runId}`);
+          this.schedules = data || [];
+        },
+
+        async createSchedule() {
+          const runId = this.currentRun?.id;
+          if (!runId) return;
+          const body = {
+            run_id: runId,
+            schedule_type: this.newSchedule.type,
+          };
+          if (this.newSchedule.type === 'recurring') {
+            body.cron_expression = this.newSchedule.cron;
+            if (this.newSchedule.endTime) body.end_time = this.newSchedule.endTime;
+          } else {
+            if (this.newSchedule.startTime) body.start_time = this.newSchedule.startTime;
+          }
+          await this.api('POST', '/api/schedules', body);
+          await this.loadSchedules();
+          this.newSchedule = { type: 'recurring', cron: '0 9 * * 1-5', startTime: '', endTime: '', cronDays: [1,2,3,4,5], cronHour: 9, cronMinute: 0 };
+        },
+
+        async toggleSchedule(schedule) {
+          await this.api('PATCH', `/api/schedules/${schedule.id}`, { enabled: !schedule.enabled });
+          await this.loadSchedules();
+        },
+
+        async deleteSchedule(id) {
+          if (!confirm('Delete this schedule?')) return;
+          await this.api('DELETE', `/api/schedules/${id}`);
+          await this.loadSchedules();
+        },
+
+        async loadSchedulerSettings() {
+          const env = await this.api('GET', '/api/env');
+          if (!env) return;
+          this.autoRetry.enabled = (env.AUTO_RETRY_ENABLED || '').toLowerCase() === 'true';
+          this.autoRetry.delay = parseInt(env.AUTO_RETRY_DELAY_MINUTES) || 15;
+          this.autoRetry.max = parseInt(env.AUTO_RETRY_MAX) || 3;
+          this.workingHours.enabled = (env.WORKING_HOURS_ENABLED || '').toLowerCase() === 'true';
+          this.workingHours.start = env.WORKING_HOURS_START || '09:00';
+          this.workingHours.end = env.WORKING_HOURS_END || '18:00';
+          this.workingHours.days = env.WORKING_HOURS_DAYS ? env.WORKING_HOURS_DAYS.split(',') : ['mon','tue','wed','thu','fri'];
+        },
+
+        async saveSchedulerSettings() {
+          await this.api('PUT', '/api/env', {
+            AUTO_RETRY_ENABLED: String(this.autoRetry.enabled),
+            AUTO_RETRY_DELAY_MINUTES: String(this.autoRetry.delay),
+            AUTO_RETRY_MAX: String(this.autoRetry.max),
+            WORKING_HOURS_ENABLED: String(this.workingHours.enabled),
+            WORKING_HOURS_START: this.workingHours.start,
+            WORKING_HOURS_END: this.workingHours.end,
+            WORKING_HOURS_DAYS: this.workingHours.days.join(','),
+          });
+        },
+
         // Actions
         async loadEpic() {
           if (!this.epicKey) return;
           if (!(await this.ensureRun())) return;
 
-          // Show loading state in modal
           this.epicTickets = [
             { key: '...', summary: 'Fetching tickets from Jira...', status: 'Loading', selected: false }
           ];
           this.showEpicModal = true;
 
-          // Fetch epic children via API (uses Claude CLI + MCP tools)
           const result = await this.api('POST', `/api/runs/${this.currentRun.id}/load-epic`, { epic_key: this.epicKey });
+          // Update epicKey with cleaned key from backend (handles URL parsing)
+          if (result && result.epic_key) this.epicKey = result.epic_key;
           if (result && result.tickets && result.tickets.length > 0) {
-            // Data only — no DB records created. User selects, then add-tickets creates them.
             this.epicTickets = result.tickets.map(t => ({
               key: t.jira_key,
               summary: t.summary || t.jira_key,
               status: t.status || 'To Do',
               selected: false,
               alreadyAdded: t.already_added || false,
+              matchedRepo: t.matched_repository_name || null,
+              matchedRepoId: t.matched_repository_id || null,
             }));
+            // Auto-fill parent branch from first matched repo's default_branch
+            if (!this.epicParentBranch) {
+              const firstRepoId = result.tickets.find(t => t.matched_repository_id)?.matched_repository_id;
+              if (firstRepoId) {
+                const repo = this.repositories.find(r => r.id === firstRepoId);
+                if (repo) this.epicParentBranch = repo.default_branch || '';
+              }
+            }
+            // Auto-select default agent profile
+            if (!this.epicProfileId) {
+              const defaultProfile = this.agentProfiles.find(p => p.is_default);
+              if (defaultProfile) this.epicProfileId = defaultProfile.id;
+            }
           } else if (result && result.found === 0) {
             this.epicTickets = [
               { key: this.epicKey, summary: 'No tickets found in this epic', status: 'Empty', selected: false }
             ];
           } else {
             this.epicTickets = [
-              { key: this.epicKey, summary: 'Failed to fetch — try adding tickets manually', status: 'Error', selected: false }
+              { key: this.epicKey, summary: 'Failed to fetch. Check Jira credentials in Settings.', status: 'Error', selected: false }
             ];
           }
         },
@@ -625,12 +2370,30 @@
           if (!(await this.ensureRun())) return;
 
           const keys = this.ticketInput.split(/[,\n\s]+/).filter(k => k.trim());
-          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, { keys });
-          if (result && result.tickets) {
-            this.tickets.push(...result.tickets);
-            this.ticketInput = '';
-            this.$nextTick(() => this.initSortable());
+
+          // Show modal with loading state
+          this.epicTickets = [
+            { key: '...', summary: 'Fetching ticket details from Jira...', status: 'Loading', selected: false }
+          ];
+          this.showEpicModal = true;
+
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/fetch-tickets`, { keys });
+          if (result && result.tickets && result.tickets.length > 0) {
+            this.epicTickets = result.tickets.map(t => ({
+              key: t.jira_key,
+              summary: t.summary || t.jira_key,
+              status: t.status || 'Unknown',
+              selected: !t.already_added,
+              alreadyAdded: t.already_added || false,
+              matchedRepo: t.matched_repository_name || null,
+              matchedRepoId: t.matched_repository_id || null,
+            }));
+          } else {
+            this.epicTickets = [
+              { key: '-', summary: 'No tickets found. Check keys and Jira credentials.', status: 'Error', selected: false }
+            ];
           }
+          this.ticketInput = '';
         },
 
         async queueSelectedEpicTickets() {
@@ -640,28 +2403,49 @@
             return;
           }
 
-          // Create tickets in DB via add-tickets (only selected ones)
           const keys = selected.map(t => t.key);
           const summaries = {};
           selected.forEach(t => { summaries[t.key] = t.summary; });
-          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, { keys, summaries });
+
+          // Build per-ticket assignments via 3-tier cascade
+          const assignments = {};
+          for (const t of selected) {
+            const resolved = this.resolveTicketAssignment(t);
+            // Only include if at least one field is set
+            if (resolved.repository_id || resolved.parent_branch || resolved.profile_id) {
+              assignments[t.key] = resolved;
+            }
+          }
+
+          const body = { keys, summaries };
+          // Global fallbacks
+          if (this.epicParentBranch) body.parent_branch = this.epicParentBranch;
+          if (this.epicProfileId) body.profile_id = this.epicProfileId;
+          if (this.activeRepoId) body.repository_id = this.activeRepoId;
+          // Per-ticket overrides
+          if (Object.keys(assignments).length > 0) body.assignments = assignments;
+
+          const result = await this.api('POST', `/api/runs/${this.currentRun.id}/add-tickets`, body);
           if (result && result.tickets) {
             this.tickets.push(...result.tickets);
           }
 
           this.showEpicModal = false;
           this.epicFilter = { search: '', activeTags: [] };
+          this.epicParentBranch = '';
+          this.epicProfileId = null;
+          this.epicGroupOverrides = {};
+          this.epicExpandedGroups = {};
+          this.epicTicketOverrides = {};
+          this.epicEditingTicket = null;
           await this.loadRunTickets();
           this.$nextTick(() => this.initSortable());
         },
 
         toggleEpicFilterTag(tag) {
           const idx = this.epicFilter.activeTags.indexOf(tag);
-          if (idx >= 0) {
-            this.epicFilter.activeTags.splice(idx, 1);
-          } else {
-            this.epicFilter.activeTags.push(tag);
-          }
+          if (idx >= 0) this.epicFilter.activeTags.splice(idx, 1);
+          else this.epicFilter.activeTags.push(tag);
         },
 
         toggleAllEpicTickets(checked, visibleOnly = false) {
@@ -755,22 +2539,19 @@
         // SSE
         connectSSE() {
           if (!this.currentRun) return;
-          // Close existing connection
           if (this.eventSource) {
             this.eventSource.close();
             this.eventSource = null;
           }
 
           const runId = this.currentRun.id;
-          this.eventSource = new EventSource(`/api/stream/${runId}`);
+          const sseToken = this._authToken ? `?token=${encodeURIComponent(this._authToken)}` : '';
+          this.eventSource = new EventSource(`/api/stream/${runId}${sseToken}`);
 
           this.eventSource.onopen = () => {
             console.log('[SSE] Connected');
-            // Reload tickets and logs to catch updates missed during reconnect
             this.loadRunTickets();
-            if (this.activeTerminal) {
-              this.fetchLogsForTicket(this.activeTerminal, true);
-            }
+            if (this.activeTerminal) this.fetchLogsForTicket(this.activeTerminal, true);
           };
 
           this.eventSource.onmessage = (event) => {
@@ -778,6 +2559,8 @@
 
             if (evtType === 'ticket_update') {
               const idx = this.tickets.findIndex(t => t.id === data.ticket_id);
+              const ticket = idx >= 0 ? this.tickets[idx] : null;
+              const prevState = ticket?.state;
               if (idx >= 0) {
                 const updates = { ...data };
                 delete updates.ticket_id;
@@ -787,22 +2570,36 @@
               if (data.state && ['planning', 'developing'].includes(data.state)) {
                 this.switchTerminal(data.ticket_id);
               }
+              // In-tab notification for terminal state changes
+              if (data.state && data.state !== prevState && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                const key = ticket?.jira_key || data.ticket_id;
+                if (data.state === 'done' || data.state === 'review') {
+                  new Notification('Task Ninja', { body: `${key} completed`, tag: `ticket-${data.ticket_id}` });
+                } else if (data.state === 'failed') {
+                  new Notification('Task Ninja', { body: `${key} failed`, tag: `ticket-${data.ticket_id}` });
+                }
+              }
             }
 
             if (evtType === 'log') {
+              const logEntry = { timestamp: new Date().toISOString(), line: data.line };
               const logs = [...(this.terminalLogs[data.ticket_id] || [])];
-              logs.push({ timestamp: new Date().toISOString(), line: data.line });
+              logs.push(logEntry);
               const trimmed = logs.length > 500 ? logs.slice(-500) : logs;
-              // Replace entire object to trigger Alpine.js reactivity
               this.terminalLogs = { ...this.terminalLogs, [data.ticket_id]: trimmed };
               this.$nextTick(() => {
                 const el = document.getElementById('terminal-output');
                 if (el) el.scrollTop = el.scrollHeight;
               });
+              // Also feed the Live Process overlay
+              this._appendInteractiveLog(data.ticket_id, logEntry);
             }
 
             if (evtType === 'run_status') {
               this.currentRun.status = data.status;
+              if (data.status === 'completed' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                new Notification('Task Ninja', { body: 'All tickets in this run have finished.', tag: 'run-completed' });
+              }
             }
 
             if (evtType === 'ticket_deleted') {

@@ -1,22 +1,33 @@
-"""Claude CLI worker — spawns a claude session per ticket."""
+"""CLI worker — spawns an AI agent process per ticket with PTY for live terminal access."""
 
 import asyncio
+import fcntl
 import json
 import os
+import pty
 import re
+import select
 import signal
+import struct
 import sys
+import termios
 from pathlib import Path
 from typing import Optional
 
+from fastapi import WebSocket
+
 from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
+from engine.jira_client import JiraClient
 from engine.state import StateManager
 from models.ticket import TicketState
 
+# Strip ANSI escape codes for log parsing
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b\[\?[0-9;]*[hl]|\r')
+
 
 class Worker:
-    """Manages a single Claude CLI process for a ticket."""
+    """Manages a single AI agent process for a ticket with PTY-backed terminal."""
 
     def __init__(
         self,
@@ -48,9 +59,18 @@ class Worker:
         self.auto_create_pr = auto_create_pr
         self.pr_base_branch = pr_base_branch
         self.claude_helper = ClaudeHelper(claude_command, skip_permissions)
+        self.jira_client: Optional[JiraClient] = None
         self.process: Optional[asyncio.subprocess.Process] = None
         self._cancelled = False
         self._detected_pr_url: Optional[str] = None
+        self._moved_to_developing = False
+
+        # PTY and viewer management
+        self._master_fd: Optional[int] = None
+        self._viewers: set[WebSocket] = set()
+        self._output_buffer = bytearray()  # Scrollback for late-joining viewers
+        self._max_buffer = 256 * 1024  # 256KB
+        self._line_buffer = ""  # Partial line accumulator for parsing
 
     async def run(self) -> bool:
         """Execute the ticket. Returns True if successful."""
@@ -80,16 +100,30 @@ class Worker:
             log_dir = Path(self.worktree_path).parent
             log_dir.mkdir(parents=True, exist_ok=True)
             self._log_file_path = log_dir / f"log-{self.jira_key.lower()}.txt"
-            self._log_fh = open(self._log_file_path, "a", buffering=1)  # line-buffered
+            self._log_fh = open(self._log_file_path, "a", buffering=1)
 
-            # Spawn process — stdout goes to log file, we tail the file
+            # Create PTY pair for the process
+            master_fd, slave_fd = pty.openpty()
+            self._master_fd = master_fd
+
+            # Set initial terminal size
+            winsize = struct.pack("HHHH", 50, 200, 0, 0)
+            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+
+            # Set non-blocking on master
+            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+            # Spawn process inside PTY
             self.process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=self.worktree_path,
-                stdout=self._log_fh,
-                stderr=asyncio.subprocess.STDOUT,
-                env={**os.environ},
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                env={**os.environ, "TERM": "xterm-256color"},
             )
+            os.close(slave_fd)  # Parent doesn't need slave end
 
             # Store PID and log file path, broadcast to UI
             await self.state.update_ticket(
@@ -101,15 +135,14 @@ class Worker:
                 self.run_id, self.ticket_id, None, worker_pid=self.process.pid
             )
 
-            # Tail the log file for real-time output
-            moved_to_developing = False
-            await self._tail_log_file(self._log_file_path, moved_to_developing)
+            # Read PTY output until process exits
+            await self._pty_read_loop()
 
             # Wait for process to finish
             await self.process.wait()
-            # Final flush — read any remaining lines
-            await asyncio.sleep(0.5)
-            await self._tail_log_file(self._log_file_path, moved_to_developing, final=True)
+
+            # Final drain of any remaining PTY data
+            await self._drain_pty()
 
             if self._cancelled:
                 return False
@@ -125,14 +158,16 @@ class Worker:
                     self.run_id, self.ticket_id, TicketState.REVIEW
                 )
                 await self._sync_jira_status("review")
+                await self._notify_viewers_exit(0)
                 return True
             else:
-                error = f"Claude CLI exited with code {self.process.returncode}"
+                error = f"CLI exited with code {self.process.returncode}"
                 await self.state.update_ticket(self.ticket_id, error=error)
                 await self.state.update_ticket_state(self.ticket_id, TicketState.FAILED)
                 await self.broadcaster.broadcast_ticket_update(
                     self.run_id, self.ticket_id, TicketState.FAILED, error=error
                 )
+                await self._notify_viewers_exit(self.process.returncode)
                 return False
 
         except Exception as e:
@@ -147,6 +182,7 @@ class Worker:
             )
             return False
         finally:
+            self._close_pty()
             if hasattr(self, '_log_fh') and self._log_fh:
                 self._log_fh.close()
             await self.state.update_ticket(self.ticket_id, worker_pid=None)
@@ -164,58 +200,178 @@ class Worker:
                     await self.process.wait()
             except ProcessLookupError:
                 pass
+        self._close_pty()
 
-    _tail_offset: int = 0
-    _moved_to_developing: bool = False
+    # --- PTY I/O ---
 
-    async def _tail_log_file(self, log_path: Path, moved_to_developing: bool, final: bool = False) -> None:
-        """Tail the log file, parse lines, store in DB, broadcast via SSE."""
+    async def _pty_read_loop(self) -> None:
+        """Read from PTY master, forward to viewers, parse for logs/state."""
         while not self._cancelled:
+            # Check if process exited
+            if self.process.returncode is not None:
+                break
+
             try:
-                with open(log_path, "r") as f:
-                    f.seek(self._tail_offset)
-                    new_data = f.read()
-                    self._tail_offset = f.tell()
-            except FileNotFoundError:
-                if final:
-                    return
-                await asyncio.sleep(0.5)
+                ready, _, _ = select.select([self._master_fd], [], [], 0)
+                if ready:
+                    try:
+                        data = os.read(self._master_fd, 4096)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+
+                    # Store in scrollback buffer
+                    self._output_buffer.extend(data)
+                    if len(self._output_buffer) > self._max_buffer:
+                        self._output_buffer = self._output_buffer[-self._max_buffer:]
+
+                    # Forward raw bytes to connected terminal viewers
+                    await self._send_to_viewers(data)
+
+                    # Write to log file
+                    if hasattr(self, '_log_fh') and self._log_fh:
+                        self._log_fh.write(data.decode('utf-8', errors='replace'))
+                        self._log_fh.flush()
+
+                    # Parse for state transitions, PR URLs, and log broadcasting
+                    text = data.decode('utf-8', errors='replace')
+                    await self._process_output(text)
+                else:
+                    await asyncio.sleep(0.02)
+            except (OSError, ValueError):
+                break
+
+    async def _drain_pty(self) -> None:
+        """Read any remaining data from PTY after process exit."""
+        if self._master_fd is None:
+            return
+        try:
+            while True:
+                ready, _, _ = select.select([self._master_fd], [], [], 0)
+                if not ready:
+                    break
+                data = os.read(self._master_fd, 4096)
+                if not data:
+                    break
+                self._output_buffer.extend(data)
+                if len(self._output_buffer) > self._max_buffer:
+                    self._output_buffer = self._output_buffer[-self._max_buffer:]
+                await self._send_to_viewers(data)
+                if hasattr(self, '_log_fh') and self._log_fh:
+                    self._log_fh.write(data.decode('utf-8', errors='replace'))
+                    self._log_fh.flush()
+                text = data.decode('utf-8', errors='replace')
+                await self._process_output(text)
+        except OSError:
+            pass
+
+    async def _send_to_viewers(self, data: bytes) -> None:
+        """Send raw PTY output to all connected WebSocket viewers."""
+        disconnected = set()
+        for ws in self._viewers:
+            try:
+                await ws.send_bytes(data)
+            except Exception:
+                disconnected.add(ws)
+        self._viewers -= disconnected
+
+    async def _notify_viewers_exit(self, code: int) -> None:
+        """Notify viewers that the process has exited."""
+        msg = json.dumps({"type": "process_exit", "code": code})
+        disconnected = set()
+        for ws in self._viewers:
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                disconnected.add(ws)
+        self._viewers -= disconnected
+
+    def _close_pty(self) -> None:
+        """Close the PTY master fd."""
+        if self._master_fd is not None:
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._master_fd = None
+
+    # --- Viewer management (attach/detach) ---
+
+    async def attach_viewer(self, ws: WebSocket) -> None:
+        """Attach a WebSocket viewer. Sends scrollback buffer first."""
+        # Send buffered output so viewer sees recent history
+        if self._output_buffer:
+            try:
+                await ws.send_bytes(bytes(self._output_buffer))
+            except Exception:
+                return
+        self._viewers.add(ws)
+
+    def detach_viewer(self, ws: WebSocket) -> None:
+        """Detach a WebSocket viewer. Does NOT affect the running process."""
+        self._viewers.discard(ws)
+
+    def write_input(self, data: bytes) -> None:
+        """Write user input to the PTY (from a terminal viewer)."""
+        if self._master_fd is not None and not self._cancelled:
+            try:
+                os.write(self._master_fd, data)
+            except OSError:
+                pass
+
+    def resize_pty(self, rows: int, cols: int) -> None:
+        """Resize the PTY terminal."""
+        if self._master_fd is not None:
+            try:
+                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
+            except OSError:
+                pass
+
+    @property
+    def is_running(self) -> bool:
+        """Check if the worker process is still running."""
+        return self.process is not None and self.process.returncode is None
+
+    # --- Output parsing ---
+
+    async def _process_output(self, text: str) -> None:
+        """Parse PTY output for state transitions, PR URLs, and log broadcasting."""
+        self._line_buffer += text
+        while '\n' in self._line_buffer:
+            line, self._line_buffer = self._line_buffer.split('\n', 1)
+            line = line.strip()
+            if not line:
                 continue
 
-            if new_data:
-                for raw in new_data.splitlines():
-                    raw = raw.rstrip()
-                    if not raw:
-                        continue
+            # Strip ANSI codes for parsing
+            clean = _ANSI_RE.sub('', line)
+            if not clean:
+                continue
 
-                    line = self._parse_stream_line(raw)
-                    if not line:
-                        continue
+            parsed = self._parse_stream_line(clean)
+            if not parsed:
+                continue
 
-                    await self.state.append_log(self.ticket_id, line)
-                    await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, line)
+            await self.state.append_log(self.ticket_id, parsed)
+            await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, parsed)
 
-                    pr_url = self._extract_pr_url(line)
-                    if pr_url:
-                        self._detected_pr_url = pr_url
-                        await self.state.update_ticket(self.ticket_id, pr_url=pr_url)
-                        await self.broadcaster.broadcast_ticket_update(
-                            self.run_id, self.ticket_id, None, pr_url=pr_url
-                        )
+            pr_url = self._extract_pr_url(parsed)
+            if pr_url:
+                self._detected_pr_url = pr_url
+                await self.state.update_ticket(self.ticket_id, pr_url=pr_url)
+                await self.broadcaster.broadcast_ticket_update(
+                    self.run_id, self.ticket_id, None, pr_url=pr_url
+                )
 
-                    if not self._moved_to_developing and self._is_developing_signal(line):
-                        self._moved_to_developing = True
-                        await self.state.update_ticket_state(self.ticket_id, TicketState.DEVELOPING)
-                        await self.broadcaster.broadcast_ticket_update(
-                            self.run_id, self.ticket_id, TicketState.DEVELOPING
-                        )
-                        await self._sync_jira_status("developing")
-
-            # If process finished or final read, stop tailing
-            if final or (self.process and self.process.returncode is not None):
-                return
-
-            await asyncio.sleep(1)  # Poll every 1 second
+            if not self._moved_to_developing and self._is_developing_signal(parsed):
+                self._moved_to_developing = True
+                await self.state.update_ticket_state(self.ticket_id, TicketState.DEVELOPING)
+                await self.broadcaster.broadcast_ticket_update(
+                    self.run_id, self.ticket_id, TicketState.DEVELOPING
+                )
+                await self._sync_jira_status("developing")
 
     def _parse_stream_line(self, raw: str) -> Optional[str]:
         """Parse a line from claude --output-format stream-json. Falls back to raw text."""
@@ -236,7 +392,6 @@ class Worker:
         if msg_type == "tool_use":
             tool = data.get("name", data.get("tool", "unknown"))
             inp = data.get("input", {})
-            # Show a short summary
             if tool == "Bash":
                 cmd = inp.get("command", "")
                 return f"[tool] Bash: {cmd[:200]}"
@@ -329,7 +484,11 @@ class Worker:
         if not target:
             return
         try:
-            success = await self.claude_helper.transition_jira_issue(self.jira_key, target)
+            # Prefer direct API, fall back to Claude CLI
+            if self.jira_client and await self.jira_client.is_configured():
+                success = await self.jira_client.transition_issue(self.jira_key, target)
+            else:
+                success = await self.claude_helper.transition_jira_issue(self.jira_key, target)
             if success:
                 print(f"[worker] Synced {self.jira_key} -> {target} on Jira", file=sys.stderr)
                 await self.state.append_log(self.ticket_id, f"[jira] Transitioned to {target}")

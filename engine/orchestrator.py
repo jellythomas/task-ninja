@@ -8,7 +8,9 @@ import yaml
 
 from engine.broadcaster import Broadcaster
 from engine.git_manager import GitManager
+from engine.jira_client import JiraClient
 from engine.state import StateManager
+from engine.ticket_watchdog import TicketWatchdog
 from engine.worker import Worker
 from models.ticket import RunStatus, TicketState
 
@@ -24,6 +26,10 @@ class Orchestrator:
         self._tasks: dict[str, asyncio.Task] = {}  # ticket_id -> Task
         self._running = False
         self._run_id: Optional[str] = None
+        self.jira_client = JiraClient()
+        self.notifier = None  # Set by server.py after construction
+        self.watchdog = TicketWatchdog(state, broadcaster)
+        self.watchdog.set_callbacks(requeue_cb=self._watchdog_requeue)
 
     async def start(self, run_id: str) -> None:
         """Start the orchestration loop for a run."""
@@ -158,17 +164,32 @@ class Orchestrator:
             self._running = False
             return
 
-        # Clean up finished tasks
+        # Clean up finished tasks and notify watchdog
         finished = [tid for tid, task in self._tasks.items() if task.done()]
         for tid in finished:
             self._tasks.pop(tid, None)
             self._workers.pop(tid, None)
+            ticket = await self.state.get_ticket(tid)
+            if ticket and ticket.state == TicketState.FAILED:
+                self.watchdog.on_ticket_failed(tid)
+                if self.notifier:
+                    await self.notifier.notify_ticket_failed(
+                        ticket.jira_key, tid, ticket.error or ""
+                    )
+            elif ticket and ticket.state in (TicketState.DONE, TicketState.REVIEW):
+                self.watchdog.on_ticket_completed(tid)
+                if self.notifier:
+                    await self.notifier.notify_ticket_completed(ticket.jira_key, tid)
 
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
         available_slots = run.max_parallel - active_count
 
         if available_slots <= 0:
+            return
+
+        # Skip spawning if outside working hours
+        if not self.watchdog.is_within_working_hours():
             return
 
         # Pick next queued tickets
@@ -183,7 +204,7 @@ class Orchestrator:
         if run and run.status == RunStatus.RUNNING:
             all_tickets = await self.state.get_tickets_for_run(self._run_id)
             all_terminal = all(
-                t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED, TicketState.PENDING}
+                t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED, TicketState.TODO}
                 for t in all_tickets
             )
             active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED} for t in all_tickets)
@@ -192,20 +213,54 @@ class Orchestrator:
                 self._running = False
                 await self.state.update_run_status(self._run_id, RunStatus.COMPLETED)
                 await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.COMPLETED)
+                if self.notifier:
+                    await self.notifier.notify_run_completed(run.name or self._run_id)
 
     async def _spawn_worker(self, ticket_id: str, jira_key: str, run: object) -> None:
-        """Spawn a Claude CLI worker for a ticket."""
+        """Spawn a CLI worker for a ticket."""
         claude_cfg = self.config.get("claude", {})
         git_cfg = self.config.get("git", {})
 
+        # Resolve project path: ticket repo > run repo > run.project_path
+        ticket = await self.state.get_ticket(ticket_id)
+        project_path = run.project_path
+        repo = None
+        if ticket and ticket.repository_id:
+            repo = await self.state.get_repository(ticket.repository_id)
+        elif run.repository_id:
+            repo = await self.state.get_repository(run.repository_id)
+        if repo:
+            project_path = repo.path
+
+        if not project_path:
+            error = "No project path configured. Assign a repository or set project_path on the run."
+            await self.state.update_ticket(ticket_id, error=error)
+            await self.state.update_ticket_state(ticket_id, TicketState.FAILED)
+            await self.broadcaster.broadcast_ticket_update(
+                self._run_id, ticket_id, TicketState.FAILED, error=error
+            )
+            self.watchdog.on_ticket_failed(ticket_id)
+            return
+
+        # Resolve parent branch: ticket > run > repo default > config default
+        parent_branch = None
+        if ticket and ticket.parent_branch:
+            parent_branch = ticket.parent_branch
+        elif run.parent_branch:
+            parent_branch = run.parent_branch
+        elif repo and repo.default_branch:
+            parent_branch = repo.default_branch
+        else:
+            parent_branch = git_cfg.get("base_branch", "master")
+
         git = GitManager(
-            run.project_path,
+            project_path,
             git_cfg.get("worktree_dir", ".worktrees"),
             git_cfg.get("branch_prefix", "feat"),
         )
 
         try:
-            worktree_path = await git.create_worktree(jira_key)
+            worktree_path = await git.create_worktree(jira_key, parent_branch)
         except RuntimeError as e:
             error = f"Failed to create worktree: {e}"
             await self.state.update_ticket(ticket_id, error=error)
@@ -213,6 +268,7 @@ class Orchestrator:
             await self.broadcaster.broadcast_ticket_update(
                 self._run_id, ticket_id, TicketState.FAILED, error=error
             )
+            self.watchdog.on_ticket_failed(ticket_id)
             return
 
         branch_name = await git.get_branch_name(jira_key)
@@ -222,6 +278,38 @@ class Orchestrator:
             branch_name=branch_name,
         )
 
+        # Resolve agent profile: ticket > repo > default
+        profile = None
+        if ticket and ticket.profile_id:
+            profile = await self.state.get_agent_profile(ticket.profile_id)
+        elif repo and repo.default_profile_id:
+            profile = await self.state.get_agent_profile(repo.default_profile_id)
+        if not profile:
+            profile = await self.state.get_default_agent_profile()
+
+        # Build worker config from profile or config.yaml fallback
+        if profile:
+            worker_command = profile.command
+            # Parse args template, replacing variables
+            args_str = profile.args_template
+            args_str = args_str.replace("{JIRA_KEY}", jira_key)
+            args_str = args_str.replace("{BRANCH_NAME}", branch_name)
+            args_str = args_str.replace("{WORKTREE_PATH}", worktree_path)
+            args_str = args_str.replace("{PARENT_BRANCH}", parent_branch)
+            args_str = args_str.replace("{PROJECT_PATH}", project_path)
+            if ticket and ticket.summary:
+                args_str = args_str.replace("{JIRA_SUMMARY}", ticket.summary)
+            # Split args respecting quoted strings
+            import shlex
+            worker_flags = shlex.split(args_str)
+            worker_skip_permissions = False  # already in args_template if needed
+            worker_execute_command = None  # already in args_template
+        else:
+            worker_command = claude_cfg.get("command", "claude")
+            worker_flags = claude_cfg.get("flags", ["--print"])
+            worker_skip_permissions = claude_cfg.get("skip_permissions", True)
+            worker_execute_command = claude_cfg.get("execute_command", "/execute-jira-task")
+
         mcp_cfg = self.config.get("mcp", {})
         worker = Worker(
             ticket_id=ticket_id,
@@ -230,15 +318,26 @@ class Orchestrator:
             worktree_path=worktree_path,
             state_manager=self.state,
             broadcaster=self.broadcaster,
-            claude_command=claude_cfg.get("command", "claude"),
-            claude_flags=claude_cfg.get("flags", ["--print"]),
-            skip_permissions=claude_cfg.get("skip_permissions", True),
-            execute_command=claude_cfg.get("execute_command", "/execute-jira-task"),
+            claude_command=worker_command,
+            claude_flags=worker_flags,
+            skip_permissions=worker_skip_permissions if worker_execute_command else False,
+            execute_command=worker_execute_command or "",
             jira_status_mapping=mcp_cfg.get("jira_status_mapping", {}),
             auto_create_pr=claude_cfg.get("auto_create_pr", True),
-            pr_base_branch=git_cfg.get("base_branch", "master"),
+            pr_base_branch=parent_branch,
         )
+        worker.jira_client = self.jira_client
 
         self._workers[ticket_id] = worker
         self._tasks[ticket_id] = asyncio.create_task(worker.run())
+        self.watchdog.on_ticket_active(ticket_id)
         print(f"[orchestrator] Spawned worker for {jira_key} in {worktree_path}", file=sys.stderr)
+
+    async def _watchdog_requeue(self, run_id: str) -> None:
+        """Called by watchdog when a ticket is re-queued for retry."""
+        if self._running:
+            return  # _tick will pick it up
+        # If run is completed/idle, restart the loop
+        run = await self.state.get_run(run_id)
+        if run and run.status != RunStatus.RUNNING:
+            await self.start(run_id)
