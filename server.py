@@ -10,8 +10,64 @@ def _check_python_version():
     """Ensure Python version is compatible (3.10+)."""
     if sys.version_info < (3, 10):
         print(f"[server] Python 3.10+ required (found {sys.version})", file=sys.stderr)
-        print(f"[server] Install with: brew install python@3.12  (or python@3.11)", file=sys.stderr)
+        if sys.platform == "win32":
+            print(f"[server] Download from: https://www.python.org/downloads/", file=sys.stderr)
+        elif sys.platform == "darwin":
+            print(f"[server] Install with: brew install python@3.12", file=sys.stderr)
+        else:
+            print(f"[server] Install with: sudo apt install python3.12", file=sys.stderr)
         sys.exit(1)
+
+
+def _check_git():
+    """Check if git is available, suggest install if missing."""
+    try:
+        result = subprocess.run(["git", "--version"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+    except FileNotFoundError:
+        pass
+    print(f"[server] WARNING: git not found — required for worktree-based ticket execution", file=sys.stderr)
+    if sys.platform == "win32":
+        print(f"[server] Download from: https://git-scm.com/download/win", file=sys.stderr)
+    elif sys.platform == "darwin":
+        print(f"[server] Install with: brew install git", file=sys.stderr)
+    else:
+        print(f"[server] Install with: sudo apt install git", file=sys.stderr)
+
+
+def _check_node():
+    """Check if Node.js is available, suggest install if missing."""
+    try:
+        result = subprocess.run(["node", "--version"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+    except FileNotFoundError:
+        pass
+    print(f"[server] WARNING: Node.js not found — required for AI CLI agents (Claude Code, etc.)", file=sys.stderr)
+    if sys.platform == "win32":
+        print(f"[server] Download from: https://nodejs.org/", file=sys.stderr)
+    elif sys.platform == "darwin":
+        print(f"[server] Install with: brew install node", file=sys.stderr)
+    else:
+        print(f"[server] Install with: sudo apt install nodejs npm", file=sys.stderr)
+
+
+def _ensure_config():
+    """Create config.yaml with defaults if missing."""
+    config_path = Path(__file__).parent / "config.yaml"
+    if config_path.exists():
+        return
+    default_config = """# Task Ninja configuration
+server:
+  host: "127.0.0.1"
+  port: 8420
+
+database:
+  path: "task_ninja.db"
+"""
+    config_path.write_text(default_config)
+    print(f"[server] Created config.yaml with defaults", file=sys.stderr)
 
 
 def _check_dependencies():
@@ -60,6 +116,9 @@ def _check_dependencies():
 
 _check_python_version()
 _check_dependencies()
+_check_git()
+_check_node()
+_ensure_config()
 
 import asyncio
 from contextlib import asynccontextmanager
