@@ -279,6 +279,8 @@ async def update_env_config(req: dict):
 
 # --- Static UI ---
 
+app.mount("/assets", StaticFiles(directory=Path(__file__).parent / "static" / "assets"), name="assets")
+
 @app.get("/")
 async def serve_ui():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
