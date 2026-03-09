@@ -1508,27 +1508,46 @@
   </div>
 
   <!-- Interactive Terminal Overlay -->
-  <div x-show="interactiveTerminal.show" x-transition class="fixed inset-0 bg-black/80 flex flex-col z-50">
-    <div class="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
+  <!-- Multi-terminal grid overlay -->
+  <div x-show="openTerminals.length > 0" x-transition class="fixed inset-0 bg-black/90 flex flex-col z-50">
+    <!-- Top bar -->
+    <div class="flex items-center justify-between px-4 py-1.5 bg-gray-900 border-b border-gray-800 shrink-0">
       <div class="flex items-center gap-3">
         <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        <span class="text-sm font-medium text-white" x-text="(interactiveTerminal.ticketKey || 'Terminal') + ' — Live Process'"></span>
-        <span class="text-xs text-gray-500 font-mono" x-text="interactiveTerminal.cwd || ''"></span>
-        <span class="text-[10px] text-gray-600 italic">Closing this window will NOT stop the process</span>
+        <span class="text-sm font-medium text-white">Live Terminals</span>
+        <span class="text-[10px] text-gray-600 italic">Closing does NOT stop processes</span>
       </div>
-      <button @click="closeInteractiveTerminal()" class="p-1.5 hover:bg-gray-800 rounded-lg transition">
+      <button @click="closeAllTerminals()" class="p-1.5 hover:bg-gray-800 rounded-lg transition" title="Close all terminals">
         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
-    <!-- Real xterm.js terminal — connected via WebSocket to raw PTY -->
-    <div id="interactive-xterm" class="flex-1 bg-black"></div>
-    <!-- Interrupt bar -->
-    <div class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center justify-between">
-      <span class="text-[10px] text-gray-600">Type directly in the terminal above. Input goes straight to the process.</span>
-      <button @click="interruptWorker()" title="Interrupt (Ctrl+C)" class="bg-red-600/80 hover:bg-red-600 px-3 py-1.5 text-xs rounded font-medium transition text-white flex items-center gap-1.5">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
-        Interrupt
-      </button>
+    <!-- Terminal grid -->
+    <div class="flex-1 min-h-0 p-1 gap-1" :class="{
+      'grid grid-cols-1 grid-rows-1': openTerminals.length === 1,
+      'grid grid-cols-2 grid-rows-1': openTerminals.length === 2,
+      'grid grid-cols-2 grid-rows-2': openTerminals.length >= 3,
+    }">
+      <template x-for="t in openTerminals" :key="t.ticketId">
+        <div class="flex flex-col border border-gray-700 rounded overflow-hidden min-h-0">
+          <!-- Terminal header -->
+          <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-xs font-semibold text-cyan-400 shrink-0" x-text="t.ticketKey"></span>
+              <span class="text-[10px] text-gray-500 font-mono truncate" x-text="t.cwd"></span>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <button @click="interruptTerminal(t.ticketId)" title="Interrupt (Ctrl+C)" class="p-1 hover:bg-red-600/30 rounded transition">
+                <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+              </button>
+              <button @click="closeTerminal(t.ticketId)" title="Close terminal" class="p-1 hover:bg-gray-700 rounded transition">
+                <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+          </div>
+          <!-- xterm.js container -->
+          <div :id="'xterm-' + t.ticketId" class="flex-1 bg-black min-h-0"></div>
+        </div>
+      </template>
     </div>
   </div>
 
@@ -1562,10 +1581,7 @@
         confirmModal: { show: false, title: '', message: '', ticketId: null },
         editRepoModal: { show: false, id: null, data: {} },
         editProfileModal: { show: false, id: null, data: {}, showPhases: false, phases: [] },
-        interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '' },
-        _xterm: null,
-        _xtermFit: null,
-        _xtermWs: null,
+        openTerminals: [],  // Array of { ticketId, ticketKey, cwd, xterm, fitAddon, ws, resizeHandler }
         terminalHeight: parseInt(localStorage.getItem('tn_terminalHeight') || '224'),
         terminalOpen: JSON.parse(localStorage.getItem('tn_terminalOpen') ?? 'true'),
         _terminalDragging: false,
@@ -2078,132 +2094,127 @@
           const ticket = this.tickets.find(t => t.id === ticketId);
           if (!ticket) return;
 
-          // Close any existing terminal first
-          this._destroyXterm();
+          // If already open, just focus (don't duplicate)
+          if (this.openTerminals.find(t => t.ticketId === ticketId)) return;
 
-          this.interactiveTerminal.show = true;
-          this.interactiveTerminal.ticketId = ticketId;
-          this.interactiveTerminal.ticketKey = ticket.jira_key;
-          this.interactiveTerminal.cwd = ticket.worktree_path || '';
+          // Max 4 terminals
+          if (this.openTerminals.length >= 4) {
+            this.closeTerminal(this.openTerminals[0].ticketId);
+          }
 
-          // Wait for DOM to render
+          // Add entry (xterm created after DOM renders)
+          this.openTerminals.push({
+            ticketId, ticketKey: ticket.jira_key,
+            cwd: ticket.worktree_path || '',
+            xterm: null, fitAddon: null, ws: null, resizeHandler: null,
+          });
+
+          // Wait for DOM
           await this.$nextTick();
-          await new Promise(r => setTimeout(r, 50));
+          await new Promise(r => setTimeout(r, 80));
 
-          const container = document.getElementById('interactive-xterm');
+          const entry = this.openTerminals.find(t => t.ticketId === ticketId);
+          if (!entry) return;
+          const container = document.getElementById('xterm-' + ticketId);
           if (!container) return;
 
-          // Create xterm.js terminal
           const term = new Terminal({
-            cursorBlink: true,
-            fontSize: 13,
+            cursorBlink: true, fontSize: 13,
             fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
-            theme: {
-              background: '#000000',
-              foreground: '#e2e8f0',
-              cursor: '#60a5fa',
-              selectionBackground: '#334155',
-            },
-            scrollback: 10000,
-            convertEol: true,
+            theme: { background: '#000000', foreground: '#e2e8f0', cursor: '#60a5fa', selectionBackground: '#334155' },
+            scrollback: 10000, convertEol: true,
           });
           const fitAddon = new FitAddon.FitAddon();
           term.loadAddon(fitAddon);
           term.open(container);
           fitAddon.fit();
+          entry.xterm = term;
+          entry.fitAddon = fitAddon;
 
-          this._xterm = term;
-          this._xtermFit = fitAddon;
-
-          // Connect WebSocket
+          // WebSocket
           const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
           const token = this._authToken || localStorage.getItem('tn_auth_token') || '';
-          const wsUrl = `${proto}//${location.host}/ws/terminal/${ticketId}?token=${encodeURIComponent(token)}`;
-          const ws = new WebSocket(wsUrl);
+          const ws = new WebSocket(`${proto}//${location.host}/ws/terminal/${ticketId}?token=${encodeURIComponent(token)}`);
           ws.binaryType = 'arraybuffer';
-          this._xtermWs = ws;
+          entry.ws = ws;
+          let wsConnected = false;
 
           ws.onopen = () => {
             wsConnected = true;
-            // Send initial resize
             ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
           };
-
           ws.onmessage = (evt) => {
-            if (evt.data instanceof ArrayBuffer) {
-              term.write(new Uint8Array(evt.data));
-            } else if (typeof evt.data === 'string') {
-              // Could be a control message (pong) — ignore
-              try {
-                const ctrl = JSON.parse(evt.data);
-                if (ctrl.type === 'pong') return;
-              } catch {}
+            if (evt.data instanceof ArrayBuffer) { term.write(new Uint8Array(evt.data)); }
+            else if (typeof evt.data === 'string') {
+              try { if (JSON.parse(evt.data).type === 'pong') return; } catch {}
               term.write(evt.data);
             }
           };
-
-          let wsConnected = false;
-
           ws.onclose = (evt) => {
             if (evt.code === 4004) {
-              term.write('\r\n\x1b[33m⏸ No running process for this ticket. The worker may have finished.\x1b[0m\r\n');
-              term.write('\x1b[33mClose this window and re-open when a worker is active.\x1b[0m\r\n');
+              term.write('\r\n\x1b[33m⏸ No running process. Worker may have finished.\x1b[0m\r\n');
             } else if (!wsConnected) {
-              term.write('\r\n\x1b[33m⏸ Could not connect to worker process (code ' + evt.code + ').\x1b[0m\r\n');
-              term.write('\x1b[33mThe ticket may not have an active worker right now.\x1b[0m\r\n');
+              term.write('\r\n\x1b[33m⏸ Could not connect (code ' + evt.code + ').\x1b[0m\r\n');
             } else if (evt.code !== 1000) {
               term.write('\r\n\x1b[31m[Connection closed: ' + evt.code + ']\x1b[0m\r\n');
             }
           };
+          ws.onerror = () => {};
 
-          ws.onerror = () => {
-            // onerror always fires before onclose — just set flag, let onclose handle messaging
-          };
-
-          // Forward keyboard input to WebSocket as binary
           term.onData((data) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(new TextEncoder().encode(data));
-            }
+            if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
           });
 
-          // Handle resize
-          this._xtermResizeHandler = () => {
-            fitAddon.fit();
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+          // Resize handler — re-fit all open terminals
+          entry.resizeHandler = () => {
+            for (const t of this.openTerminals) {
+              if (t.fitAddon && t.xterm) {
+                t.fitAddon.fit();
+                if (t.ws && t.ws.readyState === WebSocket.OPEN) {
+                  t.ws.send(JSON.stringify({ type: 'resize', rows: t.xterm.rows, cols: t.xterm.cols }));
+                }
+              }
             }
           };
-          window.addEventListener('resize', this._xtermResizeHandler);
+          window.addEventListener('resize', entry.resizeHandler);
+
+          // Re-fit all terminals since grid layout changed
+          this._refitAllTerminals();
         },
 
-        async interruptWorker() {
-          if (!this.interactiveTerminal.ticketId || this._interruptCooldown) return;
-          this._interruptCooldown = true;
-          await this.api('POST', `/api/tickets/${this.interactiveTerminal.ticketId}/interrupt`);
-          setTimeout(() => { this._interruptCooldown = false; }, 1000);
+        _refitAllTerminals() {
+          setTimeout(() => {
+            for (const t of this.openTerminals) {
+              if (t.fitAddon && t.xterm) {
+                t.fitAddon.fit();
+                if (t.ws && t.ws.readyState === WebSocket.OPEN) {
+                  t.ws.send(JSON.stringify({ type: 'resize', rows: t.xterm.rows, cols: t.xterm.cols }));
+                }
+              }
+            }
+          }, 100);
         },
 
-        _destroyXterm() {
-          if (this._xtermResizeHandler) {
-            window.removeEventListener('resize', this._xtermResizeHandler);
-            this._xtermResizeHandler = null;
-          }
-          if (this._xtermWs) {
-            this._xtermWs.close();
-            this._xtermWs = null;
-          }
-          if (this._xterm) {
-            this._xterm.dispose();
-            this._xterm = null;
-          }
-          this._xtermFit = null;
+        async interruptTerminal(ticketId) {
+          await this.api('POST', `/api/tickets/${ticketId}/interrupt`);
         },
 
-        closeInteractiveTerminal() {
-          this._destroyXterm();
-          this.interactiveTerminal.show = false;
-          this.interactiveTerminal.ticketId = null;
+        closeTerminal(ticketId) {
+          const idx = this.openTerminals.findIndex(t => t.ticketId === ticketId);
+          if (idx === -1) return;
+          const entry = this.openTerminals[idx];
+          if (entry.resizeHandler) window.removeEventListener('resize', entry.resizeHandler);
+          if (entry.ws) entry.ws.close();
+          if (entry.xterm) entry.xterm.dispose();
+          this.openTerminals.splice(idx, 1);
+          // Re-fit remaining terminals since grid changed
+          this._refitAllTerminals();
+        },
+
+        closeAllTerminals() {
+          while (this.openTerminals.length > 0) {
+            this.closeTerminal(this.openTerminals[0].ticketId);
+          }
         },
 
         async openExternalTerminal(ticketId) {
