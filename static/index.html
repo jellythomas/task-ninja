@@ -31,6 +31,12 @@
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
     @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+    /* Volume slider */
+    .volume-slider { -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; }
+    .volume-slider::-webkit-slider-runnable-track { height: 4px; background: #4b5563; border-radius: 2px; }
+    .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #60a5fa; margin-top: -5px; }
+    .volume-slider::-moz-range-track { height: 4px; background: #4b5563; border-radius: 2px; border: none; }
+    .volume-slider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #60a5fa; border: none; }
     /* Mobile list view */
     @media (max-width: 639px) {
       .kanban-board { display: none !important; }
@@ -46,7 +52,7 @@
   <!-- Login Screen -->
   <div x-show="showLogin" x-transition class="fixed inset-0 bg-gray-950 flex items-center justify-center z-[70]">
     <div class="w-full max-w-sm mx-4 text-center" x-data="{ loginToken: '', loginError: '' }">
-      <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center font-bold text-2xl mx-auto mb-6">TN</div>
+      <!-- logo removed -->
       <h1 class="text-xl font-semibold text-white mb-1">Task Ninja</h1>
       <p class="text-sm text-gray-500 mb-6">Enter your access token to continue</p>
       <input x-model="loginToken" type="password" placeholder="Access token"
@@ -180,27 +186,8 @@
             </template>
           </div>
         </template>
-        <!-- Add new profile (collapsed) -->
-        <details class="group">
-          <summary class="text-xs text-blue-400 hover:text-blue-300 cursor-pointer py-1">+ Add custom agent profile</summary>
-          <div class="mt-2 space-y-2 bg-gray-800/30 rounded-lg p-3 border border-gray-800 border-dashed">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div>
-                <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
-                <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
-              </div>
-              <div>
-                <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
-                <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
-              </div>
-            </div>
-            <div>
-              <label class="text-[10px] text-gray-500 block mb-0.5">Args Template</label>
-              <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"' class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
-            </div>
-            <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-3 py-1.5 text-xs rounded-lg font-medium transition w-full">Add Profile</button>
-          </div>
-        </details>
+        <!-- Add new profile — opens the same modal as settings -->
+        <button @click="openAddProfileModal()" class="w-full py-2 border border-dashed border-gray-700 rounded-lg text-xs text-gray-500 hover:text-blue-400 hover:border-blue-500/50 transition">+ Add custom agent profile</button>
       </div>
 
       <!-- Footer -->
@@ -228,10 +215,17 @@
   <!-- Header -->
   <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">TN</div>
+      <!-- logo removed -->
       <h1 class="text-lg font-semibold text-white hidden sm:block">Task Ninja</h1>
     </div>
     <div class="flex items-center gap-2">
+      <!-- View Toggle: Kanban / Office -->
+      <div class="flex items-center bg-gray-800 rounded-lg p-0.5 mr-2">
+        <button @click="viewMode = 'kanban'" :class="viewMode === 'kanban' ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-gray-300'" class="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+          Kanban
+        </button>
+      </div>
       <button @click="openSetupWizard()" class="p-2 hover:bg-gray-800 rounded-lg transition text-gray-400" title="Setup Wizard">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
       </button>
@@ -514,7 +508,9 @@
                       <template x-if="p.is_default">
                         <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full font-medium">Default</span>
                       </template>
-                      <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400" x-text="p.log_format"></span>
+                      <span class="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                            :class="p.phases_config ? 'bg-cyan-500/20 text-cyan-400' : 'bg-gray-700 text-gray-400'"
+                            x-text="p.phases_config ? 'Interactive' : p.log_format"></span>
                     </div>
                     <div class="flex items-center gap-1">
                       <button x-show="!p.is_default" @click="setDefaultProfile(p.id)" class="text-[10px] text-gray-500 hover:text-blue-400 transition px-1.5 py-0.5 rounded hover:bg-gray-700">Set Default</button>
@@ -530,32 +526,7 @@
                 </div>
               </template>
             </div>
-            <div class="bg-gray-800/30 rounded-lg p-4 border border-gray-800 border-dashed space-y-3">
-              <span class="text-xs text-gray-500 font-medium">Add Profile</span>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
-                  <label class="text-[10px] text-gray-500 block mb-0.5">Name</label>
-                  <input x-model="newProfile.name" type="text" placeholder="Gemini CLI" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
-                </div>
-                <div>
-                  <label class="text-[10px] text-gray-500 block mb-0.5">Command</label>
-                  <input x-model="newProfile.command" type="text" placeholder="gemini" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
-                </div>
-              </div>
-              <div>
-                <label class="text-[10px] text-gray-500 block mb-0.5">Log Format</label>
-                <select x-model="newProfile.log_format" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none">
-                  <option value="plain-text">plain-text</option>
-                  <option value="stream-json">stream-json</option>
-                </select>
-              </div>
-              <div>
-                <label class="text-[10px] text-gray-500 block mb-0.5">Args Template <span class="text-gray-600">({JIRA_KEY}, {BRANCH_NAME}, {WORKTREE_PATH}, {PARENT_BRANCH}, {PROJECT_PATH}, {JIRA_SUMMARY})</span></label>
-                <input x-model="newProfile.args_template" type="text" placeholder='-p "implement {JIRA_KEY}"'
-                       class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full focus:border-blue-500 focus:outline-none">
-              </div>
-              <button @click="addProfile()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition w-full">Add Profile</button>
-            </div>
+            <button @click="openAddProfileModal()" class="w-full py-2.5 border border-dashed border-gray-700 rounded-lg text-xs text-gray-500 hover:text-blue-400 hover:border-blue-500/50 transition">+ Add Agent Profile</button>
           </div>
 
           <!-- Jira Credentials -->
@@ -976,8 +947,9 @@
       </div>
     </div>
 
+
     <!-- Desktop Kanban Board -->
-    <div class="kanban-board flex-1 overflow-x-auto p-4">
+    <div x-show="viewMode === 'kanban'" class="kanban-board flex-1 overflow-x-auto p-4">
       <div class="flex gap-3 h-full min-w-max">
         <template x-for="col in columns" :key="col.id">
           <div class="w-64 flex-shrink-0 flex flex-col bg-gray-900/50 rounded-xl border border-gray-800">
@@ -1013,9 +985,14 @@
                           </button>
                         </template>
                         <template x-if="ticket.state === 'failed'">
-                          <button @click.stop="moveTicket(ticket.id, 'queued')" class="p-1 hover:bg-gray-700 rounded" title="Retry">
-                            <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                          </button>
+                          <div class="flex items-center gap-0.5">
+                            <button @click.stop="retryTicket(ticket.id, false)" class="p-1 hover:bg-gray-700 rounded" title="Retry (continue from existing worktree)">
+                              <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                            </button>
+                            <button @click.stop="retryTicket(ticket.id, true)" class="p-1 hover:bg-gray-700 rounded" title="Clean retry (destroy worktree, start fresh)">
+                              <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/><line x1="9" y1="9" x2="15" y2="15" stroke-width="2" stroke-linecap="round"/><line x1="15" y1="9" x2="9" y2="15" stroke-width="2" stroke-linecap="round"/></svg>
+                            </button>
+                          </div>
                         </template>
                         <button @click.stop="deleteTicket(ticket.id)" class="p-1 hover:bg-gray-700 rounded" title="Delete">
                           <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
@@ -1469,12 +1446,12 @@
   </div>
 
   <!-- Edit Profile Modal -->
-  <div x-show="editProfileModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="editProfileModal.show = false">
-    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4">
+  <div x-show="editProfileModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-[65]" @click.self="editProfileModal.show = false">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg mx-4 max-h-[90vh] flex flex-col">
       <div class="px-5 py-4 border-b border-gray-800">
-        <h3 class="text-base font-semibold text-white">Edit Agent Profile</h3>
+        <h3 class="text-base font-semibold text-white" x-text="editProfileModal.id ? 'Edit Agent Profile' : 'Add Agent Profile'"></h3>
       </div>
-      <div class="px-5 py-4 space-y-3">
+      <div class="px-5 py-4 space-y-3 overflow-y-auto flex-1 scrollbar-thin">
         <div class="flex gap-3">
           <div class="flex-1">
             <label class="text-xs text-gray-400 block mb-1">Name</label>
@@ -1496,10 +1473,36 @@
             <option value="stream-json">stream-json</option>
           </select>
         </div>
+
+        <!-- Phase Pipeline Config -->
+        <div class="border border-gray-700 rounded-lg overflow-hidden">
+          <button @click="editProfileModal.showPhases = !editProfileModal.showPhases" class="w-full flex items-center justify-between px-3 py-2 bg-gray-800/50 hover:bg-gray-800 transition text-xs">
+            <span class="text-gray-300 font-medium">Phase Pipeline</span>
+            <svg class="w-3.5 h-3.5 text-gray-500 transition-transform" :class="editProfileModal.showPhases && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div x-show="editProfileModal.showPhases" x-transition class="px-3 py-3 space-y-3 border-t border-gray-700/50">
+            <p class="text-[10px] text-gray-500">Configure prompts per phase. Use <code class="text-blue-400">{JIRA_KEY}</code> as placeholder. One prompt per line.</p>
+            <template x-for="(phase, idx) in editProfileModal.phases" :key="phase.phase">
+              <div class="space-y-1.5">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-medium capitalize" :class="phase.phase === 'planning' ? 'text-yellow-400' : phase.phase === 'developing' ? 'text-blue-400' : 'text-emerald-400'" x-text="phase.phase"></span>
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Prompts <span class="text-gray-600">(one per line)</span></label>
+                  <textarea x-model="phase.promptsText" rows="2" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs w-full font-mono focus:border-blue-500 focus:outline-none resize-y" :placeholder="phase.phase === 'planning' ? '/planning-task {JIRA_KEY}' : phase.phase === 'developing' ? '/developing-task {JIRA_KEY}' : '/open-pr --draft'"></textarea>
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-0.5">Completion Marker <span class="text-gray-600">(optional)</span></label>
+                  <input x-model="phase.marker" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs w-full font-mono focus:border-blue-500 focus:outline-none" :placeholder="phase.phase === 'planning' ? '[PLANNING_COMPLETE]' : phase.phase === 'developing' ? '[DEVELOPING_COMPLETE]' : '[PR_COMPLETE]'">
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
       </div>
       <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
         <button @click="editProfileModal.show = false" class="px-4 py-1.5 text-sm text-gray-400 hover:text-white transition">Cancel</button>
-        <button @click="saveProfileEdit()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition">Save</button>
+        <button @click="editProfileModal.id ? saveProfileEdit() : saveNewProfile()" class="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 text-sm rounded-lg font-medium transition" x-text="editProfileModal.id ? 'Save' : 'Add'"></button>
       </div>
     </div>
   </div>
@@ -1517,20 +1520,15 @@
         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
-    <div id="interactive-terminal" class="flex-1 bg-black overflow-y-auto p-4 font-mono text-sm leading-6 scrollbar-thin">
-      <template x-for="(log, idx) in interactiveTerminal.logs" :key="idx">
-        <div class="text-gray-300"><span class="text-gray-600 select-none text-xs mr-2" x-text="((log.timestamp || '').replace(' ', 'T').split('T')[1] || '').split('.')[0]"></span><span x-text="log.line"></span></div>
-      </template>
-      <div x-show="interactiveTerminal.logs.length === 0" class="text-gray-600 italic">Waiting for output...</div>
-    </div>
-    <!-- Input bar -->
-    <div class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center gap-2">
-      <span class="text-cyan-400 text-sm font-mono select-none">$</span>
-      <input x-model="interactiveTerminal.inputText"
-             @keydown.enter="sendTerminalInput()"
-             type="text" placeholder="Type to send input to the process..."
-             class="flex-1 bg-black border border-gray-700 rounded px-3 py-1.5 text-sm font-mono text-gray-200 focus:border-cyan-500 focus:outline-none placeholder-gray-600">
-      <button @click="sendTerminalInput()" class="bg-cyan-600 hover:bg-cyan-700 px-3 py-1.5 text-xs rounded font-medium transition text-white">Send</button>
+    <!-- Real xterm.js terminal — connected via WebSocket to raw PTY -->
+    <div id="interactive-xterm" class="flex-1 bg-black"></div>
+    <!-- Interrupt bar -->
+    <div class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center justify-between">
+      <span class="text-[10px] text-gray-600">Type directly in the terminal above. Input goes straight to the process.</span>
+      <button @click="interruptWorker()" title="Interrupt (Ctrl+C)" class="bg-red-600/80 hover:bg-red-600 px-3 py-1.5 text-xs rounded font-medium transition text-white flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+        Interrupt
+      </button>
     </div>
   </div>
 
@@ -1563,8 +1561,11 @@
         boardFilter: '',
         confirmModal: { show: false, title: '', message: '', ticketId: null },
         editRepoModal: { show: false, id: null, data: {} },
-        editProfileModal: { show: false, id: null, data: {} },
-        interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '', logs: [], inputText: '' },
+        editProfileModal: { show: false, id: null, data: {}, showPhases: false, phases: [] },
+        interactiveTerminal: { show: false, ticketId: null, ticketKey: '', cwd: '' },
+        _xterm: null,
+        _xtermFit: null,
+        _xtermWs: null,
         terminalHeight: parseInt(localStorage.getItem('tn_terminalHeight') || '224'),
         terminalOpen: JSON.parse(localStorage.getItem('tn_terminalOpen') ?? 'true'),
         _terminalDragging: false,
@@ -1577,7 +1578,12 @@
         },
         jiraSetup: { url: '', email: '', token: '', error: '', success: '' },
         newRepo: { name: '', path: '', default_branch: 'main', jira_label: '' },
-        newProfile: { name: '', command: '', args_template: '', log_format: 'plain-text' },
+        newProfile: { name: '', command: '', args_template: '', log_format: 'plain-text', showPhases: false, phases: [
+          { phase: 'planning', promptsText: '', marker: '' },
+          { phase: 'developing', promptsText: '', marker: '' },
+          { phase: 'review', promptsText: '', marker: '' },
+        ] },
+        viewMode: 'kanban',
         eventSource: null,
         tick: 0,
         notificationState: { permission: typeof Notification !== 'undefined' ? Notification.permission : 'denied', enabled: false, vapidKey: null },
@@ -1654,6 +1660,7 @@
             const active = this.tickets.find(t => ['planning', 'developing'].includes(t.state));
             if (active) await this.switchTerminal(active.id);
           }
+
 
           await this.initNotifications();
           this.loadSchedulerSettings();
@@ -1935,6 +1942,7 @@
           }
         },
 
+
         // Repo Management
         async addRepo() {
           if (!this.newRepo.name || !this.newRepo.path) return;
@@ -1974,7 +1982,40 @@
         },
 
         // Agent Profiles
+        openAddProfileModal() {
+          this.editProfileModal = {
+            show: true, id: null,
+            data: { name: '', command: '', args_template: '', log_format: 'plain-text' },
+            showPhases: false,
+            phases: [
+              { phase: 'planning', promptsText: '', marker: '' },
+              { phase: 'developing', promptsText: '', marker: '' },
+              { phase: 'review', promptsText: '', marker: '' },
+            ],
+          };
+        },
+
+        _serializePhasesConfig() {
+          const phases = this.editProfileModal.phases.map(p => ({
+            phase: p.phase,
+            prompts: p.promptsText.split('\n').map(s => s.trim()).filter(Boolean),
+            marker: p.marker.trim(),
+          }));
+          const hasAnyPrompt = phases.some(p => p.prompts.length > 0);
+          return hasAnyPrompt ? JSON.stringify(phases) : null;
+        },
+
+        async saveNewProfile() {
+          const d = this.editProfileModal.data;
+          if (!d.name || !d.command || !d.args_template) return;
+          const payload = { ...d, phases_config: this._serializePhasesConfig() };
+          const p = await this.api('POST', '/api/profiles', payload);
+          if (p) this.agentProfiles.push(p);
+          this.editProfileModal.show = false;
+        },
+
         async addProfile() {
+          // Legacy: kept for setup wizard quick-add form
           if (!this.newProfile.name || !this.newProfile.command || !this.newProfile.args_template) return;
           const p = await this.api('POST', '/api/profiles', this.newProfile);
           if (p) {
@@ -1984,14 +2025,33 @@
         },
 
         editProfile(profile) {
+          const defaultPhases = [
+            { phase: 'planning', prompts: [], marker: '' },
+            { phase: 'developing', prompts: [], marker: '' },
+            { phase: 'review', prompts: [], marker: '' },
+          ];
+          let phases = defaultPhases;
+          try {
+            const parsed = profile.phases_config ? JSON.parse(profile.phases_config) : null;
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              phases = parsed.map(p => ({
+                phase: p.phase || '',
+                prompts: Array.isArray(p.prompts) ? p.prompts : [],
+                marker: p.marker || '',
+              }));
+            }
+          } catch (e) { /* use defaults */ }
           this.editProfileModal = {
             show: true, id: profile.id,
             data: { name: profile.name, command: profile.command, args_template: profile.args_template, log_format: profile.log_format },
+            showPhases: false,
+            phases: phases.map(p => ({ ...p, promptsText: p.prompts.join('\n') })),
           };
         },
 
         async saveProfileEdit() {
-          const p = await this.api('PUT', `/api/profiles/${this.editProfileModal.id}`, this.editProfileModal.data);
+          const payload = { ...this.editProfileModal.data, phases_config: this._serializePhasesConfig() };
+          const p = await this.api('PUT', `/api/profiles/${this.editProfileModal.id}`, payload);
           if (p) {
             const idx = this.agentProfiles.findIndex(x => x.id === this.editProfileModal.id);
             if (idx >= 0) this.agentProfiles[idx] = p;
@@ -2018,50 +2078,132 @@
           const ticket = this.tickets.find(t => t.id === ticketId);
           if (!ticket) return;
 
+          // Close any existing terminal first
+          this._destroyXterm();
+
           this.interactiveTerminal.show = true;
           this.interactiveTerminal.ticketId = ticketId;
           this.interactiveTerminal.ticketKey = ticket.jira_key;
           this.interactiveTerminal.cwd = ticket.worktree_path || '';
-          this.interactiveTerminal.logs = [];
 
-          // Fetch existing logs
-          const result = await this.api('GET', `/api/logs/${ticketId}?tail=1000`);
-          if (result && result.logs) {
-            this.interactiveTerminal.logs = result.logs;
-          }
+          // Wait for DOM to render
+          await this.$nextTick();
+          await new Promise(r => setTimeout(r, 50));
 
-          // Auto-scroll to bottom
-          this.$nextTick(() => {
-            const el = document.getElementById('interactive-terminal');
-            if (el) el.scrollTop = el.scrollHeight;
+          const container = document.getElementById('interactive-xterm');
+          if (!container) return;
+
+          // Create xterm.js terminal
+          const term = new Terminal({
+            cursorBlink: true,
+            fontSize: 13,
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+            theme: {
+              background: '#000000',
+              foreground: '#e2e8f0',
+              cursor: '#60a5fa',
+              selectionBackground: '#334155',
+            },
+            scrollback: 10000,
+            convertEol: true,
           });
+          const fitAddon = new FitAddon.FitAddon();
+          term.loadAddon(fitAddon);
+          term.open(container);
+          fitAddon.fit();
+
+          this._xterm = term;
+          this._xtermFit = fitAddon;
+
+          // Connect WebSocket
+          const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const token = this._authToken || localStorage.getItem('tn_auth_token') || '';
+          const wsUrl = `${proto}//${location.host}/ws/terminal/${ticketId}?token=${encodeURIComponent(token)}`;
+          const ws = new WebSocket(wsUrl);
+          ws.binaryType = 'arraybuffer';
+          this._xtermWs = ws;
+
+          ws.onopen = () => {
+            wsConnected = true;
+            // Send initial resize
+            ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+          };
+
+          ws.onmessage = (evt) => {
+            if (evt.data instanceof ArrayBuffer) {
+              term.write(new Uint8Array(evt.data));
+            } else if (typeof evt.data === 'string') {
+              // Could be a control message (pong) — ignore
+              try {
+                const ctrl = JSON.parse(evt.data);
+                if (ctrl.type === 'pong') return;
+              } catch {}
+              term.write(evt.data);
+            }
+          };
+
+          let wsConnected = false;
+
+          ws.onclose = (evt) => {
+            if (evt.code === 4004) {
+              term.write('\r\n\x1b[33m⏸ No running process for this ticket. The worker may have finished.\x1b[0m\r\n');
+              term.write('\x1b[33mClose this window and re-open when a worker is active.\x1b[0m\r\n');
+            } else if (!wsConnected) {
+              term.write('\r\n\x1b[33m⏸ Could not connect to worker process (code ' + evt.code + ').\x1b[0m\r\n');
+              term.write('\x1b[33mThe ticket may not have an active worker right now.\x1b[0m\r\n');
+            } else if (evt.code !== 1000) {
+              term.write('\r\n\x1b[31m[Connection closed: ' + evt.code + ']\x1b[0m\r\n');
+            }
+          };
+
+          ws.onerror = () => {
+            // onerror always fires before onclose — just set flag, let onclose handle messaging
+          };
+
+          // Forward keyboard input to WebSocket as binary
+          term.onData((data) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(new TextEncoder().encode(data));
+            }
+          });
+
+          // Handle resize
+          this._xtermResizeHandler = () => {
+            fitAddon.fit();
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+            }
+          };
+          window.addEventListener('resize', this._xtermResizeHandler);
         },
 
-        _appendInteractiveLog(ticketId, log) {
-          if (!this.interactiveTerminal.show || this.interactiveTerminal.ticketId !== ticketId) return;
-          this.interactiveTerminal.logs.push(log);
-          // Keep max 2000 lines
-          if (this.interactiveTerminal.logs.length > 2000) {
-            this.interactiveTerminal.logs = this.interactiveTerminal.logs.slice(-1500);
-          }
-          this.$nextTick(() => {
-            const el = document.getElementById('interactive-terminal');
-            if (el) el.scrollTop = el.scrollHeight;
-          });
+        async interruptWorker() {
+          if (!this.interactiveTerminal.ticketId || this._interruptCooldown) return;
+          this._interruptCooldown = true;
+          await this.api('POST', `/api/tickets/${this.interactiveTerminal.ticketId}/interrupt`);
+          setTimeout(() => { this._interruptCooldown = false; }, 1000);
         },
 
-        async sendTerminalInput() {
-          const text = this.interactiveTerminal.inputText;
-          if (!text || !this.interactiveTerminal.ticketId) return;
-          // Send text + newline to the worker's PTY
-          await this.api('POST', `/api/tickets/${this.interactiveTerminal.ticketId}/terminal-input`, { input: text + '\n' });
-          this.interactiveTerminal.inputText = '';
+        _destroyXterm() {
+          if (this._xtermResizeHandler) {
+            window.removeEventListener('resize', this._xtermResizeHandler);
+            this._xtermResizeHandler = null;
+          }
+          if (this._xtermWs) {
+            this._xtermWs.close();
+            this._xtermWs = null;
+          }
+          if (this._xterm) {
+            this._xterm.dispose();
+            this._xterm = null;
+          }
+          this._xtermFit = null;
         },
 
         closeInteractiveTerminal() {
+          this._destroyXterm();
           this.interactiveTerminal.show = false;
           this.interactiveTerminal.ticketId = null;
-          this.interactiveTerminal.logs = [];
         },
 
         async openExternalTerminal(ticketId) {
@@ -2460,11 +2602,22 @@
         },
 
         async moveTicket(ticketId, newState) {
+          // If user drags to planning/developing, redirect to queued — the orchestrator handles those transitions
+          const ticket = this.tickets.find(t => t.id === ticketId);
+          const hasWorker = ticket && ticket.worker_pid;
+          if (['planning', 'developing'].includes(newState) && !hasWorker) {
+            newState = 'queued';
+          }
           const result = await this.api('PUT', `/api/tickets/${ticketId}/state`, { state: newState });
           if (result) {
-            const idx = this.tickets.findIndex(t => t.id === ticketId);
-            if (idx >= 0) this.tickets[idx] = { ...this.tickets[idx], ...result };
+            // Reload all tickets to get clean state — avoids Sortable vs Alpine DOM conflicts
+            await this.loadRunTickets();
           }
+        },
+
+        async retryTicket(ticketId, clean = false) {
+          const result = await this.api('POST', `/api/tickets/${ticketId}/retry?clean=${clean}`);
+          if (result) await this.loadRunTickets();
         },
 
         async pauseTicket(ticketId) {
@@ -2511,6 +2664,9 @@
           if (!(await this.ensureRun())) return;
           await this.api('POST', `/api/runs/${this.currentRun.id}/start`);
           this.currentRun.status = 'running';
+          // Refresh tickets to get initial states, then sync office
+          await this.loadRunTickets();
+          this._syncOffice();
         },
 
         async pauseRun() {
@@ -2535,6 +2691,7 @@
           if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`;
           return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
         },
+
 
         // SSE
         connectSSE() {
@@ -2591,8 +2748,7 @@
                 const el = document.getElementById('terminal-output');
                 if (el) el.scrollTop = el.scrollHeight;
               });
-              // Also feed the Live Process overlay
-              this._appendInteractiveLog(data.ticket_id, logEntry);
+              // Live Process overlay now uses direct WebSocket — no need to feed logs here
             }
 
             if (evtType === 'run_status') {

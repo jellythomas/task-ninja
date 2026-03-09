@@ -1,6 +1,7 @@
 """Orchestrator — manages worker pool and ticket execution lifecycle."""
 
 import asyncio
+import json
 import sys
 from typing import Optional
 
@@ -96,7 +97,7 @@ class Orchestrator:
             task = self._tasks.pop(ticket_id, None)
             if task:
                 task.cancel()
-            del self._workers[ticket_id]
+            self._workers.pop(ticket_id, None)
 
         await self.state.update_ticket(ticket_id, paused=True, worker_pid=None)
         ticket = await self.state.get_ticket(ticket_id)
@@ -141,6 +142,25 @@ class Orchestrator:
             await self.broadcaster.broadcast(
                 self._run_id, "ticket_deleted", {"ticket_id": ticket_id}
             )
+
+    def interrupt_worker(self, ticket_id: str) -> bool:
+        """Send SIGINT to a worker's process. Returns True if signal sent."""
+        worker = self._workers.get(ticket_id)
+        if worker:
+            return worker.interrupt()
+        return False
+
+    async def kill_worker(self, ticket_id: str) -> bool:
+        """Kill a worker for a ticket if one is running. Returns True if killed."""
+        worker = self._workers.get(ticket_id)
+        if worker and worker.is_running:
+            await worker.kill()
+            task = self._tasks.pop(ticket_id, None)
+            if task:
+                task.cancel()
+            del self._workers[ticket_id]
+            return True
+        return False
 
     async def _loop(self) -> None:
         """Main orchestration loop."""
@@ -193,21 +213,33 @@ class Orchestrator:
             return
 
         # Pick next queued tickets
+        spawned_any = False
         queued = await self.state.get_tickets_by_state(self._run_id, TicketState.QUEUED)
         for ticket in queued[:available_slots]:
             if ticket.paused:
                 continue
             await self._spawn_worker(ticket.id, ticket.jira_key, run)
+            spawned_any = True
+
+        # Don't check completion on the same tick we spawned workers —
+        # give them time to update their state from QUEUED to PLANNING.
+        if spawned_any:
+            return
 
         # Check if all done (only auto-complete if run is RUNNING, not PAUSED)
         run = await self.state.get_run(self._run_id)
         if run and run.status == RunStatus.RUNNING:
             all_tickets = await self.state.get_tickets_for_run(self._run_id)
+            # Ignore TODO tickets — they're backlog, not part of the active run
+            work_tickets = [t for t in all_tickets if t.state != TicketState.TODO]
+            if not work_tickets:
+                return  # No work tickets at all, don't auto-complete
+
             all_terminal = all(
-                t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED, TicketState.TODO}
-                for t in all_tickets
+                t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED}
+                for t in work_tickets
             )
-            active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED} for t in all_tickets)
+            active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED} for t in work_tickets)
 
             if all_terminal and not active:
                 self._running = False
@@ -215,6 +247,20 @@ class Orchestrator:
                 await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.COMPLETED)
                 if self.notifier:
                     await self.notifier.notify_run_completed(run.name or self._run_id)
+
+    async def _fail_ticket(self, ticket_id: str, error: str) -> None:
+        """Mark a ticket as failed with error message, broadcast update."""
+        await self.state.update_ticket(ticket_id, error=error)
+        await self.state.update_ticket_state(ticket_id, TicketState.FAILED)
+        try:
+            await self.broadcaster.broadcast_ticket_update(
+                self._run_id, ticket_id, TicketState.FAILED, error=error
+            )
+        except Exception:
+            pass  # DB state is already FAILED — broadcast is best-effort
+        self.watchdog.on_ticket_failed(ticket_id)
+        if self.notifier:
+            await self.notifier.notify_ticket_failed(jira_key=None, ticket_id=ticket_id, error=error)
 
     async def _spawn_worker(self, ticket_id: str, jira_key: str, run: object) -> None:
         """Spawn a CLI worker for a ticket."""
@@ -233,13 +279,7 @@ class Orchestrator:
             project_path = repo.path
 
         if not project_path:
-            error = "No project path configured. Assign a repository or set project_path on the run."
-            await self.state.update_ticket(ticket_id, error=error)
-            await self.state.update_ticket_state(ticket_id, TicketState.FAILED)
-            await self.broadcaster.broadcast_ticket_update(
-                self._run_id, ticket_id, TicketState.FAILED, error=error
-            )
-            self.watchdog.on_ticket_failed(ticket_id)
+            await self._fail_ticket(ticket_id, "No project path configured. Assign a repository or set project_path on the run.")
             return
 
         # Resolve parent branch: ticket > run > repo default > config default
@@ -262,13 +302,7 @@ class Orchestrator:
         try:
             worktree_path = await git.create_worktree(jira_key, parent_branch)
         except RuntimeError as e:
-            error = f"Failed to create worktree: {e}"
-            await self.state.update_ticket(ticket_id, error=error)
-            await self.state.update_ticket_state(ticket_id, TicketState.FAILED)
-            await self.broadcaster.broadcast_ticket_update(
-                self._run_id, ticket_id, TicketState.FAILED, error=error
-            )
-            self.watchdog.on_ticket_failed(ticket_id)
+            await self._fail_ticket(ticket_id, f"Failed to create worktree: {e}")
             return
 
         branch_name = await git.get_branch_name(jira_key)
@@ -310,6 +344,28 @@ class Orchestrator:
             worker_skip_permissions = claude_cfg.get("skip_permissions", True)
             worker_execute_command = claude_cfg.get("execute_command", "/execute-jira-task")
 
+        # Parse phases_config from profile
+        phases_config = None
+        idle_timeout = claude_cfg.get("idle_timeout", 10)
+        if profile and profile.phases_config:
+            try:
+                phases_config = json.loads(profile.phases_config)
+            except (json.JSONDecodeError, TypeError):
+                phases_config = None
+
+        # Fall back to config.yaml phases if profile has none
+        if not phases_config and "phases" in claude_cfg:
+            yaml_phases = claude_cfg["phases"]
+            phases_config = []
+            for phase_name in ["planning", "developing", "review"]:
+                phase_def = yaml_phases.get(phase_name, {})
+                if phase_def:
+                    phases_config.append({
+                        "phase": phase_name,
+                        "prompts": phase_def.get("commands", []),
+                        "marker": phase_def.get("marker"),
+                    })
+
         mcp_cfg = self.config.get("mcp", {})
         worker = Worker(
             ticket_id=ticket_id,
@@ -325,6 +381,8 @@ class Orchestrator:
             jira_status_mapping=mcp_cfg.get("jira_status_mapping", {}),
             auto_create_pr=claude_cfg.get("auto_create_pr", True),
             pr_base_branch=parent_branch,
+            phases_config=phases_config,
+            idle_timeout=idle_timeout,
         )
         worker.jira_client = self.jira_client
 

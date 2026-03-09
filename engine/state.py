@@ -1,5 +1,6 @@
 """SQLite state management for runs, tickets, schedules, and logs."""
 
+import json
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,17 @@ async def init_db(db_path: str = DB_PATH) -> None:
             v2_sql = v2_path.read_text()
             await db.executescript(v2_sql)
 
+        # Run v3 migration (idempotent)
+        v3_path = MIGRATIONS_DIR / "v3_phases_config.sql"
+        if v3_path.exists():
+            for stmt in v3_path.read_text().strip().split(";"):
+                stmt = stmt.strip()
+                if stmt and not stmt.startswith("--"):
+                    try:
+                        await db.execute(stmt)
+                    except Exception:
+                        pass  # Column already exists
+
         # Add columns to existing tables if missing (ALTER TABLE is not idempotent in SQLite)
         for col, tbl in [
             ("parent_branch", "runs"), ("repository_id", "runs"),
@@ -56,13 +68,18 @@ async def init_db(db_path: str = DB_PATH) -> None:
         count = (await cursor.fetchone())[0]
         if count == 0:
             now = datetime.utcnow().isoformat()
+            default_phases = json.dumps([
+                {"phase": "planning", "prompts": ["/planning-task {JIRA_KEY}"], "marker": "[PLANNING_COMPLETE]"},
+                {"phase": "developing", "prompts": ["/developing-task {JIRA_KEY}"], "marker": "[DEVELOPING_COMPLETE]"},
+                {"phase": "review", "prompts": ["/open-pr --draft"], "marker": "[PR_COMPLETE]"},
+            ])
             await db.execute(
-                "INSERT INTO agent_profiles (name, command, args_template, log_format, is_default, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO agent_profiles (name, command, args_template, log_format, is_default, phases_config, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     "Claude Code", "claude",
-                    "--print --verbose --output-format stream-json --dangerously-skip-permissions /execute-jira-task {JIRA_KEY}",
-                    "stream-json", 1, now, now,
+                    "--dangerously-skip-permissions",
+                    "plain-text", 1, default_phases, now, now,
                 ),
             )
 
@@ -463,14 +480,14 @@ class StateManager:
     # --- Agent Profiles ---
 
     async def create_agent_profile(self, name: str, command: str, args_template: str,
-                                   log_format: str = "plain-text") -> AgentProfile:
+                                   log_format: str = "plain-text", phases_config: str = None) -> AgentProfile:
         now = datetime.utcnow().isoformat()
         async with self._connect() as db:
             await self._setup_db(db)
             cursor = await db.execute(
-                "INSERT INTO agent_profiles (name, command, args_template, log_format, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (name, command, args_template, log_format, now, now),
+                "INSERT INTO agent_profiles (name, command, args_template, log_format, phases_config, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (name, command, args_template, log_format, phases_config, now, now),
             )
             profile_id = cursor.lastrowid
             await db.commit()

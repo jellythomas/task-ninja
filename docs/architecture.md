@@ -46,8 +46,11 @@ Detailed technical documentation for Task Ninja internals. For setup and usage, 
 +------------------------v--------------------------+
 |           AI Agent Workers (git worktrees)        |
 |                                                   |
-|  Worker 1: worktree-mc-9174/                      |
-|    claude --print "/execute-jira-task MC-9174"    |
+|  Worker 1: worktree-mc-9174/ (interactive mode)   |
+|    claude --dangerously-skip-permissions           |
+|    > /planning-task MC-9174                        |
+|    > /developing-task MC-9174                      |
+|    > /open-pr --draft                              |
 |                                                   |
 |  Worker 2: worktree-mc-9173/                      |
 |    gemini -p "implement MC-9173"                  |
@@ -88,44 +91,65 @@ Orchestrator loop (runs continuously):
      d. Sync from origin: git fetch origin, use origin/<branch> as start point
      e. Create git worktree for the ticket
      f. Resolve agent profile: ticket > repo default > global default
-     g. Spawn AI agent worker in worktree (PTY-backed)
+     g. Spawn AI agent in interactive mode (PTY-backed)
      h. Move ticket to Planning, sync Jira -> In Progress
+     i. Write phase commands to PTY sequentially
   3. Monitor active workers:
      a. Stream PTY output -> parse -> logs table + SSE broadcast
-     b. Detect phase transitions (Planning -> Developing)
-     c. On completion: open draft PR, move to Review
-     d. On failure: mark failed, trigger watchdog (auto-retry if enabled)
+     b. Detect phase markers ([PLANNING_COMPLETE], [DEVELOPING_COMPLETE])
+     c. On marker: transition to next phase, write next phase commands
+     d. On completion: write PR command, move to Review
+     e. On failure: mark failed, trigger watchdog (auto-retry if enabled)
+     f. User chat: delivered via PTY write_input() at any time
+  4. State transition safety:
+     a. Moving ticket to non-active state (TODO, QUEUED) kills the worker process
+     b. Prevents orphaned processes
   4. Working hours check: only spawn during configured hours/days
   5. Repeat every 5 seconds
 ```
 
-### 3. Worker Phase (per ticket)
+### 3. Worker Phase (per ticket — Interactive Mode)
 
 ```
-AI Agent Worker lifecycle (PTY-backed process):
+AI Agent Worker lifecycle (PTY-backed, interactive Claude session):
+
+  0. SPAWN
+     - Start: claude --dangerously-skip-permissions (interactive mode)
+     - Wait for Claude session to be ready
+     - Single session persists across all phases
+
   1. PLANNING
-     - Read Jira ticket description
-     - Analyze codebase for affected areas
-     - Create implementation plan
+     - Worker writes configured commands to PTY (e.g., "/planning-task MC-XXXX")
+     - Commands execute sequentially within the phase
+     - Detect phase completion via marker (e.g., [PLANNING_COMPLETE])
+     - Fallback: idle debounce timeout if no marker detected
+     - User can chat at any time — messages delivered via PTY
      - Broadcast: state -> planning
 
   2. DEVELOPING
-     - Create feature branch (feat/MC-XXXX)
-     - Implement code changes
-     - Run smart blast radius tests
-     - Fix any test failures
-     - Commit changes
+     - Worker writes developing commands (e.g., "/developing-task MC-XXXX")
+     - Create feature branch, implement, test, commit
+     - Detect completion via marker (e.g., [DEVELOPING_COMPLETE])
+     - User can course-correct, answer questions mid-flight
      - Broadcast: state -> developing
 
-  3. PR CREATION
-     - Push branch to remote
-     - Open draft PR on Bitbucket/GitHub
+  3. REVIEW (PR CREATION)
+     - Worker writes PR command (e.g., "/open-pr --draft")
+     - Slash command executes natively in interactive session
+     - Detect completion via marker or PR URL detection
      - Broadcast: state -> review
 
   4. CLEANUP
      - Remove git worktree (keep branch)
      - Update Jira status -> In Review
      - Worker slot freed for next ticket
+
+  Phase Pipeline:
+     - Phases and commands are configurable via UI (agent profiles)
+     - Each phase has: commands[] + marker (optional)
+     - Commands sent sequentially, marker signals phase done
+     - If no marker: idle debounce (configurable, default 10s) as fallback
+     - User chat resets debounce timer to prevent false triggers
 ```
 
 ### 4. Review Phase (human)
@@ -515,10 +539,28 @@ orchestrator:
 
 claude:
   command: "claude"
-  flags: ["--print"]
   skip_permissions: true
-  execute_command: "/execute-jira-task"
-  pr_command: "/open-pr --draft"
+  idle_timeout: 10  # seconds, debounce fallback when no marker detected
+
+  # Phase pipeline — configurable per phase
+  # Each phase: commands[] (sequential) + marker (optional completion signal)
+  phases:
+    planning:
+      commands:
+        - "/planning-task {JIRA_KEY}"
+      marker: "[PLANNING_COMPLETE]"
+    developing:
+      commands:
+        - "/developing-task {JIRA_KEY}"
+      marker: "[DEVELOPING_COMPLETE]"
+    review:
+      commands:
+        - "/open-pr --draft"
+      marker: "[PR_COMPLETE]"
+
+  # Legacy single-command mode (used if phases not defined)
+  # execute_command: "/execute-jira-task"
+  # pr_command: "/open-pr --draft"
 
 mcp:
   atlassian_server: "mcp-atlassian-with-bitbucket"

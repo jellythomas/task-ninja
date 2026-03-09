@@ -6,7 +6,7 @@ from engine.env_manager import get_env, verify_token
 
 # Paths that don't require auth
 PUBLIC_PATHS = {"/", "/login", "/favicon.ico"}
-PUBLIC_PREFIXES = ("/static/", "/assets/")
+PUBLIC_PREFIXES = ("/static/", "/assets/", "/js/")
 
 
 def _is_remote_access_enabled() -> bool:

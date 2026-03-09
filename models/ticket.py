@@ -24,16 +24,9 @@ class RunStatus(str, Enum):
     COMPLETED = "completed"
 
 
-# Valid state transitions
-VALID_TRANSITIONS = {
-    TicketState.TODO: {TicketState.QUEUED, TicketState.TODO},
-    TicketState.QUEUED: {TicketState.PLANNING, TicketState.TODO, TicketState.QUEUED, TicketState.FAILED},
-    TicketState.PLANNING: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.FAILED, TicketState.TODO},
-    TicketState.DEVELOPING: {TicketState.REVIEW, TicketState.QUEUED, TicketState.FAILED, TicketState.TODO},
-    TicketState.REVIEW: {TicketState.DEVELOPING, TicketState.QUEUED, TicketState.DONE, TicketState.TODO},
-    TicketState.DONE: {TicketState.TODO, TicketState.QUEUED},
-    TicketState.FAILED: {TicketState.QUEUED, TicketState.TODO},
-}
+# Valid state transitions — permissive for kanban board manual moves
+_ALL_STATES = set(TicketState)
+VALID_TRANSITIONS = {state: _ALL_STATES for state in TicketState}
 
 # States where a worker is active
 ACTIVE_STATES = {TicketState.PLANNING, TicketState.DEVELOPING}
@@ -102,6 +95,7 @@ class AgentProfile(BaseModel):
     args_template: str
     log_format: str = "plain-text"
     is_default: bool = False
+    phases_config: Optional[str] = None  # JSON blob of phase pipeline config
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -209,6 +203,7 @@ class CreateAgentProfileRequest(BaseModel):
     command: str
     args_template: str
     log_format: str = "plain-text"
+    phases_config: Optional[str] = None
 
 
 class UpdateAgentProfileRequest(BaseModel):
@@ -216,6 +211,7 @@ class UpdateAgentProfileRequest(BaseModel):
     command: Optional[str] = None
     args_template: Optional[str] = None
     log_format: Optional[str] = None
+    phases_config: Optional[str] = None
 
 
 class UpdateSettingsRequest(BaseModel):
