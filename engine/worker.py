@@ -37,6 +37,7 @@ def _clean_ansi(text: str) -> str:
     return _ANSI_RE.sub('', text)
 
 
+
 class Worker:
     """Manages a single AI agent process for a ticket with PTY-backed terminal."""
 
@@ -76,6 +77,14 @@ class Worker:
         self.process: Optional[asyncio.subprocess.Process] = None
         self._cancelled = False
         self._detected_pr_url: Optional[str] = None
+        self._moved_to_developing = False
+
+        # PTY and viewer management
+        self._master_fd: Optional[int] = None
+        self._viewers: set[WebSocket] = set()
+        self._output_buffer = bytearray()  # Scrollback for late-joining viewers
+        self._max_buffer = 256 * 1024  # 256KB
+        self._line_buffer = ""  # Partial line accumulator for parsing
 
         # Phase pipeline config
         self.phases_config = phases_config  # None = legacy --print mode
@@ -538,6 +547,7 @@ class Worker:
                 pass
         return False
 
+
     def resize_pty(self, rows: int, cols: int) -> None:
         """Resize the PTY terminal."""
         if self._master_fd is not None:
@@ -599,6 +609,7 @@ class Worker:
     async def _process_output(self, text: str) -> None:
         """Parse PTY output for markers, PR URLs, and log broadcasting."""
         self._last_output_time = time.time()
+
 
         self._line_buffer += text
         while '\n' in self._line_buffer:

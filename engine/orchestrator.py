@@ -366,6 +366,7 @@ class Orchestrator:
                         "marker": phase_def.get("marker"),
                     })
 
+
         mcp_cfg = self.config.get("mcp", {})
         worker = Worker(
             ticket_id=ticket_id,

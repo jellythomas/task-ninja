@@ -42,6 +42,7 @@ async def init_db(db_path: str = DB_PATH) -> None:
                     except Exception:
                         pass  # Column already exists
 
+
         # Add columns to existing tables if missing (ALTER TABLE is not idempotent in SQLite)
         for col, tbl in [
             ("parent_branch", "runs"), ("repository_id", "runs"),

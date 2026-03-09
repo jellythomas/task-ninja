@@ -51,6 +51,15 @@ class GitManager:
             except RuntimeError:
                 pass  # May not have remote, that's fine
 
+        # Always fetch latest from origin before branching
+        fetched_remote = False
+        if parent_branch:
+            try:
+                await self._run_git("fetch", "origin", parent_branch)
+                fetched_remote = True
+            except RuntimeError:
+                pass  # May not have remote, that's fine
+
         # Check if branch exists
         proc = await asyncio.create_subprocess_exec(
             "git", "branch", "--list", branch_name,
