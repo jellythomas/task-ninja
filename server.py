@@ -131,6 +131,7 @@ from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from engine.auth import AuthMiddleware, verify_ws_token
+from engine.git_manager import GitManager
 from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
 from engine.env_manager import load_env, get_env, update_env, get_public_env, verify_token, generate_token
@@ -339,6 +340,7 @@ async def update_env_config(req: dict):
 # --- Static UI ---
 
 app.mount("/assets", StaticFiles(directory=Path(__file__).parent / "static" / "assets"), name="assets")
+app.mount("/js", StaticFiles(directory=Path(__file__).parent / "static" / "js"), name="js")
 
 @app.get("/")
 async def serve_ui():
@@ -623,12 +625,33 @@ async def add_tickets(run_id: str, req: AddTicketsRequest):
 
 @app.put("/api/tickets/{ticket_id}/state")
 async def move_ticket(ticket_id: str, req: MoveTicketRequest):
-    """Move a ticket to a new state (drag-and-drop). Syncs to Jira for terminal states."""
+    """Move a ticket to a new state. Kills worker if moving to non-active state."""
     try:
-        ticket = await state.update_ticket_state(ticket_id, req.state)
-        await broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, req.state)
+        print(f"[move_ticket] {ticket_id} -> {req.state.value}", file=sys.stderr)
 
-        # Sync to Jira for manually-triggered state changes
+        # Kill worker if moving to a non-active state
+        if req.state not in {TicketState.PLANNING, TicketState.DEVELOPING}:
+            try:
+                killed = await orchestrator.kill_worker(ticket_id)
+                print(f"[move_ticket] kill_worker={killed}", file=sys.stderr)
+                if killed:
+                    await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"[move_ticket] kill_worker error (ignoring): {e}", file=sys.stderr)
+
+        ticket = await state.update_ticket_state(ticket_id, req.state)
+        print(f"[move_ticket] DB updated, state now={ticket.state}", file=sys.stderr)
+
+        try:
+            await broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, req.state)
+        except Exception as e:
+            print(f"[move_ticket] broadcast error (ignoring): {e}", file=sys.stderr)
+
+        # If moved to queued and orchestrator is stopped, restart it so it picks up the ticket
+        if req.state == TicketState.QUEUED and not orchestrator._running and ticket.run_id:
+            await orchestrator.resume(ticket.run_id)
+
+        # Sync to Jira for manually-triggered state changes (fire and forget)
         mcp_cfg = config.get("mcp", {})
         jira_mapping = mcp_cfg.get("jira_status_mapping", {})
         target_status = jira_mapping.get(req.state.value)
@@ -645,6 +668,11 @@ async def move_ticket(ticket_id: str, req: MoveTicketRequest):
         return ticket.model_dump()
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except Exception as e:
+        print(f"[move_ticket] UNEXPECTED ERROR: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(500, str(e))
 
 
 @app.put("/api/tickets/{ticket_id}/rank")
@@ -663,6 +691,48 @@ async def pause_ticket(ticket_id: str):
 async def resume_ticket(ticket_id: str):
     await orchestrator.resume_ticket(ticket_id)
     return {"status": "resumed"}
+
+
+@app.post("/api/tickets/{ticket_id}/interrupt")
+async def interrupt_ticket(ticket_id: str):
+    """Send Escape to the worker's PTY to interrupt current operation."""
+    sent = orchestrator.interrupt_worker(ticket_id)
+    return {"status": "interrupted" if sent else "no_worker"}
+
+
+@app.post("/api/tickets/{ticket_id}/retry")
+async def retry_ticket(ticket_id: str, clean: bool = False):
+    """Retry a failed/done ticket. clean=true destroys worktree for fresh start."""
+    ticket = await state.get_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(404, "Ticket not found")
+
+    # Kill any lingering worker
+    await orchestrator.kill_worker(ticket_id)
+
+    # Clean worktree if requested
+    if clean and ticket.worktree_path:
+        try:
+            run = await state.get_run(ticket.run_id)
+            git_cfg = config.get("git", {})
+            git = GitManager(
+                run.project_path if run else ".",
+                git_cfg.get("worktree_dir", ".worktrees"),
+            )
+            await git._remove_worktree(Path(ticket.worktree_path))
+        except Exception:
+            pass  # Best effort — orchestrator will handle it on spawn
+
+    # Clear error and move to queued
+    await state.update_ticket(ticket_id, error=None, worker_pid=None, paused=False)
+    await state.update_ticket_state(ticket_id, TicketState.QUEUED)
+    await broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.QUEUED)
+
+    # Auto-resume orchestrator if needed
+    if not orchestrator._running and ticket.run_id:
+        await orchestrator.resume(ticket.run_id)
+
+    return {"status": "retrying", "clean": clean}
 
 
 @app.delete("/api/tickets/{ticket_id}")
@@ -813,13 +883,17 @@ async def list_agent_profiles():
 
 @app.post("/api/profiles")
 async def create_agent_profile(req: CreateAgentProfileRequest):
-    profile = await state.create_agent_profile(req.name, req.command, req.args_template, req.log_format)
+    profile = await state.create_agent_profile(
+        req.name, req.command, req.args_template, req.log_format,
+        phases_config=req.phases_config,
+    )
     return profile.model_dump()
 
 
 @app.put("/api/profiles/{profile_id}")
 async def update_agent_profile(profile_id: int, req: UpdateAgentProfileRequest):
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    # Use exclude_unset so only fields the client sent are included (allows clearing phases_config to None)
+    updates = {k: v for k, v in req.model_dump(exclude_unset=True).items() if v is not None or k == "phases_config"}
     if not updates:
         raise HTTPException(400, "No fields to update")
     profile = await state.update_agent_profile(profile_id, **updates)
@@ -957,14 +1031,24 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
         await websocket.close(code=4001, reason="Authentication required")
         return
 
-    # Find the live worker for this ticket (with brief retry for startup race)
+    # Find the live worker for this ticket (with retry for startup race)
     worker = orchestrator._workers.get(ticket_id)
-    if worker and not worker.is_running:
-        # Worker exists but process not spawned yet — wait briefly
+
+    # Worker might not be in dict yet if orchestrator just spawned it — retry
+    if not worker:
         for _ in range(10):
+            await asyncio.sleep(0.5)
+            worker = orchestrator._workers.get(ticket_id)
+            if worker:
+                break
+
+    # Worker exists but process not spawned yet — wait for it
+    if worker and not worker.is_running:
+        for _ in range(20):  # Up to 10 seconds
             await asyncio.sleep(0.5)
             if worker.is_running:
                 break
+
     if not worker or not worker.is_running:
         await websocket.accept()
         await websocket.close(code=4004, reason="No running process for this ticket")

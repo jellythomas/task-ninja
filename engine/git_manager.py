@@ -13,27 +13,34 @@ class GitManager:
         self.worktree_base = self.project_path / worktree_dir
         self.branch_prefix = branch_prefix
 
-    async def create_worktree(self, jira_key: str, parent_branch: str = None) -> str:
+    async def create_worktree(self, jira_key: str, parent_branch: str = None, clean: bool = False) -> str:
         """Create a git worktree for a ticket. Returns the worktree path.
 
         Args:
             jira_key: The Jira ticket key (e.g., MC-9174)
             parent_branch: Branch to create the worktree from (default: current HEAD)
+            clean: If True, destroy existing worktree and start fresh.
+                   If False (default), reuse existing worktree when present.
         """
         branch_name = f"{self.branch_prefix}/{jira_key}"
         worktree_path = self.worktree_base / f"worktree-{jira_key.lower()}"
 
         self.worktree_base.mkdir(parents=True, exist_ok=True)
 
-        # Clean up existing worktree if it exists (from a previous failed run)
-        if worktree_path.exists():
-            try:
-                await self._run_git("worktree", "remove", str(worktree_path), "--force")
-            except RuntimeError:
-                # If git worktree remove fails, force-remove the directory
-                import shutil
-                shutil.rmtree(str(worktree_path), ignore_errors=True)
+        # Always prune stale worktree refs first
+        try:
             await self._run_git("worktree", "prune")
+        except RuntimeError:
+            pass
+
+        # Handle existing worktree
+        if worktree_path.exists():
+            if not clean:
+                # Reuse existing worktree — just return it
+                return str(worktree_path)
+
+            # Clean mode: destroy and recreate
+            await self._remove_worktree(worktree_path)
 
         # Always fetch latest from origin before branching
         fetched_remote = False
@@ -71,6 +78,21 @@ class GitManager:
             await self._run_git("worktree", "add", "-b", branch_name, str(worktree_path), start_point)
 
         return str(worktree_path)
+
+    async def _remove_worktree(self, worktree_path: Path) -> None:
+        """Force-remove a worktree directory and clean up git refs."""
+        try:
+            await self._run_git("worktree", "remove", str(worktree_path), "--force")
+        except RuntimeError:
+            pass
+        # Force-remove directory if git couldn't clean it
+        if worktree_path.exists():
+            import shutil
+            shutil.rmtree(str(worktree_path), ignore_errors=True)
+        try:
+            await self._run_git("worktree", "prune")
+        except RuntimeError:
+            pass
 
     async def cleanup_worktree(self, worktree_path: str) -> None:
         """Remove a worktree (keeps the branch)."""

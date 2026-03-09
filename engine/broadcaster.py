@@ -2,7 +2,15 @@
 
 import asyncio
 import json
+from enum import Enum
 from typing import Any
+
+
+class _EnumEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Enum):
+            return obj.value
+        return super().default(obj)
 
 
 class Broadcaster:
@@ -26,7 +34,7 @@ class Broadcaster:
 
     async def broadcast(self, run_id: str, event: str, data: Any) -> None:
         """Send an event to all subscribers of a run."""
-        message = json.dumps({"event": event, "data": data})
+        message = json.dumps({"event": event, "data": data}, cls=_EnumEncoder)
         for queue in self._subscribers.get(run_id, []):
             await queue.put(message)
 
