@@ -132,6 +132,103 @@ from sse_starlette.sse import EventSourceResponse
 
 from engine.auth import AuthMiddleware, verify_ws_token
 from engine.git_manager import GitManager
+from engine.broadcaster import Broadcaster
+from engine.claude_helper import ClaudeHelper
+from engine.env_manager import load_env, get_env, update_env, get_public_env, verify_token, generate_token
+from engine.jira_client import JiraClient
+from engine.notifier import Notifier
+from engine.orchestrator import Orchestrator
+from engine.scheduler import RunScheduler
+from engine.state import StateManager, init_db
+from engine.terminal import TerminalManager
+from models.ticket import (
+    AddTicketsRequest,
+    CreateAgentProfileRequest,
+    CreateLabelMappingRequest,
+    CreateRepositoryRequest,
+    CreateRunRequest,
+    CreateScheduleRequest,
+    FetchTicketsRequest,
+    LoadEpicRequest,
+    MoveTicketRequest,
+    RunStatus,
+    TicketState,
+    UpdateAgentProfileRequest,
+    UpdateConfigRequest,
+    UpdateRankRequest,
+    UpdateRepositoryRequest,
+    UpdateScheduleRequest,
+    UpdateSettingsRequest,
+    UpdateTicketAssignmentRequest,
+)
+
+# Load .env first (creates file with defaults if missing)
+env_config = load_env()
+
+# Load config
+CONFIG_PATH = Path(__file__).parent / "config.yaml"
+config = yaml.safe_load(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
+
+# Shared instances
+state = StateManager(config.get("database", {}).get("path", "task_ninja.db"))
+broadcaster = Broadcaster()
+orchestrator = Orchestrator(state, broadcaster, config)
+claude_cfg = config.get("claude", {})
+claude_helper = ClaudeHelper(claude_cfg.get("command", "claude"), claude_cfg.get("skip_permissions", True))
+jira_client = JiraClient()
+terminal_manager = TerminalManager()
+notifier = Notifier(state)
+orchestrator.notifier = notifier
+run_scheduler = RunScheduler(state, orchestrator.start)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db_path = config.get("database", {}).get("path", "task_ninja.db")
+    await init_db(db_path)
+    print(f"[server] Database initialized at {db_path}", file=sys.stderr)
+
+    # Restore orchestrator state from DB on startup
+    runs = await state.list_runs()
+    for run in runs:
+        if run.status == RunStatus.RUNNING:
+            print(f"[server] Restoring running state for run {run.id}", file=sys.stderr)
+            await orchestrator.start(run.id)
+            break
+        elif run.status in (RunStatus.PAUSED, RunStatus.COMPLETED):
+            orchestrator._run_id = run.id
+            print(f"[server] Restored run_id {run.id} (status: {run.status})", file=sys.stderr)
+            break
+
+    run_scheduler.start()
+    await run_scheduler.load_existing_schedules()
+    yield
+    run_scheduler.stop()
+    orchestrator.watchdog.cancel_all()
+    terminal_manager.close_all()
+
+
+app = FastAPI(title="Task Ninja", lifespan=lifespan)
+app.add_middleware(AuthMiddleware)
+
+
+# --- Auth ---
+
+@app.post("/api/auth/login")
+async def auth_login(req: dict):
+    """Validate token and return success."""
+    token = req.get("token", "")
+    if verify_token(token):
+        return {"status": "ok"}
+    raise HTTPException(401, "Invalid token")
+
+
+@app.get("/api/auth/status")
+async def auth_status():
+    """Check if auth is required."""
+    remote = get_env("TASK_NINJA_REMOTE_ACCESS", "false").lower() == "true"
+    return {"auth_required": remote}
+
 
 @app.get("/")
 async def serve_ui():
