@@ -37,6 +37,22 @@
     .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #60a5fa; margin-top: -5px; }
     .volume-slider::-moz-range-track { height: 4px; background: #4b5563; border-radius: 2px; border: none; }
     .volume-slider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #60a5fa; border: none; }
+    /* Mobile list view */
+    @media (max-width: 639px) {
+      .kanban-board { display: none !important; }
+      .mobile-list { display: block !important; }
+    }
+    @media (min-width: 640px) {
+      .mobile-list { display: none !important; }
+    }
+  </style>
+</head>
+<body class="h-full text-gray-200" x-data="app()" x-init="init()">
+
+  <!-- Login Screen -->
+  <div x-show="showLogin" x-transition class="fixed inset-0 bg-gray-950 flex items-center justify-center z-[70]">
+    <div class="w-full max-w-sm mx-4 text-center" x-data="{ loginToken: '', loginError: '' }">
+      <!-- logo removed -->
       <h1 class="text-xl font-semibold text-white mb-1">Task Ninja</h1>
       <p class="text-sm text-gray-500 mb-6">Enter your access token to continue</p>
       <input x-model="loginToken" type="password" placeholder="Access token"
@@ -1660,6 +1676,287 @@
             const active = this.tickets.find(t => ['planning', 'developing'].includes(t.state));
             if (active) await this.switchTerminal(active.id);
           }
+
+
+          await this.initNotifications();
+          this.loadSchedulerSettings();
+          this.loadSchedules();
+          this.$nextTick(() => this.initSortable());
+          setInterval(() => this.tick++, 5000);
+        },
+
+        initSortable() {
+          this.columns.forEach(col => {
+            const el = document.getElementById('col-' + col.id);
+            if (!el) return;
+            if (el._sortable) return; // already initialized
+            el._sortable = Sortable.create(el, {
+              group: 'kanban',
+              animation: 150,
+              ghostClass: 'sortable-ghost',
+              dragClass: 'sortable-drag',
+              filter: '.no-drag',
+              onEnd: async (evt) => {
+                const ticketId = evt.item.dataset.ticketId;
+                const newState = evt.to.id.replace('col-', '');
+                if (ticketId && newState) {
+                  await this.moveTicket(ticketId, newState);
+                }
+              },
+            });
+          });
+
+          // Terminal panel resize via drag
+          const self = this;
+          const onMove = (e) => {
+            if (!self._terminalDragging) return;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const newH = window.innerHeight - clientY - 6;
+            self.terminalHeight = Math.max(80, Math.min(newH, window.innerHeight * 0.7));
+            localStorage.setItem('tn_terminalHeight', self.terminalHeight);
+          };
+          const onUp = () => { self._terminalDragging = false; };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+          document.addEventListener('touchmove', onMove);
+          document.addEventListener('touchend', onUp);
+        },
+        // Computed
+        ticketsInColumn(state) {
+          let filtered = this.tickets.filter(t => t.state === state);
+          // Filter by active repo tab
+          if (this.activeRepoId !== null) {
+            filtered = filtered.filter(t => t.repository_id === this.activeRepoId);
+          }
+          if (this.boardFilter) {
+            const q = this.boardFilter.toLowerCase();
+            filtered = filtered.filter(t =>
+              t.jira_key.toLowerCase().includes(q) ||
+              (t.summary || '').toLowerCase().includes(q) ||
+              (t.branch_name || '').toLowerCase().includes(q)
+            );
+          }
+          return filtered.sort((a, b) => a.rank - b.rank);
+        },
+
+        ticketCountForRepo(repoId) {
+          return this.tickets.filter(t => t.repository_id === repoId).length;
+        },
+
+        repoNameById(id) {
+          const repo = this.repositories.find(r => r.id === id);
+          return repo ? repo.name : '';
+        },
+
+        profileNameById(id) {
+          const p = this.agentProfiles.find(p => p.id === id);
+          return p ? p.name : '';
+        },
+
+        get isLocalAccess() {
+          const h = window.location.hostname;
+          return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+        },
+
+        get epicFilterTags() {
+          const tags = new Set();
+          for (const t of this.epicTickets) {
+            const matches = (t.summary || '').match(/\[([A-Za-z0-9-]+)\]/g);
+            if (matches) matches.forEach(m => tags.add(m));
+          }
+          ['[BE]', '[FE]', '[QA]'].forEach(d => {
+            if (this.epicTickets.some(t => (t.summary || '').includes(d))) tags.add(d);
+          });
+          return [...tags].sort();
+        },
+
+        // Match a ticket to a repo by checking summary tags against repo jira_label and name
+        _matchTicketRepo(ticket) {
+          // Only match bracket tags from summary: [Flex], [MOBILE], [BE], etc.
+          const tags = (ticket.summary || '').match(/\[([A-Za-z0-9_-]+)\]/g) || [];
+          const tagValues = tags.map(t => t.slice(1, -1).toLowerCase());
+          if (tagValues.length === 0) return null;
+
+          for (const repo of this.repositories) {
+            const label = (repo.jira_label || '').toLowerCase();
+            const name = (repo.name || '').toLowerCase();
+            if (!label && !name) continue;
+            if (label && tagValues.includes(label)) return repo;
+            if (name && tagValues.includes(name)) return repo;
+          }
+          return null;
+        },
+
+        get epicGroups() {
+          const groups = {};
+          for (const t of this.filteredEpicTickets) {
+            const matchedRepo = this._matchTicketRepo(t);
+            const groupKey = matchedRepo ? matchedRepo.name : 'Others';
+            if (!groups[groupKey]) {
+              groups[groupKey] = {
+                prefix: groupKey,
+                repoId: matchedRepo?.id || null,
+                repoName: matchedRepo?.name || null,
+                repoBranch: matchedRepo?.default_branch || '',  // repo's configured default (display only)
+                branch: '',      // explicit override (empty = inherit from global)
+                profileId: null, // explicit override (null = inherit from global)
+                tickets: [],
+              };
+            }
+            groups[groupKey].tickets.push(t);
+          }
+          // Apply group overrides
+          for (const [key, override] of Object.entries(this.epicGroupOverrides)) {
+            if (groups[key]) Object.assign(groups[key], override);
+          }
+          // Sort: named groups first, Others last
+          return Object.values(groups).sort((a, b) => {
+            if (a.prefix === 'Others') return 1;
+            if (b.prefix === 'Others') return -1;
+            return a.prefix.localeCompare(b.prefix);
+          });
+        },
+
+        // Effective branch for display on group header
+        effectiveGroupBranch(group) {
+          return group.branch || this.epicParentBranch || group.repoBranch || 'HEAD';
+        },
+
+        resolveTicketAssignment(ticket) {
+          const matchedRepo = this._matchTicketRepo(ticket);
+          const groupKey = matchedRepo ? matchedRepo.name : 'Others';
+          const group = this.epicGroups.find(g => g.prefix === groupKey) || {};
+          const override = this.epicTicketOverrides[ticket.key] || {};
+          return {
+            repository_id: override.repoId || group.repoId || null,
+            // Cascade: ticket > group explicit > global > repo default
+            parent_branch: override.branch || group.branch || this.epicParentBranch || group.repoBranch || null,
+            profile_id: override.profileId || group.profileId || this.epicProfileId || null,
+          };
+        },
+
+        get filteredEpicTickets() {
+          return this.epicTickets.filter(t => {
+            if (this.epicFilter.search) {
+              const q = this.epicFilter.search.toLowerCase();
+              if (!t.key.toLowerCase().includes(q) && !(t.summary || '').toLowerCase().includes(q)) return false;
+            }
+            if (this.epicFilter.activeTags.length > 0) {
+              const summary = (t.summary || '').toLowerCase();
+              if (!this.epicFilter.activeTags.some(tag => summary.includes(tag.toLowerCase()))) return false;
+            }
+            return true;
+          });
+        },
+
+        get terminalTabs() {
+          let tabs = this.tickets.filter(t =>
+            ['planning', 'developing', 'review', 'failed', 'done'].includes(t.state)
+          );
+          if (this.activeRepoId !== null) {
+            tabs = tabs.filter(t => t.repository_id === this.activeRepoId);
+          }
+          return tabs;
+        },
+
+        get activeTerminalLogs() {
+          return this.terminalLogs[this.activeTerminal] || [];
+        },
+
+        async fetchLogsForTicket(ticketId, force = false) {
+          if (!ticketId) return;
+          if (!force && this.terminalFetched[ticketId] && (this.terminalLogs[ticketId]?.length > 0)) return;
+          const result = await this.api('GET', `/api/logs/${ticketId}?tail=500`);
+          if (result && result.logs && result.logs.length > 0) {
+            this.terminalFetched[ticketId] = true;
+            const existing = this.terminalLogs[ticketId] || [];
+            const lastApiTs = result.logs[result.logs.length - 1]?.timestamp;
+            const newFromSSE = existing.filter(l => l.timestamp > lastApiTs);
+            this.terminalLogs = { ...this.terminalLogs, [ticketId]: [...result.logs, ...newFromSSE] };
+          }
+        },
+
+        async switchTerminal(ticketId) {
+          this.activeTerminal = ticketId;
+          const hasLogs = (this.terminalLogs[ticketId]?.length || 0) > 0;
+          await this.fetchLogsForTicket(ticketId, !hasLogs);
+          this.$nextTick(() => {
+            const el = document.getElementById('terminal-output');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        },
+
+        // API
+        _authToken: localStorage.getItem('tn_auth_token') || '',
+        showLogin: false,
+
+        async api(method, path, body = null) {
+          try {
+            const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            if (this._authToken) opts.headers['Authorization'] = `Bearer ${this._authToken}`;
+            if (body) opts.body = JSON.stringify(body);
+            const res = await fetch(path, opts);
+            if (res.status === 401) {
+              this.showLogin = true;
+              return null;
+            }
+            return await res.json();
+          } catch (e) {
+            console.error(`API ${method} ${path} failed:`, e);
+            return null;
+          }
+        },
+
+        async doLogin(token) {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          });
+          if (res.ok) {
+            this._authToken = token;
+            localStorage.setItem('tn_auth_token', token);
+            this.showLogin = false;
+            await this.init();
+          } else {
+            return 'Invalid token';
+          }
+        },
+
+        async ensureRun() {
+          if (!this.currentRun) {
+            // If repos available, use the first one. Otherwise prompt for path.
+            let projectPath = '';
+            let repoId = null;
+            if (this.repositories.length > 0) {
+              const repo = this.activeRepoId ? this.repositories.find(r => r.id === this.activeRepoId) : this.repositories[0];
+              if (repo) {
+                projectPath = repo.path;
+                repoId = repo.id;
+              }
+            }
+            if (!projectPath) {
+              projectPath = prompt('Enter the project path (e.g., /Users/you/project):');
+              if (!projectPath) return false;
+            }
+            const name = this.epicKey || 'Manual Run';
+            this.currentRun = await this.api('POST', '/api/runs', {
+              name, project_path: projectPath, max_parallel: this.maxParallel,
+              repository_id: repoId,
+            });
+            this.connectSSE();
+          }
+          return true;
+        },
+
+        async loadRunTickets() {
+          if (!this.currentRun) return;
+          const data = await this.api('GET', `/api/runs/${this.currentRun.id}`);
+          if (data) {
+            this.currentRun = { ...this.currentRun, ...data };
+            this.tickets = data.tickets || [];
+            this.maxParallel = data.max_parallel || 2;
+          }
+        },
 
 
         // Repo Management
