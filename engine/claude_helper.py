@@ -11,15 +11,12 @@ from typing import Optional
 class ClaudeHelper:
     """Runs Claude CLI commands to leverage MCP tools (Jira, Bitbucket)."""
 
-    def __init__(self, command: str = "claude", skip_permissions: bool = True):
+    def __init__(self, command: str = "claude"):
         self.command = command
-        self.skip_permissions = skip_permissions
 
     async def run_prompt(self, prompt: str, cwd: str = None, timeout: int = 120) -> str:
         """Run a Claude CLI prompt and return the output."""
-        cmd = [self.command, "--print"]
-        if self.skip_permissions:
-            cmd.append("--dangerously-skip-permissions")
+        cmd = [self.command, "--print", "--dangerously-skip-permissions"]
         cmd.append(prompt)
 
         try:
@@ -85,17 +82,6 @@ class ClaudeHelper:
         output = await self.run_prompt(prompt, cwd=cwd, timeout=60)
         result = self._parse_json_object(output)
         return result
-
-    async def get_issue_summary(self, jira_key: str) -> Optional[str]:
-        """Fetch just the summary/title of a Jira issue."""
-        prompt = (
-            f'Use jira_get_issue to fetch {jira_key}. '
-            f'Return ONLY the issue summary text, nothing else.'
-        )
-        output = await self.run_prompt(prompt, timeout=30)
-        # Strip any markdown or extra formatting
-        summary = output.strip().strip('"').strip("'")
-        return summary if summary and len(summary) < 500 else None
 
     def _parse_json_array(self, text: str) -> list[dict]:
         """Extract a JSON array from Claude's output."""

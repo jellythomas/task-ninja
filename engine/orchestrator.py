@@ -347,7 +347,7 @@ class Orchestrator:
         if not profile:
             profile = await self.state.get_default_agent_profile()
 
-        # Build worker config from profile or config.yaml fallback
+        # Build worker config from profile
         if profile:
             worker_command = profile.command
             # Parse args template, replacing variables
@@ -362,14 +362,10 @@ class Orchestrator:
             # Split args respecting quoted strings
             import shlex
             worker_flags = shlex.split(args_str)
-            worker_skip_permissions = False  # already in args_template if needed
-            worker_execute_command = None  # already in args_template
         else:
             # Fallback when no agent profile exists (DB always seeds one, but just in case)
             worker_command = "claude"
-            worker_flags = ["--print"]
-            worker_skip_permissions = True
-            worker_execute_command = "/execute-jira-task"
+            worker_flags = ["--dangerously-skip-permissions"]
 
         # Parse phases_config from profile
         phases_config = None
@@ -379,19 +375,6 @@ class Orchestrator:
                 phases_config = json.loads(profile.phases_config)
             except (json.JSONDecodeError, TypeError):
                 phases_config = None
-
-        # Fall back to config.yaml phases if profile has none
-        if not phases_config and "phases" in claude_cfg:
-            yaml_phases = claude_cfg["phases"]
-            phases_config = []
-            for phase_name in ["planning", "developing", "review"]:
-                phase_def = yaml_phases.get(phase_name, {})
-                if phase_def:
-                    phases_config.append({
-                        "phase": phase_name,
-                        "prompts": phase_def.get("commands", []),
-                        "marker": phase_def.get("marker"),
-                    })
 
         mcp_cfg = self.config.get("mcp", {})
         worker = Worker(
@@ -403,10 +386,7 @@ class Orchestrator:
             broadcaster=self.broadcaster,
             claude_command=worker_command,
             claude_flags=worker_flags,
-            skip_permissions=worker_skip_permissions if worker_execute_command else False,
-            execute_command=worker_execute_command or "",
             jira_status_mapping=mcp_cfg.get("jira_status_mapping", {}),
-            auto_create_pr=claude_cfg.get("auto_create_pr", True),
             pr_base_branch=parent_branch,
             phases_config=phases_config,
             idle_timeout=idle_timeout,

@@ -161,8 +161,6 @@ class UpdateRankRequest(BaseModel):
 
 class UpdateConfigRequest(BaseModel):
     max_parallel: Optional[int] = None
-    skip_permissions: Optional[bool] = None
-    worker_timeout: Optional[int] = None
 
 
 class CreateScheduleRequest(BaseModel):

@@ -187,7 +187,7 @@ config = yaml.safe_load(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
 state = StateManager(config.get("database", {}).get("path", "task_ninja.db"))
 broadcaster = Broadcaster()
 orchestrator = Orchestrator(state, broadcaster, config)
-claude_helper = ClaudeHelper("claude", skip_permissions=True)
+claude_helper = ClaudeHelper("claude")
 jira_client = JiraClient()
 terminal_manager = TerminalManager()
 notifier = Notifier(state)
