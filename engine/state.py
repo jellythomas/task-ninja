@@ -18,85 +18,17 @@ DB_PATH = "task_ninja.db"
 MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
 
-async def init_db(db_path: str = DB_PATH) -> None:
-    """Initialize the database with schema and run migrations."""
-    async with aiosqlite.connect(db_path) as db:
-        # Run base schema
-        init_sql = (MIGRATIONS_DIR / "init.sql").read_text()
-        await db.executescript(init_sql)
+def init_db(db_path: str = DB_PATH) -> None:
+    """Initialize the database with schema and run migrations using yoyo."""
+    from engine.migrator import ensure_yoyo_installed, run_migrations
 
-        # Run v2 migration (idempotent)
-        v2_path = MIGRATIONS_DIR / "v2_project_based.sql"
-        if v2_path.exists():
-            v2_sql = v2_path.read_text()
-            await db.executescript(v2_sql)
+    # Ensure yoyo is installed
+    ensure_yoyo_installed()
 
-        # Run v3 migration (idempotent)
-        v3_path = MIGRATIONS_DIR / "v3_phases_config.sql"
-        if v3_path.exists():
-            for stmt in v3_path.read_text().strip().split(";"):
-                stmt = stmt.strip()
-                if stmt and not stmt.startswith("--"):
-                    try:
-                        await db.execute(stmt)
-                    except Exception:
-                        pass  # Column already exists
-
-        # Run v4 migration (idempotent)
-        v4_path = MIGRATIONS_DIR / "v4_awaiting_input.sql"
-        if v4_path.exists():
-            for stmt in v4_path.read_text().strip().split(";"):
-                stmt = stmt.strip()
-                if stmt and not stmt.startswith("--"):
-                    try:
-                        await db.execute(stmt)
-                    except Exception:
-                        pass  # Column already exists
-
-        # Add columns to existing tables if missing (ALTER TABLE is not idempotent in SQLite)
-        for col, tbl in [
-            ("parent_branch", "runs"), ("repository_id", "runs"),
-            ("repository_id", "tickets"), ("parent_branch", "tickets"), ("profile_id", "tickets"),
-            ("input_type", "tickets"), ("input_data", "tickets"),
-            ("last_completed_phase", "tickets"),
-            ("jira_label", "repositories"),
-        ]:
-            try:
-                await db.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT")
-            except Exception:
-                pass  # Column already exists
-
-        # Create indexes on new columns (safe after ALTER TABLE)
-        for idx_sql in [
-            "CREATE INDEX IF NOT EXISTS idx_tickets_repo ON tickets(repository_id)",
-            "CREATE INDEX IF NOT EXISTS idx_label_mappings_repo ON label_repo_mappings(repository_id)",
-        ]:
-            try:
-                await db.execute(idx_sql)
-            except Exception:
-                pass
-
-        # Seed default Claude Code agent profile if none exist
-        cursor = await db.execute("SELECT COUNT(*) FROM agent_profiles")
-        count = (await cursor.fetchone())[0]
-        if count == 0:
-            now = datetime.utcnow().isoformat()
-            default_phases = json.dumps([
-                {"phase": "planning", "prompts": ["/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"], "marker": "[PLANNING_COMPLETE]"},
-                {"phase": "developing", "prompts": ["/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}"], "marker": "[DEVELOPING_COMPLETE]"},
-                {"phase": "review", "prompts": ["/open-pr --draft parent:{PARENT_BRANCH}"], "marker": "[PR_COMPLETE]"},
-            ])
-            await db.execute(
-                "INSERT INTO agent_profiles (name, command, args_template, log_format, is_default, phases_config, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    "Claude Code", "claude",
-                    "--dangerously-skip-permissions",
-                    "plain-text", 1, default_phases, now, now,
-                ),
-            )
-
-        await db.commit()
+    # Run migrations
+    applied, pending = run_migrations(db_path)
+    if applied > 0:
+        print(f"[init_db] Applied {applied} migration(s)")
 
 
 def _generate_id() -> str:

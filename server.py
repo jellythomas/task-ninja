@@ -197,7 +197,7 @@ run_scheduler = RunScheduler(state, orchestrator.start)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db_path = config.get("database", {}).get("path", "task_ninja.db")
-    await init_db(db_path)
+    init_db(db_path)  # Now synchronous - uses yoyo migrations
     print(f"[server] Database initialized at {db_path}", file=sys.stderr)
 
     # Restore orchestrator state from DB on startup
