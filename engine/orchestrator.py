@@ -365,10 +365,11 @@ class Orchestrator:
             worker_skip_permissions = False  # already in args_template if needed
             worker_execute_command = None  # already in args_template
         else:
-            worker_command = claude_cfg.get("command", "claude")
-            worker_flags = claude_cfg.get("flags", ["--print"])
-            worker_skip_permissions = claude_cfg.get("skip_permissions", True)
-            worker_execute_command = claude_cfg.get("execute_command", "/execute-jira-task")
+            # Fallback when no agent profile exists (DB always seeds one, but just in case)
+            worker_command = "claude"
+            worker_flags = ["--print"]
+            worker_skip_permissions = True
+            worker_execute_command = "/execute-jira-task"
 
         # Parse phases_config from profile
         phases_config = None

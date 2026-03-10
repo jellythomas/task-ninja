@@ -6,23 +6,6 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 **Works on macOS, Linux, and Windows.** Just install Python 3.10+ and run — everything else is auto-configured on first launch.
 
-## What makes Task Ninja different
-
-Most AI coding tools (Claude Code, Devin, Cursor, Codex) run **one task at a time** in a **single terminal**. Task Ninja is an **orchestration layer** that turns any AI CLI agent into a parallel ticket execution engine.
-
-| | Single AI Agent (Claude Code, Devin, Cursor) | Task Ninja |
-|---|---|---|
-| **Scope** | One task, one terminal | Entire Jira epics — queue and execute many tickets |
-| **Parallelism** | Sequential — finish one, start next | Configurable parallel workers (2, 4, 8+) |
-| **Git isolation** | Single branch checkout | Auto-creates git worktrees per ticket — zero conflicts |
-| **Jira awareness** | None — you copy-paste context | Load from epics, auto-sync board state to Jira |
-| **Visibility** | One terminal output | Visual kanban board + live split-pane terminals per worker |
-| **Phase pipeline** | Single prompt | Structured planning → developing → review with resume on retry |
-| **PR creation** | Manual | Auto-opens draft PRs on completion |
-| **Failure handling** | Crashes — you restart | Watchdog auto-retries with configurable delay and limits |
-| **Multi-repo** | One repo at a time | Multiple repos with auto-matching by ticket prefix |
-| **Access** | Local only | Run locally, supervise from phone via Tailscale/ngrok |
-
 ## Features
 
 - **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
@@ -162,7 +145,7 @@ Configure which AI CLI agent executes tickets:
 
 **Print mode**: Runs a single command and exits. Simpler but no live interaction.
 
-For interactive mode, configure phases in the agent profile (or `config.yaml`):
+For interactive mode, configure phases in the agent profile:
 
 ```yaml
 phases:

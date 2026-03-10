@@ -1,40 +1,10 @@
-server:
-  host: "127.0.0.1"
-  port: 8420
-
 orchestrator:
-  max_parallel: 2
-  poll_interval: 5
-  worker_timeout: 1800  # 30 min, 0 = unlimited
+  poll_interval: 5  # seconds between queue checks
 
 claude:
-  command: "claude"
-  skip_permissions: true
   idle_timeout: 10  # seconds, debounce fallback when no marker detected
 
-  # Phase pipeline (fallback when agent profile has no phases_config)
-  phases:
-    planning:
-      commands:
-        - "/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"
-      marker: "[PLANNING_COMPLETE]"
-    developing:
-      commands:
-        - "/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}"
-      marker: "[DEVELOPING_COMPLETE]"
-    review:
-      commands:
-        - "/open-pr --draft parent:{PARENT_BRANCH}"
-      marker: "[PR_COMPLETE]"
-
-  # Legacy single-command mode (used if no phases defined and no profile phases_config)
-  # execute_command: "/execute-jira-task"
-  # flags: ["--print", "--verbose", "--output-format", "stream-json"]
-
 mcp:
-  # The orchestrator connects to mcp-atlassian-with-bitbucket as an MCP client
-  # It reads the server config from Claude Code settings automatically
-  atlassian_server: "mcp-atlassian-with-bitbucket"
   # Jira status mapping: board state -> Jira transition name
   jira_status_mapping:
     planning: "In Progress"
@@ -45,7 +15,6 @@ mcp:
 git:
   worktree_dir: ".worktrees"
   branch_prefix: "feat"
-  cleanup_worktrees: true
 
 database:
   path: "task_ninja.db"

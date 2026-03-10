@@ -59,9 +59,22 @@ def _ensure_config():
     if config_path.exists():
         return
     default_config = """# Task Ninja configuration
-server:
-  host: "127.0.0.1"
-  port: 8420
+orchestrator:
+  poll_interval: 5
+
+claude:
+  idle_timeout: 10
+
+mcp:
+  jira_status_mapping:
+    planning: "In Progress"
+    developing: "In Progress"
+    review: "In Review"
+    done: "Done"
+
+git:
+  worktree_dir: ".worktrees"
+  branch_prefix: "feat"
 
 database:
   path: "task_ninja.db"
@@ -174,8 +187,7 @@ config = yaml.safe_load(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
 state = StateManager(config.get("database", {}).get("path", "task_ninja.db"))
 broadcaster = Broadcaster()
 orchestrator = Orchestrator(state, broadcaster, config)
-claude_cfg = config.get("claude", {})
-claude_helper = ClaudeHelper(claude_cfg.get("command", "claude"), claude_cfg.get("skip_permissions", True))
+claude_helper = ClaudeHelper("claude", skip_permissions=True)
 jira_client = JiraClient()
 terminal_manager = TerminalManager()
 notifier = Notifier(state)
@@ -1222,12 +1234,12 @@ if __name__ == "__main__":
         print(f"")
         sys.exit(0)
 
-    # .env takes precedence, then config.yaml, then defaults
+    # .env takes precedence, then defaults
     remote = get_env("TASK_NINJA_REMOTE_ACCESS", "false").lower() == "true"
-    host = get_env("TASK_NINJA_HOST") or config.get("server", {}).get("host", "127.0.0.1")
+    host = get_env("TASK_NINJA_HOST", "127.0.0.1")
     if remote:
         host = "0.0.0.0"
-    port = int(get_env("TASK_NINJA_PORT") or config.get("server", {}).get("port", 8420))
+    port = int(get_env("TASK_NINJA_PORT", "8420"))
     if remote:
         print(f"[server] Remote access ENABLED — auth required", file=sys.stderr)
         print(f"[server] Token is hashed — use your saved token to log in", file=sys.stderr)
