@@ -72,13 +72,6 @@ class Notifier:
             tag="run-completed",
         )
 
-    async def notify_retry_scheduled(self, jira_key: str, attempt: int, delay_min: int) -> None:
-        await self.notify(
-            title=f"{jira_key} retry scheduled",
-            body=f"Attempt {attempt} in {delay_min} minutes.",
-            tag=f"retry-{jira_key}",
-        )
-
     async def _send_web_push(self, payload: dict) -> None:
         """Send Web Push notifications using pywebpush."""
         vapid_private = get_env("VAPID_PRIVATE_KEY")
