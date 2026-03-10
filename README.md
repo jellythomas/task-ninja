@@ -8,25 +8,25 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 ## What makes Task Ninja different
 
-| | Vibe Kanban / Trello / Linear | Task Ninja |
+| | Trello / Linear / Jira Board | Task Ninja |
 |---|---|---|
 | **Tickets** | You track them manually | AI agents execute them autonomously |
 | **Parallelism** | One task at a time | Multiple AI workers in parallel (configurable) |
 | **Git isolation** | Manual branch management | Auto-creates git worktrees per ticket |
 | **PR creation** | You open PRs yourself | Auto-opens draft PRs on completion |
-| **Jira sync** | Copy-paste status updates | Bidirectional — board state syncs to Jira |
-| **Terminal** | Not applicable | Live terminal streaming per worker |
-| **Agent flexibility** | Locked to one tool | Pluggable — Claude Code, Gemini CLI, or custom |
+| **Jira sync** | Copy-paste status updates | Board state auto-syncs to Jira transitions |
+| **Terminal** | Not applicable | Live interactive terminal per worker |
+| **Agent flexibility** | Locked to one tool | Pluggable — any CLI agent via configurable profiles |
 | **Retry on failure** | Manual re-run | Auto-retry with configurable delay and max attempts |
 | **Mobile access** | Cloud-hosted only | Run locally, access from phone via Tailscale/ngrok |
 
 ## Features
 
 - **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
-- **Any AI agent** — Claude Code, Gemini CLI, or any CLI tool via configurable agent profiles
+- **Any CLI agent** — Claude Code or any CLI tool via configurable agent profiles
 - **Live terminal** — watch each worker's output in real-time, tab-switch between active workers
 - **Live Process overlay** — fullscreen interactive terminal with resizable split panes, minimize to floating pill, and ad-hoc sessions for review/done tickets
-- **Jira integration** — load tickets from epics or paste Jira URLs, auto-sync status bidirectionally
+- **Jira integration** — load tickets from epics or paste Jira URLs, auto-sync board state to Jira
 - **Auto PR creation** — draft PRs opened automatically when workers finish
 - **Multi-repo support** — register multiple repositories, auto-match tickets by `[bracket]` tags in summaries
 - **3-tier assignment** — set repository, branch, and agent profile globally, per prefix group, or per ticket

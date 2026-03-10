@@ -39,7 +39,7 @@ All notable changes to Task Ninja are documented in this file.
 
 #### Multi-Repository & Agent Profiles
 - **Repository management** — register repos with path, default branch, and Jira key prefix for auto-matching
-- **Agent profiles** — configurable AI agents (Claude Code, Gemini CLI, etc.) with args templates
+- **Agent profiles** — configurable AI CLI agents with args templates and phase pipelines
 - **Per-ticket assignment** — override repository, parent branch, or agent profile per ticket
 
 #### Engine Modules (Code Quality)

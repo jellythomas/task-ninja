@@ -53,7 +53,7 @@ Detailed technical documentation for Task Ninja internals. For setup and usage, 
 |    > /open-pr --draft                              |
 |                                                   |
 |  Worker 2: worktree-mc-9173/                      |
-|    gemini -p "implement MC-9173"                  |
+|    claude --print "implement MC-9173"              |
 +---------------------------------------------------+
 ```
 
@@ -715,7 +715,7 @@ database:
 |-------------|---------|---------|
 | Python | >= 3.10 (tested 3.10–3.14) | Server runtime |
 | Git | >= 2.20 | Worktree support |
-| AI CLI agent | any | Claude Code, Gemini CLI, or custom |
+| AI CLI agent | any | Claude Code or any CLI tool via agent profiles |
 
 > Dependencies are auto-installed on first run from `requirements.txt`.
 
