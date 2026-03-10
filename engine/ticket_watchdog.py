@@ -22,13 +22,11 @@ class TicketWatchdog:
         self._timers: dict[str, asyncio.TimerHandle] = {}  # ticket_id -> handle
         self._retry_counts: dict[str, int] = {}  # ticket_id -> retries so far
         self._requeue_callback: Optional[Callable] = None  # set by orchestrator
-        self._pause_callback: Optional[Callable] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-    def set_callbacks(self, requeue_cb: Callable, pause_cb: Optional[Callable] = None):
-        """Set callbacks for retry/pause actions."""
+    def set_callbacks(self, requeue_cb: Callable):
+        """Set callbacks for retry actions."""
         self._requeue_callback = requeue_cb
-        self._pause_callback = pause_cb
 
     def _get_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None or self._loop.is_closed():

@@ -29,9 +29,6 @@ class RunStatus(str, Enum):
 _ALL_STATES = set(TicketState)
 VALID_TRANSITIONS = {state: _ALL_STATES for state in TicketState}
 
-# States where a worker is active
-ACTIVE_STATES = {TicketState.PLANNING, TicketState.DEVELOPING}
-
 
 class Ticket(BaseModel):
     id: str

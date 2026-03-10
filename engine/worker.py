@@ -560,11 +560,6 @@ class Worker:
                 await self.broadcaster.broadcast_ticket_update(
                     self.run_id, self.ticket_id, None, pr_url=pr_url
                 )
-                    await self.state.update_ticket_state(self.ticket_id, TicketState.DEVELOPING)
-                    await self.broadcaster.broadcast_ticket_update(
-                        self.run_id, self.ticket_id, TicketState.DEVELOPING
-                    )
-                    await self._sync_jira_status("developing")
 
     def _parse_stream_line(self, raw: str) -> Optional[str]:
         """Parse a line from claude --output-format stream-json. Falls back to raw text."""

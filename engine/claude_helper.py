@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sys
-from typing import Optional
 
 
 class ClaudeHelper:
@@ -69,20 +68,6 @@ class ClaudeHelper:
             print(f"[claude_helper] Jira transition failed for {jira_key}: {output[:200]}", file=sys.stderr)
         return success
 
-    async def create_draft_pr(
-        self, jira_key: str, branch_name: str, cwd: str, base_branch: str = "master"
-    ) -> Optional[dict]:
-        """Create a draft PR via Bitbucket MCP tools."""
-        prompt = (
-            f'Create a draft pull request on Bitbucket for branch "{branch_name}" targeting "{base_branch}". '
-            f'Title: "{jira_key}: Implementation". '
-            f'Use the bitbucket_create_pull_request tool. '
-            f'Return ONLY a JSON object with keys: "id", "url", "title". No explanation.'
-        )
-        output = await self.run_prompt(prompt, cwd=cwd, timeout=60)
-        result = self._parse_json_object(output)
-        return result
-
     def _parse_json_array(self, text: str) -> list[dict]:
         """Extract a JSON array from Claude's output."""
         # Try to find JSON array in the output
@@ -94,14 +79,3 @@ class ClaudeHelper:
                 pass
         print(f"[claude_helper] Could not parse JSON array from output: {text[:200]}", file=sys.stderr)
         return []
-
-    def _parse_json_object(self, text: str) -> Optional[dict]:
-        """Extract a JSON object from Claude's output."""
-        match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-        print(f"[claude_helper] Could not parse JSON object from output: {text[:200]}", file=sys.stderr)
-        return None
