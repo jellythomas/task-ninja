@@ -42,10 +42,23 @@ async def init_db(db_path: str = DB_PATH) -> None:
                     except Exception:
                         pass  # Column already exists
 
+        # Run v4 migration (idempotent)
+        v4_path = MIGRATIONS_DIR / "v4_awaiting_input.sql"
+        if v4_path.exists():
+            for stmt in v4_path.read_text().strip().split(";"):
+                stmt = stmt.strip()
+                if stmt and not stmt.startswith("--"):
+                    try:
+                        await db.execute(stmt)
+                    except Exception:
+                        pass  # Column already exists
+
         # Add columns to existing tables if missing (ALTER TABLE is not idempotent in SQLite)
         for col, tbl in [
             ("parent_branch", "runs"), ("repository_id", "runs"),
             ("repository_id", "tickets"), ("parent_branch", "tickets"), ("profile_id", "tickets"),
+            ("input_type", "tickets"), ("input_data", "tickets"),
+            ("last_completed_phase", "tickets"),
             ("jira_label", "repositories"),
         ]:
             try:
@@ -69,9 +82,9 @@ async def init_db(db_path: str = DB_PATH) -> None:
         if count == 0:
             now = datetime.utcnow().isoformat()
             default_phases = json.dumps([
-                {"phase": "planning", "prompts": ["/planning-task {JIRA_KEY}"], "marker": "[PLANNING_COMPLETE]"},
-                {"phase": "developing", "prompts": ["/developing-task {JIRA_KEY}"], "marker": "[DEVELOPING_COMPLETE]"},
-                {"phase": "review", "prompts": ["/open-pr --draft"], "marker": "[PR_COMPLETE]"},
+                {"phase": "planning", "prompts": ["/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"], "marker": "[PLANNING_COMPLETE]"},
+                {"phase": "developing", "prompts": ["/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}"], "marker": "[DEVELOPING_COMPLETE]"},
+                {"phase": "review", "prompts": ["/open-pr --draft parent:{PARENT_BRANCH}"], "marker": "[PR_COMPLETE]"},
             ])
             await db.execute(
                 "INSERT INTO agent_profiles (name, command, args_template, log_format, is_default, phases_config, created_at, updated_at) "

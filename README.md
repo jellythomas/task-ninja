@@ -25,7 +25,7 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 - **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
 - **Any AI agent** — Claude Code, Gemini CLI, or any CLI tool via configurable agent profiles
 - **Live terminal** — watch each worker's output in real-time, tab-switch between active workers
-- **Live Process overlay** — fullscreen terminal view with input bar to interact with the AI agent when it needs confirmation
+- **Live Process overlay** — fullscreen interactive terminal with resizable split panes, minimize to floating pill, and ad-hoc sessions for review/done tickets
 - **Jira integration** — load tickets from epics or paste Jira URLs, auto-sync status bidirectionally
 - **Auto PR creation** — draft PRs opened automatically when workers finish
 - **Multi-repo support** — register multiple repositories, auto-match tickets by `[bracket]` tags in summaries
@@ -149,10 +149,30 @@ Register the git repository where AI agents will create branches and worktrees:
 
 Configure which AI CLI agent executes tickets:
 
-| Agent | Command | Args Template |
-|-------|---------|---------------|
-| Claude Code | `claude` | `--print "/execute-jira-task {JIRA_KEY}"` |
-| Custom | `your-cli` | `--task {JIRA_KEY} --cwd {WORKTREE_PATH}` |
+| Agent | Command | Args Template | Mode |
+|-------|---------|---------------|------|
+| Claude Code (interactive) | `claude` | `--dangerously-skip-permissions` | Phase pipeline with live terminal |
+| Claude Code (print) | `claude` | `--print "/execute-jira-task {JIRA_KEY}"` | Single-shot, no interaction |
+| Custom | `your-cli` | `--task {JIRA_KEY} --cwd {WORKTREE_PATH}` | Depends on CLI |
+
+**Interactive mode** (recommended): Uses the phase pipeline — each phase sends a slash command to Claude and waits for a completion marker. You can interact with the AI via the Live Terminal.
+
+**Print mode**: Runs a single command and exits. Simpler but no live interaction.
+
+For interactive mode, configure phases in the agent profile (or `config.yaml`):
+
+```yaml
+phases:
+  planning:
+    commands: ["/planning-task {JIRA_KEY}"]
+    marker: "[PLANNING_COMPLETE]"
+  developing:
+    commands: ["/developing-task {JIRA_KEY}"]
+    marker: "[DEVELOPING_COMPLETE]"
+  review:
+    commands: ["/open-pr --draft"]
+    marker: "[PR_COMPLETE]"
+```
 
 **Available template variables:**
 
@@ -166,6 +186,20 @@ Configure which AI CLI agent executes tickets:
 | `{PROJECT_PATH}` | Root path of the registered repository |
 
 Click **Finish** — you're ready to go!
+
+### 4. BitBucket (Optional — for auto PR creation)
+
+For automatic draft PR creation, configure BitBucket credentials in `.env`:
+
+```env
+BITBUCKET_WORKSPACE=your-workspace
+BITBUCKET_USERNAME=your-username
+BITBUCKET_APP_PASSWORD=your-app-password
+```
+
+To create an app password: [BitBucket App Passwords](https://bitbucket.org/account/settings/app-passwords/) → Create → grant **Repositories: Write** and **Pull requests: Write** permissions.
+
+> These credentials are also used by the Claude Code MCP server (`mcp-atlassian-with-bitbucket`) for PR creation during the review phase.
 
 ---
 
@@ -250,9 +284,44 @@ WORKING_HOURS_DAYS=mon,tue,wed,thu,fri
 
 ## How It Works
 
+### Ticket Lifecycle
+
 Each ticket goes through: **Todo → Queued → Planning → Developing → Review → Done**
 
 The orchestrator picks queued tickets, creates a git worktree for each, spawns an AI agent worker, and streams output to the dashboard in real-time. On completion, it opens a draft PR and moves the ticket to Review. On failure, the watchdog can auto-retry.
+
+### Phase Pipeline
+
+Tickets are executed through a configurable phase pipeline. Each phase runs a command (slash command or prompt) and waits for a completion marker before advancing:
+
+| Phase | Default Command | Completion Marker | Ticket State |
+|-------|----------------|-------------------|-------------|
+| **Planning** | `/planning-task {JIRA_KEY}` | `[PLANNING_COMPLETE]` | Planning |
+| **Developing** | `/developing-task {JIRA_KEY}` | `[DEVELOPING_COMPLETE]` | Developing |
+| **Review** | `/open-pr --draft` | `[PR_COMPLETE]` | Review |
+
+**Phase resume on retry:** If a worker fails during the developing phase, the next retry skips the planning phase (already completed) and resumes from developing. Progress is tracked via the `last_completed_phase` field.
+
+**Review phase protection:** If the process exits during the review phase (for any reason — user closes terminal, network issue, Claude exits), the ticket stays in Review. The core work (planning + developing) is already done and the code is in the branch.
+
+### Live Terminal
+
+Two terminal views are available:
+
+- **Inline logs** — bottom panel with tab-per-ticket showing parsed log output (text-based, read-only)
+- **Live Process overlay** — fullscreen interactive xterm.js terminal connected to the worker's PTY via WebSocket
+
+The Live Process overlay supports:
+
+- **Resizable split panes** — drag dividers between terminals when viewing 2-4 workers simultaneously
+- **Minimize to pill** — collapse the overlay to a floating pill at bottom-right showing terminal count; click to restore
+- **Ad-hoc sessions** — for tickets in Review/Done/Failed state, clicking Live Terminal spawns a fresh interactive Claude session in the worktree (no phase pipeline, just a shell)
+- **Smart scroll** — terminal stays at your scroll position when reading history; only auto-scrolls if you're already at the bottom
+- **Mobile responsive** — dynamic font sizing ensures 80+ columns on any screen width
+
+### Branch Mismatch Detection
+
+If a branch already exists with a different parent than configured, the ticket moves to **Needs Input** and a modal appears asking you to: **Use As-Is** (keep branch), **Rebase** (move commits to correct parent), or **Fresh Start** (delete and recreate). See [architecture docs](docs/architecture.md#branch-mismatch-detection) for details.
 
 For the full execution flow, architecture diagrams, API reference, database schema, and configuration options, see **[docs/architecture.md](docs/architecture.md)**.
 
@@ -268,6 +337,8 @@ For the full execution flow, architecture diagrams, API reference, database sche
 | Git worktree creation failed | Run `git worktree list` and `git worktree prune` |
 | Jira API 401 | Check API token: [regenerate here](https://id.atlassian.com/manage-profile/security/api-tokens) |
 | Worker stuck in Planning/Developing | Pause and resume the ticket (spawns fresh session) |
+| Ticket stuck in "Needs Input" | Click the warning icon on the card to open the resolution modal |
+| Branch forked from wrong parent | Delete ticket, re-add with correct parent branch, choose "Fresh Start" in the mismatch modal |
 | Port 8420 in use | Set `TASK_NINJA_PORT=8421` in `.env` |
 | Lost auth token | Regenerate: `python server.py --regenerate-token` |
 | Bitbucket PR creation fails | Verify `BITBUCKET_APP_PASSWORD` in both `.env` and Claude Code MCP config |

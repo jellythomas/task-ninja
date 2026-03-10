@@ -28,7 +28,7 @@ class ClaudeHelper:
                 cwd=cwd or os.getcwd(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ},
+                env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
             )
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=timeout

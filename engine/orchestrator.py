@@ -8,7 +8,7 @@ from typing import Optional
 import yaml
 
 from engine.broadcaster import Broadcaster
-from engine.git_manager import GitManager
+from engine.git_manager import GitManager, WorktreeResult
 from engine.jira_client import JiraClient
 from engine.state import StateManager
 from engine.ticket_watchdog import TicketWatchdog
@@ -25,6 +25,7 @@ class Orchestrator:
         self.config = config
         self._workers: dict[str, Worker] = {}  # ticket_id -> Worker
         self._tasks: dict[str, asyncio.Task] = {}  # ticket_id -> Task
+        self._adhoc_terminals: dict = {}  # ticket_id -> AdHocTerminal
         self._running = False
         self._run_id: Optional[str] = None
         self.jira_client = JiraClient()
@@ -239,7 +240,7 @@ class Orchestrator:
                 t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED}
                 for t in work_tickets
             )
-            active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED} for t in work_tickets)
+            active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED, TicketState.AWAITING_INPUT} for t in work_tickets)
 
             if all_terminal and not active:
                 self._running = False
@@ -300,11 +301,36 @@ class Orchestrator:
         )
 
         try:
-            worktree_path = await git.create_worktree(jira_key, parent_branch)
+            result = await git.create_worktree(jira_key, parent_branch)
         except RuntimeError as e:
             await self._fail_ticket(ticket_id, f"Failed to create worktree: {e}")
             return
 
+        # Check for branch parent mismatch — pause and ask user
+        if result.mismatch:
+            input_data = json.dumps({
+                "current_parent": result.current_parent,
+                "expected_parent": result.expected_parent,
+                "branch_existed": result.branch_existed,
+            })
+            await self.state.update_ticket(
+                ticket_id,
+                worktree_path=result.path,
+                branch_name=await git.get_branch_name(jira_key),
+                input_type="branch_mismatch",
+                input_data=input_data,
+            )
+            await self.state.update_ticket_state(ticket_id, TicketState.AWAITING_INPUT)
+            await self.broadcaster.broadcast_ticket_update(
+                self._run_id, ticket_id, TicketState.AWAITING_INPUT,
+                input_type="branch_mismatch",
+                input_data=json.loads(input_data),
+            )
+            print(f"[orchestrator] Branch mismatch for {jira_key}: "
+                  f"expected {result.expected_parent}, got {result.current_parent}", file=sys.stderr)
+            return
+
+        worktree_path = result.path
         branch_name = await git.get_branch_name(jira_key)
         await self.state.update_ticket(
             ticket_id,
@@ -390,6 +416,89 @@ class Orchestrator:
         self._tasks[ticket_id] = asyncio.create_task(worker.run())
         self.watchdog.on_ticket_active(ticket_id)
         print(f"[orchestrator] Spawned worker for {jira_key} in {worktree_path}", file=sys.stderr)
+
+    async def resolve_input(self, ticket_id: str, choice: str) -> dict:
+        """Resolve an AWAITING_INPUT ticket based on user's choice.
+
+        Args:
+            ticket_id: The ticket to resolve
+            choice: "use_as_is" | "rebase" | "fresh_start"
+
+        Returns:
+            dict with status info
+        """
+        ticket = await self.state.get_ticket(ticket_id)
+        if not ticket:
+            raise ValueError("Ticket not found")
+        if ticket.state != TicketState.AWAITING_INPUT:
+            raise ValueError(f"Ticket is not awaiting input (state: {ticket.state})")
+        if ticket.input_type != "branch_mismatch":
+            raise ValueError(f"Unknown input_type: {ticket.input_type}")
+
+        input_data = json.loads(ticket.input_data) if ticket.input_data else {}
+        expected_parent = input_data.get("expected_parent")
+
+        # Resolve project path
+        run = await self.state.get_run(ticket.run_id)
+        git_cfg = self.config.get("git", {})
+        repo = None
+        if ticket.repository_id:
+            repo = await self.state.get_repository(ticket.repository_id)
+        elif run and run.repository_id:
+            repo = await self.state.get_repository(run.repository_id)
+        project_path = (repo.path if repo else None) or (run.project_path if run else None) or "."
+
+        git = GitManager(
+            project_path,
+            git_cfg.get("worktree_dir", ".worktrees"),
+            git_cfg.get("branch_prefix", "feat"),
+        )
+
+        result_msg = ""
+        if choice == "use_as_is":
+            result_msg = "Keeping existing branch as-is"
+
+        elif choice == "rebase":
+            if not expected_parent:
+                raise ValueError("No expected_parent in input_data for rebase")
+            try:
+                await git.rebase_onto(ticket.jira_key, expected_parent)
+                result_msg = f"Rebased onto origin/{expected_parent}"
+            except RuntimeError as e:
+                await self._fail_ticket(ticket_id, f"Rebase failed: {e}")
+                return {"status": "failed", "error": str(e)}
+
+        elif choice == "fresh_start":
+            if not expected_parent:
+                raise ValueError("No expected_parent in input_data for fresh_start")
+            try:
+                fresh_result = await git.fresh_start(ticket.jira_key, expected_parent)
+                await self.state.update_ticket(
+                    ticket_id, worktree_path=fresh_result.path
+                )
+                result_msg = f"Fresh start from origin/{expected_parent}"
+            except RuntimeError as e:
+                await self._fail_ticket(ticket_id, f"Fresh start failed: {e}")
+                return {"status": "failed", "error": str(e)}
+
+        else:
+            raise ValueError(f"Unknown choice: {choice}")
+
+        # Clear input fields and move back to queued
+        await self.state.update_ticket(
+            ticket_id, input_type=None, input_data=None
+        )
+        await self.state.update_ticket_state(ticket_id, TicketState.QUEUED)
+        await self.broadcaster.broadcast_ticket_update(
+            ticket.run_id, ticket_id, TicketState.QUEUED
+        )
+
+        # Auto-resume orchestrator if needed
+        if not self._running and ticket.run_id:
+            await self.resume(ticket.run_id)
+
+        print(f"[orchestrator] Resolved input for {ticket.jira_key}: {choice} — {result_msg}", file=sys.stderr)
+        return {"status": "resolved", "choice": choice, "message": result_msg}
 
     async def _watchdog_requeue(self, run_id: str) -> None:
         """Called by watchdog when a ticket is re-queued for retry."""

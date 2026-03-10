@@ -159,6 +159,7 @@ from models.ticket import (
     UpdateRepositoryRequest,
     UpdateScheduleRequest,
     UpdateSettingsRequest,
+    ResolveInputRequest,
     UpdateTicketAssignmentRequest,
 )
 
@@ -639,6 +640,10 @@ async def move_ticket(ticket_id: str, req: MoveTicketRequest):
             except Exception as e:
                 print(f"[move_ticket] kill_worker error (ignoring): {e}", file=sys.stderr)
 
+        # Clear phase progress when moving back to todo (full restart)
+        if req.state == TicketState.TODO:
+            await state.update_ticket(ticket_id, last_completed_phase=None, error=None)
+
         ticket = await state.update_ticket_state(ticket_id, req.state)
         print(f"[move_ticket] DB updated, state now={ticket.state}", file=sys.stderr)
 
@@ -698,6 +703,16 @@ async def interrupt_ticket(ticket_id: str):
     """Send Escape to the worker's PTY to interrupt current operation."""
     sent = orchestrator.interrupt_worker(ticket_id)
     return {"status": "interrupted" if sent else "no_worker"}
+
+
+@app.post("/api/tickets/{ticket_id}/resolve-input")
+async def resolve_ticket_input(ticket_id: str, req: ResolveInputRequest):
+    """Resolve an AWAITING_INPUT ticket (e.g., branch mismatch)."""
+    try:
+        result = await orchestrator.resolve_input(ticket_id, req.choice)
+        return result
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/tickets/{ticket_id}/retry")
@@ -1049,10 +1064,30 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
             if worker.is_running:
                 break
 
+    # If no active worker, try reusing or spawning an ad-hoc terminal for review/done tickets
+    adhoc = None
     if not worker or not worker.is_running:
-        await websocket.accept()
-        await websocket.close(code=4004, reason="No running process for this ticket")
-        return
+        # Check for existing ad-hoc terminal first
+        existing_adhoc = orchestrator._adhoc_terminals.get(ticket_id)
+        if existing_adhoc and existing_adhoc.is_running:
+            worker = existing_adhoc
+            adhoc = existing_adhoc
+        else:
+            # Clean up dead ad-hoc terminal if present
+            if existing_adhoc:
+                orchestrator._adhoc_terminals.pop(ticket_id, None)
+            # Spawn new ad-hoc terminal for review/done/failed tickets
+            ticket = await state.get_ticket(ticket_id)
+            if ticket and ticket.worktree_path and ticket.state in ('review', 'done', 'failed'):
+                from engine.worker import AdHocTerminal
+                adhoc = AdHocTerminal(worktree_path=ticket.worktree_path)
+                await adhoc.start()
+                orchestrator._adhoc_terminals[ticket_id] = adhoc
+                worker = adhoc
+            else:
+                await websocket.accept()
+                await websocket.close(code=4004, reason="No running process for this ticket")
+                return
 
     await websocket.accept()
     await worker.attach_viewer(websocket)
@@ -1080,6 +1115,9 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
         pass
     finally:
         worker.detach_viewer(websocket)
+        # Clean up ad-hoc terminal if no more viewers and process died
+        if adhoc and not adhoc._viewers and not adhoc.is_running:
+            orchestrator._adhoc_terminals.pop(ticket_id, None)
 
 
 @app.post("/api/tickets/{ticket_id}/terminal-input")

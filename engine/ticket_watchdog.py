@@ -179,9 +179,9 @@ class TicketWatchdog:
     def _get_worker_timeout(self) -> int:
         """Get worker timeout in seconds."""
         try:
-            return int(get_env("WORKER_TIMEOUT_MINUTES", "30")) * 60
+            return int(get_env("WORKER_TIMEOUT_MINUTES", "0")) * 60
         except ValueError:
-            return 1800
+            return 0
 
     def _is_working_hours_enabled(self) -> bool:
         return get_env("WORKING_HOURS_ENABLED", "false").lower() == "true"

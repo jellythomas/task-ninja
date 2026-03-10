@@ -10,12 +10,12 @@ Detailed technical documentation for Task Ninja internals. For setup and usage, 
 +---------------------------------------------------+
 |              Web UI (Kanban Dashboard)             |
 |                                                   |
-|  +--------+--------+------+------+------+------+  |
-|  |Todo    |Queued  |Plan  |Dev   |Review|Done  |  |
-|  |        |        |      |      |      |      |  |
-|  |MC-9180 |MC-9177 |      |MC-917|MC-917|MC-917|  |
-|  |MC-9181 |MC-9178 |      |  4   |  3   |  2   |  |
-|  +--------+--------+------+------+------+------+  |
+|  +------+------+------+------+------+------+------+  |
+|  |Todo  |Queue |Input |Plan  |Dev   |Review|Done  |  |
+|  |      |      |      |      |      |      |      |  |
+|  |MC-918|MC-917|      |      |MC-917|MC-917|MC-917|  |
+|  |MC-918|MC-917|      |      |  4   |  3   |  2   |  |
+|  +------+------+------+------+------+------+------+  |
 |                                                   |
 |  [Max Parallel: 2]  [> Start]  [|| Pause]         |
 |                                                   |
@@ -90,7 +90,11 @@ Orchestrator loop (runs continuously):
      c. Resolve parent branch: ticket > run > repo default > config default
      d. Sync from origin: git fetch origin, use origin/<branch> as start point
      e. Create git worktree for the ticket
-     f. Resolve agent profile: ticket > repo default > global default
+     f. Branch mismatch check: if branch already exists with different parent
+        -> Move ticket to Awaiting Input, broadcast SSE event
+        -> Dashboard shows modal: Use As-Is / Rebase / Fresh Start
+        -> User resolves -> ticket moves back to Queued
+     g. Resolve agent profile: ticket > repo default > global default
      g. Spawn AI agent in interactive mode (PTY-backed)
      h. Move ticket to Planning, sync Jira -> In Progress
      i. Write phase commands to PTY sequentially
@@ -167,19 +171,86 @@ Human reviews draft PR:
 
 Task Ninja has two terminal views:
 
-### Bottom Panel (Log View)
+### Bottom Panel (Inline Log View)
 - Shows parsed, timestamped log lines per ticket
 - Tab-switchable between active workers
 - Fetches history from `/api/logs/:id?tail=500`
 - Receives live updates via SSE `log` events
 - Read-only, lightweight
+- Each tab has a **close (×) button** — can be re-opened from the ticket card's "Terminal" badge
+- "Terminal" badge on ticket cards opens/focuses the inline log tab (not the fullscreen overlay)
 
-### Live Process Overlay (Fullscreen)
-- Opens from "Live Terminal" button on active ticket cards
-- Shows same clean parsed log output as bottom panel
-- Includes **input bar** at the bottom for sending text to the worker's PTY
-- Input flow: `POST /api/tickets/:id/terminal-input` -> `worker.write_input()` -> `os.write(master_fd)` -> process stdin
+### Live Process Overlay (Fullscreen xterm)
+- Opens from "Live" button on ticket cards
+- Full interactive xterm.js terminal connected via WebSocket to the worker's PTY
+- Input flow: `WebSocket /ws/terminal/:id` ↔ `worker.write_input()` ↔ `os.write(master_fd)` ↔ process stdin
 - Useful when the AI agent needs user confirmation or input
+
+**Desktop features:**
+- **Resizable split panes** — drag dividers between terminals (2-pane side-by-side or 2×2 grid, up to 4 terminals)
+- **Minimize to pill** — collapse overlay to a floating pill at bottom-right showing terminal count; click to restore with all state preserved
+- **Minimize (─) button** in top bar hides overlay without closing terminals; **Close all (✕)** destroys all terminals
+
+**Mobile features:**
+- **Dynamic font sizing** — calculates font size to guarantee 80+ columns on any screen width (prevents Claude's spinner animation from wrapping)
+- **Zero-padding layout** — removes borders and padding to maximize terminal width
+- **Single-column only** — one terminal at a time on mobile
+
+**Ad-hoc terminal sessions:**
+- For tickets in **Review/Done/Failed** state with no active worker, clicking "Live" spawns a lightweight `AdHocTerminal` — an interactive Claude session in the worktree without the phase pipeline
+- Multiple viewers can attach to the same ad-hoc session
+- Ad-hoc terminals are tracked in `orchestrator._adhoc_terminals` and cleaned up when the last viewer detaches and the process exits
+- Existing running ad-hoc terminals are reused (no duplicate sessions)
+
+**Smart scroll:**
+- Checks viewport position before writing new data
+- If user scrolled up to read history, position is preserved (no auto-scroll to bottom)
+- If user is already at the bottom, new output scrolls normally
+
+### Auto-Spawn & Auto-Close Behavior
+
+| State Transition | Fullscreen xterm | Inline Log Tab |
+|---|---|---|
+| → Planning | Auto-spawn | Auto-open + switch |
+| → Developing | Keep open (spawn if missing) | Keep tab |
+| → Review | Worker exits, Live spawns AdHocTerminal on demand | Keep tab (closeable) |
+| → Done | Worker exits, Live spawns AdHocTerminal on demand | Keep tab |
+| → Failed | Worker exits, Live spawns AdHocTerminal on demand | Keep tab (read errors) |
+| → Awaiting Input | Keep open | Keep tab |
+
+### Review Phase State Protection
+
+If a process exits during the review phase, the ticket **always stays in Review** regardless of exit code. Rationale:
+- Planning and developing phases completed successfully — the code is in the branch
+- The review phase (`/open-pr`) is best-effort; if it fails, the user can open a PR manually
+- Prevents false failures from user closing the terminal, network issues, or Claude exiting cleanly
+
+### Phase Resume on Retry
+
+When a worker fails mid-execution (quota exhaustion, connection lost, crash), the ticket moves to Failed.
+On retry, the worker **resumes from the last completed phase** instead of starting from scratch.
+
+- Phase completion is tracked via `last_completed_phase` column on the tickets table
+- When a phase's completion marker (e.g., `[PLANNING_COMPLETE]`) is detected, the column is updated
+- On retry, phases up to and including `last_completed_phase` are skipped
+- Moving a ticket back to **Todo** clears `last_completed_phase` (full restart)
+- Moving to **Queued** (retry) preserves it (resume)
+
+| `last_completed_phase` | Retry starts at |
+|---|---|
+| `NULL` | planning |
+| `planning` | developing |
+| `developing` | review |
+
+### Hidden File Copying
+
+Git worktrees only contain tracked files. Task Ninja automatically copies hidden files/dirs from the main repo root into each new worktree:
+
+Default list: `.env`, `.claude/`, `.tool-versions`, `.ruby-version`, `.node-version`, `.nvmrc`, `.python-version`
+
+- Copies happen after `git worktree add` (both new and existing branches)
+- Existing files in the worktree are not overwritten
+- Best-effort — failures don't block worktree creation
 
 ### Log Storage & Performance
 - **SQLite**: Capped at 500 lines per ticket (auto-trimmed on every insert)
@@ -192,22 +263,27 @@ Task Ninja has two terminal views:
 ## Ticket Lifecycle
 
 ```
-Todo -----> Queued -----> Planning -----> Developing -----> Review -----> Done
-  ^           |                              ^                |
-  |           v                              |                |
-  |         Failed ---(auto-retry)---------->+                |
-  +---- user drags back --------------------+---- feedback --+
+Todo --> Queued --> Planning --> Developing --> Review --> Done
+           |          ^             ^             |
+           v          |             |             |
+     Awaiting Input --+             |             |
+     (branch mismatch)              |             |
+           |                        |             |
+           v                        |             |
+         Failed ---(auto-retry)-----+             |
+           +---- user drags back -----------------+
 ```
 
-| State | Description | Jira Status | Worker |
-|-------|-------------|-------------|--------|
-| Todo | Loaded but not selected for work | (no change) | None |
-| Queued | Waiting for available worker slot | (no change) | None |
-| Planning | Worker reading ticket, creating plan | In Progress | Active (PTY) |
-| Developing | Worker implementing, testing, committing | In Progress | Active (PTY) |
-| Review | Draft PR opened, awaiting human review | In Review | None |
-| Done | PR approved/merged | Done | None |
-| Failed | Worker errored out (watchdog may auto-retry) | (no change) | None |
+| State | Description | Jira Status | Worker | DB Columns Used |
+|-------|-------------|-------------|--------|-----------------|
+| Todo | Loaded but not selected for work | (no change) | None | — |
+| Queued | Waiting for available worker slot | (no change) | None | — |
+| Awaiting Input | Needs user decision (e.g., branch mismatch) | (no change) | None | `input_type`, `input_data` |
+| Planning | Worker reading ticket, creating plan | In Progress | Active (PTY) | — |
+| Developing | Worker implementing, testing, committing | In Progress | Active (PTY) | — |
+| Review | Draft PR opened, awaiting human review | In Review | None | `pr_url`, `pr_number` |
+| Done | PR approved/merged | Done | None | — |
+| Failed | Worker errored out (watchdog may auto-retry) | (no change) | None | `error` |
 
 ---
 
@@ -222,6 +298,53 @@ Per-ticket override  >  Prefix group  >  Global (modal)  >  Repo default
 - **Global**: Parent branch and agent profile set at the top of the selection modal
 - **Prefix group**: Tickets grouped by `[bracket]` tags in their summary (e.g., `[BE]`, `[Flex]`) matching registered repo labels/names. Each group can override branch and profile.
 - **Per-ticket**: Individual ticket can override repository, branch, and agent profile
+
+---
+
+## Branch Mismatch Detection
+
+When the orchestrator creates a worktree for a ticket, it checks if the branch already exists locally. If it does, the system verifies that the branch was actually forked from the expected parent branch (the one configured for the ticket).
+
+### Why This Happens
+
+A branch mismatch occurs when:
+- A ticket was previously executed with a different parent branch
+- A branch was manually created from the wrong base (e.g., from another feature branch instead of the EPIC branch)
+- The ticket was deleted and re-added with a different parent branch setting
+
+### Detection
+
+`GitManager.create_worktree()` compares the `merge-base` of the existing branch with `origin/{expected_parent}`. If the merge-base doesn't match the tip of the expected parent, it's a mismatch.
+
+### Resolution Flow
+
+```
+Orchestrator detects mismatch
+  -> Ticket moves to AWAITING_INPUT (state)
+  -> input_type = "branch_mismatch"
+  -> input_data = {"current_parent": "feat/MC-9172", "expected_parent": "EPIC-MC-9056"}
+  -> SSE broadcast to dashboard
+  -> Dashboard auto-opens modal
+  -> User picks one of three options:
+
+  1. Use As-Is      — Keep existing branch, ignore mismatch
+  2. Rebase          — git rebase --onto origin/{expected_parent} (keeps commits, new base)
+  3. Fresh Start     — Delete branch entirely, create new from origin/{expected_parent}
+
+  -> POST /api/tickets/:id/resolve-input {choice: "rebase"}
+  -> Orchestrator executes choice
+  -> Ticket moves back to QUEUED
+  -> Normal execution continues
+```
+
+### Database Columns
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `input_type` | TEXT | Identifies which modal to show (e.g., `branch_mismatch`) |
+| `input_data` | TEXT (JSON) | Context data for the modal (survives page refresh) |
+
+Both columns are cleared (`NULL`) when the input is resolved. This is a generic mechanism — future input types (e.g., `merge_conflict`, `test_failure_retry`) can reuse the same state and columns.
 
 ---
 
@@ -316,6 +439,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     profile_id INTEGER,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
+    input_type TEXT,              -- Type of input needed (e.g., 'branch_mismatch')
+    input_data TEXT,              -- JSON context for the input modal
     error TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -412,6 +537,7 @@ CREATE INDEX IF NOT EXISTS idx_schedules_run_id ON schedules(run_id);
 | `PUT` | `/api/tickets/:id/assignment` | Update assignment `{repository_id, parent_branch, profile_id}` |
 | `POST` | `/api/tickets/:id/pause` | Pause ticket (kill worker) |
 | `POST` | `/api/tickets/:id/resume` | Resume ticket (re-queue for new worker) |
+| `POST` | `/api/tickets/:id/resolve-input` | Resolve awaiting input `{choice: "use_as_is"\|"rebase"\|"fresh_start"}` |
 | `DELETE` | `/api/tickets/:id` | Remove from board (kill worker if running) |
 
 ### Terminal

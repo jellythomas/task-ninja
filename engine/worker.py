@@ -150,7 +150,7 @@ class Worker:
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
-                env={**os.environ, "TERM": "xterm-256color"},
+                env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
             )
             os.close(slave_fd)  # Parent doesn't need slave end
 
@@ -202,6 +202,11 @@ class Worker:
         except Exception as e:
             if self._cancelled:
                 return False  # Killed intentionally — don't overwrite state
+            # Don't overwrite review/done state with FAILED (legacy path)
+            ticket = await self.state.get_ticket(self.ticket_id)
+            if ticket and ticket.state in (TicketState.REVIEW, TicketState.DONE):
+                print(f"[worker] Exception during {ticket.state} — keeping state: {e}", file=sys.stderr)
+                return True
             error = str(e)
             await self.state.update_ticket(self.ticket_id, error=error)
             try:
@@ -259,7 +264,7 @@ class Worker:
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
-                env={**os.environ, "TERM": "xterm-256color"},
+                env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
             )
             os.close(slave_fd)
 
@@ -285,6 +290,14 @@ class Worker:
                 "review": TicketState.REVIEW,
             }
 
+            # Determine which phases to skip (resume from last completed)
+            ticket = await self.state.get_ticket(self.ticket_id)
+            last_completed = ticket.last_completed_phase if ticket else None
+            phase_order = [p["phase"] for p in self.phases_config]
+            skip_until_after = None
+            if last_completed and last_completed in phase_order:
+                skip_until_after = last_completed
+
             for phase_cfg in self.phases_config:
                 if self._cancelled:
                     break
@@ -296,6 +309,22 @@ class Worker:
 
                 if not prompts:
                     continue
+
+                # Skip already-completed phases on retry
+                if skip_until_after:
+                    if phase_name == skip_until_after:
+                        await self.state.append_log(self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ===")
+                        await self.broadcaster.broadcast_log(
+                            self.run_id, self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
+                        )
+                        skip_until_after = None  # Next phase will run
+                        continue
+                    else:
+                        await self.state.append_log(self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ===")
+                        await self.broadcaster.broadcast_log(
+                            self.run_id, self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
+                        )
+                        continue
 
                 # Transition state
                 if ticket_state:
@@ -315,7 +344,7 @@ class Worker:
 
                 # Send all prompts for this phase as a single block
                 full_prompt = "\n".join(
-                    p.replace("{JIRA_KEY}", self.jira_key) for p in prompts
+                    p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts
                 )
                 self._send_to_pty(full_prompt + "\r")
 
@@ -325,8 +354,19 @@ class Worker:
                 if self._cancelled:
                     break
 
-                if not completed and self.process.returncode is not None:
-                    # Process died during phase
+                if completed:
+                    # Persist phase completion for resume on retry
+                    await self.state.update_ticket(self.ticket_id, last_completed_phase=phase_name)
+                elif self.process.returncode is not None:
+                    # Process died during phase — always keep review/done state
+                    # Review is the last phase; core work (planning+developing) is done.
+                    # If /open-pr failed, user can see it in terminal logs and open PR manually.
+                    ticket = await self.state.get_ticket(self.ticket_id)
+                    current_state = ticket.state if ticket else None
+                    if current_state in (TicketState.REVIEW, TicketState.DONE):
+                        print(f"[worker] Process exited (code={self.process.returncode}) during {phase_name}, ticket in {current_state} — keeping state", file=sys.stderr)
+                        await self._notify_viewers_exit(self.process.returncode)
+                        return True
                     error = f"CLI exited with code {self.process.returncode} during {phase_name}"
                     await self.state.update_ticket(self.ticket_id, error=error)
                     await self.state.update_ticket_state(self.ticket_id, TicketState.FAILED)
@@ -339,13 +379,34 @@ class Worker:
             if self._cancelled:
                 return False
 
-            # All phases complete — notify viewers
+            # All phases complete — keep session open for further interaction
+            await self.state.append_log(
+                self.ticket_id,
+                "[worker] All phases complete — session stays open for further interaction",
+            )
+            await self.broadcaster.broadcast_log(
+                self.run_id,
+                self.ticket_id,
+                "[worker] All phases complete — session stays open for further interaction",
+            )
+
+            # Wait for the process to exit naturally (user closes it or it's killed)
+            await self.process.wait()
+
+            # Drain any remaining PTY data
+            await self._drain_pty()
+
             await self._notify_viewers_exit(0)
             return True
 
         except Exception as e:
             if self._cancelled:
                 return False  # Killed intentionally — don't overwrite state
+            # Don't overwrite review/done state with FAILED (phase pipeline path)
+            ticket = await self.state.get_ticket(self.ticket_id)
+            if ticket and ticket.state in (TicketState.REVIEW, TicketState.DONE):
+                print(f"[worker] Exception during {ticket.state} — keeping state: {e}", file=sys.stderr)
+                return True
             error = str(e)
             await self.state.update_ticket(self.ticket_id, error=error)
             try:
@@ -432,7 +493,10 @@ class Worker:
                     self._output_buffer = self._output_buffer[-self._max_buffer:]
 
                 # Forward entire batch to viewers
-                await self._send_to_viewers(data)
+                try:
+                    await self._send_to_viewers(data)
+                except Exception:
+                    pass  # Never let viewer errors kill the read loop
 
                 # Write to log file
                 if hasattr(self, '_log_fh') and self._log_fh:
@@ -462,7 +526,10 @@ class Worker:
                 self._output_buffer.extend(data)
                 if len(self._output_buffer) > self._max_buffer:
                     self._output_buffer = self._output_buffer[-self._max_buffer:]
-                await self._send_to_viewers(data)
+                try:
+                    await self._send_to_viewers(data)
+                except Exception:
+                    pass
                 if hasattr(self, '_log_fh') and self._log_fh:
                     self._log_fh.write(data.decode('utf-8', errors='replace'))
                     self._log_fh.flush()
@@ -474,7 +541,7 @@ class Worker:
     async def _send_to_viewers(self, data: bytes) -> None:
         """Send raw PTY output to all connected WebSocket viewers."""
         disconnected = set()
-        for ws in self._viewers:
+        for ws in list(self._viewers):  # Copy to avoid "Set changed size during iteration"
             try:
                 await ws.send_bytes(data)
             except Exception:
@@ -485,7 +552,7 @@ class Worker:
         """Notify viewers that the process has exited."""
         msg = json.dumps({"type": "process_exit", "code": code})
         disconnected = set()
-        for ws in self._viewers:
+        for ws in list(self._viewers):  # Copy to avoid "Set changed size during iteration"
             try:
                 await ws.send_text(msg)
             except Exception:
@@ -769,3 +836,126 @@ class Worker:
                 await self.state.append_log(self.ticket_id, f"[jira] Transitioned to {target}")
         except Exception as e:
             print(f"[worker] Jira sync failed for {self.jira_key}: {e}", file=sys.stderr)
+
+
+class AdHocTerminal:
+    """Lightweight interactive Claude session for review/done tickets.
+
+    Spawns `claude --dangerously-skip-permissions` in the worktree with a PTY.
+    No phase pipeline, no state transitions — just a live terminal.
+    Exposes the same viewer interface as Worker so the WebSocket handler works.
+    """
+
+    def __init__(self, worktree_path: str, claude_command: str = "claude"):
+        self.worktree_path = worktree_path
+        self.claude_command = claude_command
+        self.process: Optional[asyncio.subprocess.Process] = None
+        self._master_fd: Optional[int] = None
+        self._viewers: set = set()
+        self._output_buffer = bytearray()
+        self._max_buffer = 256 * 1024
+        self._read_task: Optional[asyncio.Task] = None
+
+    async def start(self) -> None:
+        """Spawn an interactive Claude session in the worktree."""
+        cmd = [self.claude_command, "--dangerously-skip-permissions"]
+
+        master_fd, slave_fd = pty.openpty()
+        self._master_fd = master_fd
+
+        winsize = struct.pack("HHHH", 24, 80, 0, 0)
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        self.process = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=self.worktree_path,
+            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
+        )
+        os.close(slave_fd)
+
+        self._read_task = asyncio.create_task(self._pty_read_loop())
+        print(f"[adhoc] Spawned interactive session in {self.worktree_path} (pid={self.process.pid})", file=sys.stderr)
+
+    async def _pty_read_loop(self) -> None:
+        """Read from PTY and forward to viewers."""
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                ready = await loop.run_in_executor(
+                    None, lambda: select.select([self._master_fd], [], [], 0.5)[0]
+                )
+                if not ready:
+                    if self.process.returncode is not None:
+                        break
+                    continue
+                data = os.read(self._master_fd, 65536)
+                if not data:
+                    break
+                self._output_buffer.extend(data)
+                if len(self._output_buffer) > self._max_buffer:
+                    self._output_buffer = self._output_buffer[-self._max_buffer:]
+                try:
+                    await self._send_to_viewers(data)
+                except Exception:
+                    pass
+            except (OSError, ValueError):
+                break
+
+    async def _send_to_viewers(self, data: bytes) -> None:
+        disconnected = set()
+        for ws in list(self._viewers):
+            try:
+                await ws.send_bytes(data)
+            except Exception:
+                disconnected.add(ws)
+        self._viewers -= disconnected
+
+    async def attach_viewer(self, ws) -> None:
+        if self._output_buffer:
+            try:
+                await ws.send_bytes(bytes(self._output_buffer))
+            except Exception:
+                return
+        self._viewers.add(ws)
+
+    def detach_viewer(self, ws) -> None:
+        self._viewers.discard(ws)
+
+    def write_input(self, data: bytes) -> None:
+        if self._master_fd is not None:
+            try:
+                os.write(self._master_fd, data)
+            except OSError:
+                pass
+
+    def resize_pty(self, rows: int, cols: int) -> None:
+        if self._master_fd is not None:
+            try:
+                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
+            except OSError:
+                pass
+
+    @property
+    def is_running(self) -> bool:
+        return self.process is not None and self.process.returncode is None
+
+    async def stop(self) -> None:
+        """Terminate the session."""
+        if self.process and self.process.returncode is None:
+            self.process.terminate()
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                self.process.kill()
+        if self._master_fd is not None:
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._master_fd = None
+        if self._read_task:
+            self._read_task.cancel()

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 class TicketState(str, Enum):
     TODO = "todo"
     QUEUED = "queued"
+    AWAITING_INPUT = "awaiting_input"
     PLANNING = "planning"
     DEVELOPING = "developing"
     REVIEW = "review"
@@ -51,6 +52,9 @@ class Ticket(BaseModel):
     profile_id: Optional[int] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    input_type: Optional[str] = None
+    input_data: Optional[str] = None  # JSON blob
+    last_completed_phase: Optional[str] = None  # planning, developing, review
     error: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -222,3 +226,7 @@ class UpdateTicketAssignmentRequest(BaseModel):
     repository_id: Optional[int] = None
     parent_branch: Optional[str] = None
     profile_id: Optional[int] = None
+
+
+class ResolveInputRequest(BaseModel):
+    choice: str  # "use_as_is" | "rebase" | "fresh_start"
