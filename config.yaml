@@ -16,15 +16,15 @@ claude:
   phases:
     planning:
       commands:
-        - "/planning-task {JIRA_KEY}"
+        - "/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"
       marker: "[PLANNING_COMPLETE]"
     developing:
       commands:
-        - "/developing-task {JIRA_KEY}"
+        - "/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}"
       marker: "[DEVELOPING_COMPLETE]"
     review:
       commands:
-        - "/open-pr --draft"
+        - "/open-pr --draft parent:{PARENT_BRANCH}"
       marker: "[PR_COMPLETE]"
 
   # Legacy single-command mode (used if no phases defined and no profile phases_config)

@@ -8,17 +8,20 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 ## What makes Task Ninja different
 
-| | Trello / Linear / Jira Board | Task Ninja |
+Most AI coding tools (Claude Code, Devin, Cursor, Codex) run **one task at a time** in a **single terminal**. Task Ninja is an **orchestration layer** that turns any AI CLI agent into a parallel ticket execution engine.
+
+| | Single AI Agent (Claude Code, Devin, Cursor) | Task Ninja |
 |---|---|---|
-| **Tickets** | You track them manually | AI agents execute them autonomously |
-| **Parallelism** | One task at a time | Multiple AI workers in parallel (configurable) |
-| **Git isolation** | Manual branch management | Auto-creates git worktrees per ticket |
-| **PR creation** | You open PRs yourself | Auto-opens draft PRs on completion |
-| **Jira sync** | Copy-paste status updates | Board state auto-syncs to Jira transitions |
-| **Terminal** | Not applicable | Live interactive terminal per worker |
-| **Agent flexibility** | Locked to one tool | Pluggable — any CLI agent via configurable profiles |
-| **Retry on failure** | Manual re-run | Auto-retry with configurable delay and max attempts |
-| **Mobile access** | Cloud-hosted only | Run locally, access from phone via Tailscale/ngrok |
+| **Scope** | One task, one terminal | Entire Jira epics — queue and execute many tickets |
+| **Parallelism** | Sequential — finish one, start next | Configurable parallel workers (2, 4, 8+) |
+| **Git isolation** | Single branch checkout | Auto-creates git worktrees per ticket — zero conflicts |
+| **Jira awareness** | None — you copy-paste context | Load from epics, auto-sync board state to Jira |
+| **Visibility** | One terminal output | Visual kanban board + live split-pane terminals per worker |
+| **Phase pipeline** | Single prompt | Structured planning → developing → review with resume on retry |
+| **PR creation** | Manual | Auto-opens draft PRs on completion |
+| **Failure handling** | Crashes — you restart | Watchdog auto-retries with configurable delay and limits |
+| **Multi-repo** | One repo at a time | Multiple repos with auto-matching by ticket prefix |
+| **Access** | Local only | Run locally, supervise from phone via Tailscale/ngrok |
 
 ## Features
 
@@ -164,13 +167,13 @@ For interactive mode, configure phases in the agent profile (or `config.yaml`):
 ```yaml
 phases:
   planning:
-    commands: ["/planning-task {JIRA_KEY}"]
+    commands: ["/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"]
     marker: "[PLANNING_COMPLETE]"
   developing:
-    commands: ["/developing-task {JIRA_KEY}"]
+    commands: ["/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}"]
     marker: "[DEVELOPING_COMPLETE]"
   review:
-    commands: ["/open-pr --draft"]
+    commands: ["/open-pr --draft parent:{PARENT_BRANCH}"]
     marker: "[PR_COMPLETE]"
 ```
 
@@ -296,9 +299,9 @@ Tickets are executed through a configurable phase pipeline. Each phase runs a co
 
 | Phase | Default Command | Completion Marker | Ticket State |
 |-------|----------------|-------------------|-------------|
-| **Planning** | `/planning-task {JIRA_KEY}` | `[PLANNING_COMPLETE]` | Planning |
-| **Developing** | `/developing-task {JIRA_KEY}` | `[DEVELOPING_COMPLETE]` | Developing |
-| **Review** | `/open-pr --draft` | `[PR_COMPLETE]` | Review |
+| **Planning** | `/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}` | `[PLANNING_COMPLETE]` | Planning |
+| **Developing** | `/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}` | `[DEVELOPING_COMPLETE]` | Developing |
+| **Review** | `/open-pr --draft parent:{PARENT_BRANCH}` | `[PR_COMPLETE]` | Review |
 
 **Phase resume on retry:** If a worker fails during the developing phase, the next retry skips the planning phase (already completed) and resumes from developing. Progress is tracked via the `last_completed_phase` field.
 
