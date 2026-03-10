@@ -140,7 +140,6 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from engine.auth import AuthMiddleware, verify_ws_token
@@ -351,9 +350,6 @@ async def update_env_config(req: dict):
 
 
 # --- Static UI ---
-
-app.mount("/assets", StaticFiles(directory=Path(__file__).parent / "static" / "assets"), name="assets")
-app.mount("/js", StaticFiles(directory=Path(__file__).parent / "static" / "js"), name="js")
 
 @app.get("/")
 async def serve_ui():
