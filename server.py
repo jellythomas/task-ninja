@@ -1078,12 +1078,25 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
                 orchestrator._adhoc_terminals.pop(ticket_id, None)
             # Spawn new ad-hoc terminal for review/done/failed tickets
             ticket = await state.get_ticket(ticket_id)
-            if ticket and ticket.worktree_path and ticket.state in ('review', 'done', 'failed'):
+            if ticket and ticket.worktree_path and Path(ticket.worktree_path).is_dir() and ticket.state in ('review', 'done', 'failed'):
                 from engine.worker import AdHocTerminal
-                adhoc = AdHocTerminal(worktree_path=ticket.worktree_path)
-                await adhoc.start()
-                orchestrator._adhoc_terminals[ticket_id] = adhoc
-                worker = adhoc
+                try:
+                    adhoc = AdHocTerminal(worktree_path=ticket.worktree_path)
+                    await adhoc.start()
+                    orchestrator._adhoc_terminals[ticket_id] = adhoc
+                    worker = adhoc
+                    # Update ticket PID and broadcast so UI shows it
+                    if adhoc.process and adhoc.process.pid:
+                        await state.update_ticket(ticket_id, worker_pid=adhoc.process.pid)
+                        await broadcaster.broadcast_ticket_update(
+                            orchestrator._run_id, ticket_id, ticket.state,
+                            worker_pid=adhoc.process.pid
+                        )
+                except Exception as e:
+                    print(f"[adhoc] Failed to spawn ad-hoc terminal for {ticket_id}: {e}", file=sys.stderr)
+                    await websocket.accept()
+                    await websocket.close(code=4005, reason=f"Failed to spawn terminal: {e}")
+                    return
             else:
                 await websocket.accept()
                 await websocket.close(code=4004, reason="No running process for this ticket")
@@ -1118,6 +1131,12 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
         # Clean up ad-hoc terminal if no more viewers and process died
         if adhoc and not adhoc._viewers and not adhoc.is_running:
             orchestrator._adhoc_terminals.pop(ticket_id, None)
+            await state.update_ticket(ticket_id, worker_pid=None)
+            ticket = await state.get_ticket(ticket_id)
+            if ticket:
+                await broadcaster.broadcast_ticket_update(
+                    orchestrator._run_id, ticket_id, ticket.state, worker_pid=None
+                )
 
 
 @app.post("/api/tickets/{ticket_id}/terminal-input")

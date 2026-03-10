@@ -2425,7 +2425,14 @@
             const wasAtBottom = buf.baseY - buf.viewportY <= 1;
             if (evt.data instanceof ArrayBuffer) { term.write(new Uint8Array(evt.data)); }
             else if (typeof evt.data === 'string') {
-              try { if (JSON.parse(evt.data).type === 'pong') return; } catch {}
+              try {
+                const msg = JSON.parse(evt.data);
+                if (msg.type === 'pong') return;
+                if (msg.type === 'process_exit') {
+                  term.write(`\r\n\x1b[33m[Process exited with code ${msg.code}]\x1b[0m\r\n`);
+                  return;
+                }
+              } catch {}
               term.write(evt.data);
             }
             // If user had scrolled up, restore their position
@@ -3074,6 +3081,10 @@
                 const updates = { ...data };
                 delete updates.ticket_id;
                 if (!updates.state) delete updates.state;
+                // Track previous state for transition detection
+                if (updates.state && updates.state !== this.tickets[idx].state) {
+                  updates._prevState = this.tickets[idx].state;
+                }
                 this.tickets[idx] = { ...this.tickets[idx], ...updates };
               }
               if (data.state && ['planning', 'developing'].includes(data.state)) {
@@ -3084,10 +3095,13 @@
                   this.openInteractiveTerminal(data.ticket_id);
                 }
               }
-              // Auto-close xterm on terminal states (review/done/failed)
+              // Auto-close xterm when state transitions TO review/done/failed (not on PID-only updates)
               if (data.state && ['review', 'done', 'failed'].includes(data.state)) {
-                if (this.openTerminals.find(t => t.ticketId === data.ticket_id)) {
-                  this.closeTerminal(data.ticket_id);
+                const prevState = idx >= 0 ? (this.tickets[idx]._prevState || '') : '';
+                if (prevState && !['review', 'done', 'failed'].includes(prevState)) {
+                  if (this.openTerminals.find(t => t.ticketId === data.ticket_id)) {
+                    this.closeTerminal(data.ticket_id);
+                  }
                 }
               }
               // Auto-close inline tab on done

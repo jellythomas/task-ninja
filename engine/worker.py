@@ -904,6 +904,21 @@ class AdHocTerminal:
             except (OSError, ValueError):
                 break
 
+        # Notify viewers that process exited, then close PTY
+        import json as _json
+        exit_msg = _json.dumps({"type": "process_exit", "code": self.process.returncode if self.process else -1})
+        for ws in list(self._viewers):
+            try:
+                await ws.send_text(exit_msg)
+            except Exception:
+                pass
+        if self._master_fd is not None:
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._master_fd = None
+
     async def _send_to_viewers(self, data: bytes) -> None:
         disconnected = set()
         for ws in list(self._viewers):
