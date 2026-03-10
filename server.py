@@ -182,8 +182,13 @@ env_config = load_env()
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 config = yaml.safe_load(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
 
+# Resolve database path to absolute (relative paths are relative to project root)
+# This ensures workers running in worktree directories can still find the database
+_db_path_cfg = config.get("database", {}).get("path", "task_ninja.db")
+DB_PATH = str(Path(__file__).parent / _db_path_cfg) if not Path(_db_path_cfg).is_absolute() else _db_path_cfg
+
 # Shared instances
-state = StateManager(config.get("database", {}).get("path", "task_ninja.db"))
+state = StateManager(DB_PATH)
 broadcaster = Broadcaster()
 orchestrator = Orchestrator(state, broadcaster, config)
 claude_helper = ClaudeHelper("claude")
@@ -196,9 +201,8 @@ run_scheduler = RunScheduler(state, orchestrator.start)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db_path = config.get("database", {}).get("path", "task_ninja.db")
-    init_db(db_path)  # Now synchronous - uses yoyo migrations
-    print(f"[server] Database initialized at {db_path}", file=sys.stderr)
+    init_db(DB_PATH)  # Now synchronous - uses yoyo migrations
+    print(f"[server] Database initialized at {DB_PATH}", file=sys.stderr)
 
     # Restore orchestrator state from DB on startup
     runs = await state.list_runs()

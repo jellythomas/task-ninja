@@ -11,7 +11,8 @@ from pathlib import Path
 from yoyo import get_backend, read_migrations
 
 MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
-DB_PATH = "task_ninja.db"
+# Use absolute path to ensure migrations work regardless of cwd
+DB_PATH = str(Path(__file__).parent.parent / "task_ninja.db")
 
 
 def ensure_yoyo_installed() -> bool:

@@ -14,7 +14,9 @@ from models.ticket import (
     VALID_TRANSITIONS,
 )
 
-DB_PATH = "task_ninja.db"
+# Use absolute path to ensure worker subprocesses can find the database
+# even when running with a different cwd (e.g., git worktree directory)
+DB_PATH = str(Path(__file__).parent.parent / "task_ninja.db")
 MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
 
