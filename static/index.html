@@ -1927,11 +1927,7 @@
         async changeTicketProfile(ticketId, value) {
           const profileId = value ? parseInt(value) : null;
           try {
-            await this.api(`/api/tickets/${ticketId}/assignment`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ profile_id: profileId }),
-            });
+            await this.api('PUT', `/api/tickets/${ticketId}/assignment`, { profile_id: profileId });
             const ticket = this.tickets.find(t => t.id === ticketId);
             if (ticket) ticket.profile_id = profileId;
           } catch (e) {
