@@ -1093,7 +1093,13 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
             if ticket and ticket.worktree_path and Path(ticket.worktree_path).is_dir() and ticket.state in ('review', 'done', 'failed'):
                 from engine.worker import AdHocTerminal
                 try:
-                    adhoc = AdHocTerminal(worktree_path=ticket.worktree_path)
+                    # Resolve the ticket's agent profile command (ccs, claude, etc.)
+                    adhoc_command = "claude"
+                    if ticket.profile_id:
+                        profile = await state.get_agent_profile(ticket.profile_id)
+                        if profile and profile.command:
+                            adhoc_command = profile.command
+                    adhoc = AdHocTerminal(worktree_path=ticket.worktree_path, claude_command=adhoc_command)
                     await adhoc.start()
                     orchestrator._adhoc_terminals[ticket_id] = adhoc
                     worker = adhoc
@@ -1107,7 +1113,8 @@ async def terminal_ws(websocket: WebSocket, ticket_id: str):
                 except Exception as e:
                     print(f"[adhoc] Failed to spawn ad-hoc terminal for {ticket_id}: {e}", file=sys.stderr)
                     await websocket.accept()
-                    await websocket.close(code=4005, reason=f"Failed to spawn terminal: {e}")
+                    reason = str(e)[:120]  # WebSocket close reasons limited to 123 bytes
+                    await websocket.close(code=4005, reason=f"Spawn failed: {reason}")
                     return
             else:
                 await websocket.accept()
