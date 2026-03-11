@@ -1069,10 +1069,8 @@
                       <template x-if="ticket.repository_id && repoNameById(ticket.repository_id)">
                         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium" x-text="repoNameById(ticket.repository_id)"></span>
                       </template>
-                      <!-- Agent badge -->
-                      <template x-if="ticket.profile_id && profileNameById(ticket.profile_id)">
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-medium" x-text="profileNameById(ticket.profile_id)"></span>
-                      </template>
+                      <!-- Agent badge (display only) -->
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-medium" x-text="profileNameForSelect(ticket)"></span>
                       <!-- Inline log viewer shortcut for active/completed tickets -->
                       <template x-if="['planning','developing','review','failed'].includes(ticket.state)">
                         <button @click.stop="openInlineTerminal(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 transition flex items-center gap-1" title="View logs">
@@ -1120,12 +1118,21 @@
                         <span class="text-gray-300 ml-1" x-text="new Date(ticket.completed_at).toLocaleString()"></span>
                       </div>
                     </template>
-                    <template x-if="ticket.profile_id && profileNameById(ticket.profile_id)">
-                      <div>
-                        <span class="text-gray-500">Agent:</span>
-                        <span class="text-gray-300 ml-1" x-text="profileNameById(ticket.profile_id)"></span>
-                      </div>
-                    </template>
+                    <div>
+                      <span class="text-gray-500">Agent:</span>
+                      <template x-if="!isTicketActive(ticket)">
+                        <select @click.stop @change.stop="changeTicketProfile(ticket.id, $event.target.value)"
+                          class="ml-1 text-[11px] bg-gray-700 text-gray-300 border border-gray-600 rounded px-1 py-0.5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/50">
+                          <option value="" :selected="!ticket.profile_id" class="bg-gray-800">Default</option>
+                          <template x-for="p in agentProfiles" :key="p.id">
+                            <option :value="p.id" :selected="ticket.profile_id == p.id" x-text="p.name" class="bg-gray-800"></option>
+                          </template>
+                        </select>
+                      </template>
+                      <template x-if="isTicketActive(ticket)">
+                        <span class="text-gray-300 ml-1" x-text="profileNameById(ticket.profile_id) || 'Default'"></span>
+                      </template>
+                    </div>
                     <template x-if="ticket.worker_pid">
                       <div>
                         <span class="text-gray-500">PID:</span>
@@ -1895,6 +1902,25 @@
         profileNameById(id) {
           const p = this.agentProfiles.find(p => p.id === id);
           return p ? p.name : '';
+        },
+
+        profileNameForSelect(ticket) {
+          if (ticket.profile_id) {
+            const name = this.profileNameById(ticket.profile_id);
+            return name || 'Default';
+          }
+          return 'Default';
+        },
+
+        async changeTicketProfile(ticketId, value) {
+          const profileId = value ? parseInt(value) : null;
+          try {
+            await this.api('PUT', `/api/tickets/${ticketId}/assignment`, { profile_id: profileId });
+            const ticket = this.tickets.find(t => t.id === ticketId);
+            if (ticket) ticket.profile_id = profileId;
+          } catch (e) {
+            console.error('Failed to update agent profile:', e);
+          }
         },
 
         get isLocalAccess() {
