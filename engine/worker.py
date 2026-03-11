@@ -315,34 +315,46 @@ class Worker:
     async def _pty_read_loop(self) -> None:
         """Read from PTY master, forward to viewers, parse for logs/state.
 
-        Coalesces all available data per frame (~30fps) so xterm.js receives
-        complete escape sequences instead of partial fragments.
+        Uses run_in_executor for blocking I/O to avoid starving the event loop
+        when multiple workers run concurrently. Coalesces available data per
+        frame (~30fps) so xterm.js receives complete escape sequences.
         """
         FRAME_INTERVAL = 0.033  # ~30fps
+        loop = asyncio.get_event_loop()
+
+        def _read_batch():
+            """Blocking I/O — runs in thread executor to keep event loop free."""
+            batch = bytearray()
+            while True:
+                ready, _, _ = select.select([self._master_fd], [], [], 0)
+                if not ready:
+                    break
+                try:
+                    chunk = os.read(self._master_fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                batch.extend(chunk)
+            return bytes(batch) if batch else None
+
         while not self._cancelled:
             if self.process.returncode is not None:
                 break
 
             try:
-                # Coalesce: read ALL available data in one batch
-                batch = bytearray()
-                while True:
-                    ready, _, _ = select.select([self._master_fd], [], [], 0)
-                    if not ready:
+                # Non-blocking wait for data, then read batch in executor
+                ready = await loop.run_in_executor(
+                    None, lambda: select.select([self._master_fd], [], [], FRAME_INTERVAL)[0]
+                )
+                if not ready:
+                    if self.process.returncode is not None:
                         break
-                    try:
-                        chunk = os.read(self._master_fd, 65536)
-                    except OSError:
-                        chunk = b""
-                    if not chunk:
-                        break
-                    batch.extend(chunk)
-
-                if not batch:
-                    await asyncio.sleep(FRAME_INTERVAL)
                     continue
 
-                data = bytes(batch)
+                data = await loop.run_in_executor(None, _read_batch)
+                if not data:
+                    continue
 
                 # Store in scrollback buffer
                 self._output_buffer.extend(data)
@@ -363,8 +375,6 @@ class Worker:
                 # Parse for state transitions, PR URLs, and log broadcasting
                 text = data.decode('utf-8', errors='replace')
                 await self._process_output(text)
-
-                await asyncio.sleep(FRAME_INTERVAL)
             except (OSError, ValueError):
                 break
 
@@ -396,14 +406,17 @@ class Worker:
             pass
 
     async def _send_to_viewers(self, data: bytes) -> None:
-        """Send raw PTY output to all connected WebSocket viewers."""
-        disconnected = set()
-        for ws in list(self._viewers):  # Copy to avoid "Set changed size during iteration"
-            try:
-                await ws.send_bytes(data)
-            except Exception:
-                disconnected.add(ws)
-        self._viewers -= disconnected
+        """Send raw PTY output to all connected WebSocket viewers in parallel."""
+        if not self._viewers:
+            return
+        viewers = list(self._viewers)
+        results = await asyncio.gather(
+            *(ws.send_bytes(data) for ws in viewers),
+            return_exceptions=True,
+        )
+        disconnected = {ws for ws, r in zip(viewers, results) if isinstance(r, Exception)}
+        if disconnected:
+            self._viewers -= disconnected
 
     async def _notify_viewers_exit(self, code: int) -> None:
         """Notify viewers that the process has exited."""
@@ -428,11 +441,13 @@ class Worker:
     # --- Viewer management (attach/detach) ---
 
     async def attach_viewer(self, ws: WebSocket) -> None:
-        """Attach a WebSocket viewer. Sends scrollback buffer first."""
-        # Send buffered output so viewer sees recent history
+        """Attach a WebSocket viewer. Sends scrollback buffer in chunks."""
         if self._output_buffer:
+            buf = bytes(self._output_buffer)
+            CHUNK = 32768  # 32KB chunks to avoid blocking
             try:
-                await ws.send_bytes(bytes(self._output_buffer))
+                for i in range(0, len(buf), CHUNK):
+                    await ws.send_bytes(buf[i:i + CHUNK])
             except Exception:
                 return
         self._viewers.add(ws)
@@ -664,7 +679,9 @@ class AdHocTerminal:
 
     async def start(self) -> None:
         """Spawn an interactive Claude session in the worktree."""
-        cmd = [self.claude_command, "--dangerously-skip-permissions"]
+        import shlex
+        parts = shlex.split(self.claude_command) if " " in self.claude_command else [self.claude_command]
+        cmd = parts + ["--dangerously-skip-permissions"]
 
         master_fd, slave_fd = pty.openpty()
         self._master_fd = master_fd
@@ -726,18 +743,24 @@ class AdHocTerminal:
             self._master_fd = None
 
     async def _send_to_viewers(self, data: bytes) -> None:
-        disconnected = set()
-        for ws in list(self._viewers):
-            try:
-                await ws.send_bytes(data)
-            except Exception:
-                disconnected.add(ws)
-        self._viewers -= disconnected
+        if not self._viewers:
+            return
+        viewers = list(self._viewers)
+        results = await asyncio.gather(
+            *(ws.send_bytes(data) for ws in viewers),
+            return_exceptions=True,
+        )
+        disconnected = {ws for ws, r in zip(viewers, results) if isinstance(r, Exception)}
+        if disconnected:
+            self._viewers -= disconnected
 
     async def attach_viewer(self, ws) -> None:
         if self._output_buffer:
+            buf = bytes(self._output_buffer)
+            CHUNK = 32768
             try:
-                await ws.send_bytes(bytes(self._output_buffer))
+                for i in range(0, len(buf), CHUNK):
+                    await ws.send_bytes(buf[i:i + CHUNK])
             except Exception:
                 return
         self._viewers.add(ws)

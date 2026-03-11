@@ -29,6 +29,12 @@
     .scrollbar-thin::-webkit-scrollbar { width: 6px; }
     .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    /* xterm.js scrollbar visibility */
+    .xterm-viewport::-webkit-scrollbar { width: 8px; }
+    .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+    .xterm-viewport::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    .xterm-viewport { scrollbar-width: thin; scrollbar-color: #475569 transparent; }
     @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
     /* Volume slider */
@@ -56,13 +62,19 @@
       .terminal-tabs-row { gap: 0; }
       .terminal-tabs-row button { padding: 6px 6px !important; font-size: 10px !important; }
       .terminal-tabs-row .text-xs.text-gray-600 { padding: 6px 4px !important; font-size: 10px !important; }
-      /* Fullscreen terminal: single column, zero padding, compact header */
-      .terminal-grid-mobile { grid-template-columns: 1fr !important; padding: 0 !important; gap: 0 !important; }
-      .terminal-grid-mobile > div { border: none !important; border-radius: 0 !important; }
-      .terminal-grid-mobile .flex.items-center.justify-between { padding: 2px 6px !important; }
-      /* Hide cwd path in terminal header on mobile (too long) */
-      .terminal-grid-mobile .font-mono.truncate { display: none; }
       /* Note: xterm.js uses canvas — font size set via JS Terminal({ fontSize }) */
+    }
+    /* Fullscreen terminal overlay: mobile fixes */
+    @media (max-width: 639px) {
+      /* Compact fullscreen terminal tab bar */
+      .fullscreen-term-tabs { gap: 2px !important; }
+      .fullscreen-term-tabs .term-tab-btn { padding: 4px 8px !important; }
+      .fullscreen-term-tabs .term-tab-btn span { font-size: 12px !important; }
+      .fullscreen-term-tabs .term-tab-close { padding: 4px 6px !important; }
+      /* Hide "Closing does NOT stop processes" hint on mobile */
+      .fullscreen-term-hint { display: none !important; }
+      /* Hide cwd info bar on mobile — too long */
+      .fullscreen-term-cwd { display: none !important; }
     }
   </style>
 </head>
@@ -1615,165 +1627,55 @@
   <!-- Interactive Terminal Overlay -->
   <!-- Multi-terminal grid overlay (hidden when minimized) -->
   <div x-show="openTerminals.length > 0 && !terminalMinimized" x-transition class="fixed inset-0 bg-black/90 flex flex-col z-50">
-    <!-- Top bar -->
-    <div class="flex items-center justify-between px-4 py-1.5 bg-gray-900 border-b border-gray-800 shrink-0">
-      <div class="flex items-center gap-3">
-        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        <span class="text-sm font-medium text-white">Live Terminals</span>
-        <span class="text-[10px] text-gray-600 italic">Closing does NOT stop processes</span>
+    <!-- Top bar with terminal tabs -->
+    <div class="flex items-center justify-between px-2 py-1 bg-gray-900 border-b border-gray-800 shrink-0">
+      <div class="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-hide fullscreen-term-tabs">
+        <svg class="w-4 h-4 text-cyan-400 shrink-0 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        <!-- Terminal tabs -->
+        <template x-for="entry in openTerminals" :key="entry.ticketId + '-tab'">
+          <div class="flex items-center shrink-0 rounded-t-md border border-b-0 transition-colors cursor-pointer group"
+               :class="activeTerminalId === entry.ticketId ? 'bg-black border-gray-600 text-white shadow-lg' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white hover:bg-gray-750'"
+               @click="switchTerminal(entry.ticketId)">
+            <div class="flex items-center gap-1.5 px-4 py-2 term-tab-btn">
+              <div class="w-2 h-2 rounded-full shrink-0" :class="entry.ws && entry.ws.readyState === WebSocket.OPEN ? 'bg-emerald-500 animate-pulse-dot' : 'bg-gray-500'"></div>
+              <span class="text-sm font-semibold" x-text="entry.ticketKey"></span>
+            </div>
+            <button @click.stop="closeTerminal(entry.ticketId)" class="px-2 py-2 hover:bg-red-600/30 rounded-tr-md transition opacity-50 group-hover:opacity-100 term-tab-close" title="Close">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </template>
+        <span class="text-[10px] text-gray-600 italic shrink-0 ml-2 fullscreen-term-hint">Closing does NOT stop processes</span>
       </div>
-      <div class="flex items-center gap-1">
+      <div class="flex items-center gap-1 shrink-0 ml-2">
+        <!-- Interrupt active terminal -->
+        <button @click="interruptTerminal(activeTerminalId)" class="p-1.5 hover:bg-red-600/30 rounded-lg transition" title="Interrupt (Esc)">
+          <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+        </button>
+        <!-- Back button (mobile only — closes overlay since no floating pill on mobile) -->
+        <button @click="closeAllTerminals()" class="sm:hidden p-1.5 hover:bg-gray-800 rounded-lg transition" title="Back">
+          <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
         <!-- Minimize button (desktop only) -->
         <button @click="terminalMinimized = true; $nextTick(() => _refitAllTerminals())" class="hidden sm:block p-1.5 hover:bg-gray-800 rounded-lg transition" title="Minimize to floating pill">
           <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
         </button>
-        <!-- Close all button -->
-        <button @click="closeAllTerminals()" class="p-1.5 hover:bg-gray-800 rounded-lg transition" title="Close all terminals">
+        <!-- Close all button (desktop only, mobile uses back arrow) -->
+        <button @click="closeAllTerminals()" class="hidden sm:block p-1.5 hover:bg-gray-800 rounded-lg transition" title="Close all terminals">
           <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>
     </div>
-    <!-- Terminal layout: resizable panes on desktop, single column on mobile -->
-    <div class="flex-1 min-h-0 terminal-grid-mobile" id="terminal-grid-container"
-         @mousemove.window="if (_termSplitDragging) { $event.preventDefault(); _handleTermSplitDrag($event); }"
-         @mouseup.window="_termSplitDragging = null; document.body.style.cursor = ''; _refitAllTerminals();"
-         @touchmove.window="if (_termSplitDragging) { _handleTermSplitDrag($event.touches[0]); }"
-         @touchend.window="_termSplitDragging = null; _refitAllTerminals();">
-
-      <!-- 1 terminal: full size -->
-      <template x-if="openTerminals.length === 1">
-        <div class="w-full h-full flex flex-col border border-gray-700 rounded overflow-hidden" x-data>
-          <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="text-xs font-semibold text-cyan-400 shrink-0" x-text="openTerminals[0]?.ticketKey"></span>
-              <span class="text-[10px] text-gray-500 font-mono truncate" x-text="openTerminals[0]?.cwd"></span>
-            </div>
-            <div class="flex items-center gap-1 shrink-0">
-              <button @click="interruptTerminal(openTerminals[0]?.ticketId)" title="Interrupt (Ctrl+C)" class="p-1 hover:bg-red-600/30 rounded transition">
-                <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
-              </button>
-              <button @click="closeTerminal(openTerminals[0]?.ticketId)" title="Close terminal" class="p-1 hover:bg-gray-700 rounded transition">
-                <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-              </button>
-            </div>
+    <!-- Terminal panes: only active tab visible, all others hidden but DOM preserved -->
+    <div class="flex-1 min-h-0 relative" id="terminal-grid-container">
+      <template x-for="entry in openTerminals" :key="entry.ticketId">
+        <div class="absolute inset-0 flex flex-col"
+             x-show="activeTerminalId === entry.ticketId">
+          <!-- Active terminal info bar -->
+          <div class="flex items-center justify-between px-3 py-0.5 bg-gray-950 border-b border-gray-800 shrink-0 fullscreen-term-cwd">
+            <span class="text-[10px] text-gray-500 font-mono truncate" x-text="entry.cwd"></span>
           </div>
-          <div :id="'xterm-' + openTerminals[0]?.ticketId" class="flex-1 bg-black min-h-0"></div>
-        </div>
-      </template>
-
-      <!-- 2 terminals: side by side with draggable vertical divider -->
-      <template x-if="openTerminals.length === 2">
-        <div class="w-full h-full flex flex-row" x-data>
-          <!-- Left pane -->
-          <div class="flex flex-col border border-gray-700 rounded overflow-hidden min-h-0" :style="'width:' + termSplitX + '%'">
-            <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="text-xs font-semibold text-cyan-400 shrink-0" x-text="openTerminals[0]?.ticketKey"></span>
-                <span class="text-[10px] text-gray-500 font-mono truncate" x-text="openTerminals[0]?.cwd"></span>
-              </div>
-              <div class="flex items-center gap-1 shrink-0">
-                <button @click="interruptTerminal(openTerminals[0]?.ticketId)" title="Interrupt" class="p-1 hover:bg-red-600/30 rounded transition"><svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg></button>
-                <button @click="closeTerminal(openTerminals[0]?.ticketId)" title="Close" class="p-1 hover:bg-gray-700 rounded transition"><svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
-              </div>
-            </div>
-            <div :id="'xterm-' + openTerminals[0]?.ticketId" class="flex-1 bg-black min-h-0"></div>
-          </div>
-          <!-- Vertical divider -->
-          <div class="w-1.5 bg-gray-800 hover:bg-blue-600 cursor-col-resize flex items-center justify-center shrink-0 transition-colors group"
-               @mousedown.prevent="_termSplitDragging = 'x'; document.body.style.cursor = 'col-resize';"
-               @touchstart.prevent="_termSplitDragging = 'x';">
-            <div class="w-0.5 h-8 bg-gray-600 group-hover:bg-blue-400 rounded-full transition-colors"></div>
-          </div>
-          <!-- Right pane -->
-          <div class="flex flex-col border border-gray-700 rounded overflow-hidden min-h-0 flex-1">
-            <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="text-xs font-semibold text-cyan-400 shrink-0" x-text="openTerminals[1]?.ticketKey"></span>
-                <span class="text-[10px] text-gray-500 font-mono truncate" x-text="openTerminals[1]?.cwd"></span>
-              </div>
-              <div class="flex items-center gap-1 shrink-0">
-                <button @click="interruptTerminal(openTerminals[1]?.ticketId)" title="Interrupt" class="p-1 hover:bg-red-600/30 rounded transition"><svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg></button>
-                <button @click="closeTerminal(openTerminals[1]?.ticketId)" title="Close" class="p-1 hover:bg-gray-700 rounded transition"><svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
-              </div>
-            </div>
-            <div :id="'xterm-' + openTerminals[1]?.ticketId" class="flex-1 bg-black min-h-0"></div>
-          </div>
-        </div>
-      </template>
-
-      <!-- 3-4 terminals: 2x2 grid with draggable dividers -->
-      <template x-if="openTerminals.length >= 3">
-        <div class="w-full h-full flex flex-col" x-data>
-          <!-- Top row -->
-          <div class="flex flex-row min-h-0" :style="'height:' + termSplitY + '%'">
-            <div class="flex flex-col border border-gray-700 rounded overflow-hidden min-h-0" :style="'width:' + termSplitX + '%'">
-              <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
-                <span class="text-xs font-semibold text-cyan-400" x-text="openTerminals[0]?.ticketKey"></span>
-                <div class="flex items-center gap-1">
-                  <button @click="interruptTerminal(openTerminals[0]?.ticketId)" class="p-1 hover:bg-red-600/30 rounded"><svg class="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><rect x="9" y="9" width="6" height="6" rx="1" stroke-width="2"/></svg></button>
-                  <button @click="closeTerminal(openTerminals[0]?.ticketId)" class="p-1 hover:bg-gray-700 rounded"><svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
-                </div>
-              </div>
-              <div :id="'xterm-' + openTerminals[0]?.ticketId" class="flex-1 bg-black min-h-0"></div>
-            </div>
-            <div class="w-1.5 bg-gray-800 hover:bg-blue-600 cursor-col-resize flex items-center justify-center shrink-0 transition-colors group"
-                 @mousedown.prevent="_termSplitDragging = 'x'; document.body.style.cursor = 'col-resize';"
-                 @touchstart.prevent="_termSplitDragging = 'x';">
-              <div class="w-0.5 h-8 bg-gray-600 group-hover:bg-blue-400 rounded-full transition-colors"></div>
-            </div>
-            <div class="flex flex-col border border-gray-700 rounded overflow-hidden min-h-0 flex-1">
-              <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
-                <span class="text-xs font-semibold text-cyan-400" x-text="openTerminals[1]?.ticketKey"></span>
-                <div class="flex items-center gap-1">
-                  <button @click="interruptTerminal(openTerminals[1]?.ticketId)" class="p-1 hover:bg-red-600/30 rounded"><svg class="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><rect x="9" y="9" width="6" height="6" rx="1" stroke-width="2"/></svg></button>
-                  <button @click="closeTerminal(openTerminals[1]?.ticketId)" class="p-1 hover:bg-gray-700 rounded"><svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
-                </div>
-              </div>
-              <div :id="'xterm-' + openTerminals[1]?.ticketId" class="flex-1 bg-black min-h-0"></div>
-            </div>
-          </div>
-          <!-- Horizontal divider -->
-          <div class="h-1.5 bg-gray-800 hover:bg-blue-600 cursor-row-resize flex items-center justify-center shrink-0 transition-colors group"
-               @mousedown.prevent="_termSplitDragging = 'y'; document.body.style.cursor = 'row-resize';"
-               @touchstart.prevent="_termSplitDragging = 'y';">
-            <div class="w-8 h-0.5 bg-gray-600 group-hover:bg-blue-400 rounded-full transition-colors"></div>
-          </div>
-          <!-- Bottom row -->
-          <div class="flex flex-row min-h-0 flex-1">
-            <div class="flex flex-col border border-gray-700 rounded overflow-hidden min-h-0" :style="'width:' + termSplitX + '%'">
-              <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
-                <span class="text-xs font-semibold text-cyan-400" x-text="openTerminals[2]?.ticketKey"></span>
-                <div class="flex items-center gap-1">
-                  <button @click="interruptTerminal(openTerminals[2]?.ticketId)" class="p-1 hover:bg-red-600/30 rounded"><svg class="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><rect x="9" y="9" width="6" height="6" rx="1" stroke-width="2"/></svg></button>
-                  <button @click="closeTerminal(openTerminals[2]?.ticketId)" class="p-1 hover:bg-gray-700 rounded"><svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
-                </div>
-              </div>
-              <div :id="'xterm-' + openTerminals[2]?.ticketId" class="flex-1 bg-black min-h-0"></div>
-            </div>
-            <template x-if="openTerminals.length >= 4">
-              <div class="w-1.5 bg-gray-800 hover:bg-blue-600 cursor-col-resize flex items-center justify-center shrink-0 transition-colors group"
-                   @mousedown.prevent="_termSplitDragging = 'x'; document.body.style.cursor = 'col-resize';"
-                   @touchstart.prevent="_termSplitDragging = 'x';">
-                <div class="w-0.5 h-8 bg-gray-600 group-hover:bg-blue-400 rounded-full transition-colors"></div>
-              </div>
-            </template>
-            <template x-if="openTerminals.length >= 4">
-              <div class="flex flex-col border border-gray-700 rounded overflow-hidden min-h-0 flex-1">
-                <div class="flex items-center justify-between px-3 py-1 bg-gray-850 border-b border-gray-700 shrink-0">
-                  <span class="text-xs font-semibold text-cyan-400" x-text="openTerminals[3]?.ticketKey"></span>
-                  <div class="flex items-center gap-1">
-                    <button @click="interruptTerminal(openTerminals[3]?.ticketId)" class="p-1 hover:bg-red-600/30 rounded"><svg class="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><rect x="9" y="9" width="6" height="6" rx="1" stroke-width="2"/></svg></button>
-                    <button @click="closeTerminal(openTerminals[3]?.ticketId)" class="p-1 hover:bg-gray-700 rounded"><svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
-                  </div>
-                </div>
-                <div :id="'xterm-' + openTerminals[3]?.ticketId" class="flex-1 bg-black min-h-0"></div>
-              </div>
-            </template>
-            <!-- If only 3 terminals, bottom-right is empty but bottom-left takes full remaining -->
-            <template x-if="openTerminals.length === 3">
-              <div class="flex-1"></div>
-            </template>
-          </div>
+          <div :id="'xterm-' + entry.ticketId" class="flex-1 bg-black min-h-0 overflow-hidden"></div>
         </div>
       </template>
     </div>
@@ -1821,9 +1723,7 @@
         editProfileModal: { show: false, id: null, data: {}, showPhases: false, phases: [] },
         openTerminals: [],  // Array of { ticketId, ticketKey, cwd, xterm, fitAddon, ws, resizeHandler }
         terminalMinimized: false,  // true = overlay hidden, floating pill shown
-        termSplitX: 50,  // Vertical divider position (%) for 2+ terminals
-        termSplitY: 50,  // Horizontal divider position (%) for 3+ terminals
-        _termSplitDragging: null,  // 'x' | 'y' | null
+        activeTerminalId: null,  // ticketId of active tab in fullscreen terminal
         terminalHeight: parseInt(localStorage.getItem('tn_terminalHeight') || '224'),
         terminalOpen: JSON.parse(localStorage.getItem('tn_terminalOpen') ?? 'true'),
         _terminalDragging: false,
@@ -2122,6 +2022,7 @@
         },
 
         async switchTerminal(ticketId) {
+          // Inline terminal logs
           this.activeTerminal = ticketId;
           const hasLogs = (this.terminalLogs[ticketId]?.length || 0) > 0;
           await this.fetchLogsForTicket(ticketId, !hasLogs);
@@ -2129,6 +2030,11 @@
             const el = document.getElementById('terminal-output');
             if (el) el.scrollTop = el.scrollHeight;
           });
+          // Fullscreen terminal tab
+          if (this.openTerminals.find(t => t.ticketId === ticketId)) {
+            this.activeTerminalId = ticketId;
+            this.$nextTick(() => this._refitAllTerminals());
+          }
         },
 
         openInlineTerminal(ticketId) {
@@ -2358,8 +2264,9 @@
           const ticket = this.tickets.find(t => t.id === ticketId);
           if (!ticket) return;
 
-          // If already open, just restore from minimized if needed
+          // If already open, switch to its tab and restore from minimized
           if (this.openTerminals.find(t => t.ticketId === ticketId)) {
+            this.activeTerminalId = ticketId;
             this.terminalMinimized = false;
             this.$nextTick(() => this._refitAllTerminals());
             return;
@@ -2378,24 +2285,20 @@
             cwd: ticket.worktree_path || '',
             xterm: null, fitAddon: null, ws: null, resizeHandler: null,
           });
+          this.activeTerminalId = ticketId;
 
-          // Wait for DOM
+          // Wait for Alpine x-for to render the new terminal container
           await this.$nextTick();
-          await new Promise(r => setTimeout(r, 80));
+          await new Promise(r => setTimeout(r, 50));
 
           const entry = this.openTerminals.find(t => t.ticketId === ticketId);
           if (!entry) return;
           const container = document.getElementById('xterm-' + ticketId);
           if (!container) return;
 
-          // Calculate font size to guarantee at least 80 columns
-          // Monospace char width ≈ fontSize * 0.6
-          const containerWidth = container.clientWidth || window.innerWidth;
-          const targetCols = 80;
-          const maxFontForTarget = Math.floor(containerWidth / (targetCols * 0.602));
-          const termFontSize = Math.max(7, Math.min(maxFontForTarget, 13));
+          const isMobile = window.innerWidth < 640;
           const term = new Terminal({
-            cursorBlink: true, fontSize: termFontSize,
+            cursorBlink: true, fontSize: isMobile ? 10 : 13,
             fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
             theme: { background: '#000000', foreground: '#e2e8f0', cursor: '#60a5fa', selectionBackground: '#334155' },
             scrollback: 10000, convertEol: true,
@@ -2407,6 +2310,23 @@
           entry.xterm = term;
           entry.fitAddon = fitAddon;
 
+          // On mobile, the overlay x-transition may not be settled yet.
+          // Schedule extra refit after transition completes to get correct cols.
+          if (isMobile) {
+            setTimeout(() => {
+              fitAddon.fit();
+              // Send corrected size to PTY if ws is already open
+              if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                entry.ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+                setTimeout(() => {
+                  if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                    entry.ws.send(new TextEncoder().encode('\x0c'));
+                  }
+                }, 150);
+              }
+            }, 350);
+          }
+
           // WebSocket
           const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
           const token = this._authToken || localStorage.getItem('tn_auth_token') || '';
@@ -2417,12 +2337,22 @@
 
           ws.onopen = () => {
             wsConnected = true;
+            // Re-fit once more to ensure correct dimensions before sending to PTY
+            fitAddon.fit();
             ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+            // After scrollback replay settles, force CLI to redraw at correct size.
+            // attach_viewer sends old-width scrollback before this resize takes effect.
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(new TextEncoder().encode('\x0c'));  // Ctrl+L = full redraw
+              }
+            }, isMobile ? 600 : 400);
           };
           ws.onmessage = (evt) => {
-            // Check if user is at the bottom BEFORE writing (write auto-scrolls)
+            // Capture scroll state BEFORE writing (write auto-scrolls to bottom)
             const buf = term.buffer.active;
             const wasAtBottom = buf.baseY - buf.viewportY <= 1;
+            const savedViewportY = buf.viewportY;
             if (evt.data instanceof ArrayBuffer) { term.write(new Uint8Array(evt.data)); }
             else if (typeof evt.data === 'string') {
               try {
@@ -2435,9 +2365,9 @@
               } catch {}
               term.write(evt.data);
             }
-            // If user had scrolled up, restore their position
+            // If user had scrolled up, restore their exact position
             if (!wasAtBottom) {
-              term.scrollToLine(buf.viewportY);
+              term.scrollToLine(savedViewportY);
             }
           };
           ws.onclose = (evt) => {
@@ -2467,50 +2397,43 @@
             if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
           });
 
-          // Resize handler — re-fit all open terminals
-          entry.resizeHandler = () => {
-            for (const t of this.openTerminals) {
-              if (t.fitAddon && t.xterm) {
-                t.fitAddon.fit();
-                if (t.ws && t.ws.readyState === WebSocket.OPEN) {
-                  t.ws.send(JSON.stringify({ type: 'resize', rows: t.xterm.rows, cols: t.xterm.cols }));
-                }
-              }
-            }
-          };
+          // Resize handler — delegates to _refitAllTerminals (includes dynamic font sizing)
+          entry.resizeHandler = () => this._refitAllTerminals();
           window.addEventListener('resize', entry.resizeHandler);
 
-          // Re-fit all terminals since grid layout changed
+          // Re-fit all terminals since grid layout changed (existing terminals get new container sizes)
           this._refitAllTerminals();
         },
 
         _refitAllTerminals() {
-          setTimeout(() => {
-            for (const t of this.openTerminals) {
-              if (t.fitAddon && t.xterm) {
-                t.fitAddon.fit();
-                if (t.ws && t.ws.readyState === WebSocket.OPEN) {
-                  t.ws.send(JSON.stringify({ type: 'resize', rows: t.xterm.rows, cols: t.xterm.cols }));
+          const doRefit = () => {
+            // Only refit the active terminal (others are hidden with display:none, so fitAddon can't measure)
+            const active = this.openTerminals.find(t => t.ticketId === this.activeTerminalId);
+            if (active && active.fitAddon && active.xterm) {
+              const container = document.getElementById('xterm-' + active.ticketId);
+              // Skip if container has no dimensions yet (transition not settled)
+              if (container && container.clientWidth < 10) return;
+              const oldCols = active.xterm.cols;
+              const oldRows = active.xterm.rows;
+              active.fitAddon.fit();
+              const newCols = active.xterm.cols;
+              const newRows = active.xterm.rows;
+              if (active.ws && active.ws.readyState === WebSocket.OPEN) {
+                active.ws.send(JSON.stringify({ type: 'resize', rows: newRows, cols: newCols }));
+                if (oldCols !== newCols || oldRows !== newRows) {
+                  setTimeout(() => {
+                    if (active.ws && active.ws.readyState === WebSocket.OPEN) {
+                      active.ws.send(new TextEncoder().encode('\x0c'));
+                    }
+                  }, 150);
                 }
               }
             }
-          }, 100);
-        },
-
-        _handleTermSplitDrag(evt) {
-          const container = document.getElementById('terminal-grid-container');
-          if (!container) return;
-          const rect = container.getBoundingClientRect();
-          if (this._termSplitDragging === 'x') {
-            const pct = ((evt.clientX - rect.left) / rect.width) * 100;
-            this.termSplitX = Math.max(20, Math.min(80, pct));
-          } else if (this._termSplitDragging === 'y') {
-            const pct = ((evt.clientY - rect.top) / rect.height) * 100;
-            this.termSplitY = Math.max(20, Math.min(80, pct));
-          }
-          // Debounced refit during drag
-          clearTimeout(this._splitRefitTimer);
-          this._splitRefitTimer = setTimeout(() => this._refitAllTerminals(), 50);
+          };
+          // First attempt after short delay
+          setTimeout(doRefit, 100);
+          // Second attempt after transitions settle (important for mobile)
+          setTimeout(doRefit, 350);
         },
 
         async interruptTerminal(ticketId) {
@@ -2525,12 +2448,15 @@
           if (entry.ws) entry.ws.close();
           if (entry.xterm) entry.xterm.dispose();
           this.openTerminals.splice(idx, 1);
-          // Reset split ratios when layout changes significantly
-          if (this.openTerminals.length <= 1) {
-            this.termSplitX = 50;
-            this.termSplitY = 50;
+          // If we closed the active tab, switch to an adjacent one
+          if (this.activeTerminalId === ticketId) {
+            if (this.openTerminals.length > 0) {
+              const newIdx = Math.min(idx, this.openTerminals.length - 1);
+              this.activeTerminalId = this.openTerminals[newIdx].ticketId;
+            } else {
+              this.activeTerminalId = null;
+            }
           }
-          // Re-fit remaining terminals since layout changed
           this._refitAllTerminals();
         },
 
@@ -3087,8 +3013,8 @@
                 }
                 this.tickets[idx] = { ...this.tickets[idx], ...updates };
               }
-              if (data.state && ['planning', 'developing'].includes(data.state)) {
-                // Auto-open inline log tab
+              if (data.state && ['planning', 'developing'].includes(data.state) && !data.paused) {
+                // Auto-open inline log tab (only when actively running, not paused)
                 this.openInlineTerminal(data.ticket_id);
                 // Auto-spawn fullscreen xterm if not already open
                 if (!this.openTerminals.find(t => t.ticketId === data.ticket_id)) {

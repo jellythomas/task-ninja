@@ -160,6 +160,38 @@ phases:
     marker: "[PR_COMPLETE]"
 ```
 
+#### Completion Markers
+
+A **completion marker** is any unique string that signals task-ninja to advance to the next phase. The worker watches the terminal output and transitions when it detects the marker. The marker value is fully configurable — `[PLANNING_COMPLETE]`, `---DONE---`, or any unique string works, as long as the phase config and the command agree on the same string.
+
+**Where does the marker get printed?** There are two approaches:
+
+1. **Baked into the /command** — the command file itself instructs Claude to print the marker as its last line. This is the recommended approach for reusable commands.
+
+   ```yaml
+   # The /planning-task command already contains: print "[PLANNING_COMPLETE]" at the end
+   commands: ["/planning-task {JIRA_KEY}"]
+   marker: "[PLANNING_COMPLETE]"
+   ```
+
+2. **Appended after the command** — add a direct instruction after the slash command. Useful for direct prompts or commands that don't have a built-in marker.
+
+   ```yaml
+   # Direct prompt example — marker instruction is part of the prompt
+   commands: ["Analyze ticket {JIRA_KEY} and create a plan. When done, print [PLANNING_COMPLETE]"]
+   marker: "[PLANNING_COMPLETE]"
+   ```
+
+**Examples by phase:**
+
+| Phase | Using /commands | Using direct prompts |
+|-------|----------------|---------------------|
+| Planning | `/planning-task {JIRA_KEY}` | `"Analyze {JIRA_KEY} and write a plan to .claude/plans.md. Print [PLANNING_COMPLETE] when done."` |
+| Developing | `/developing-task {JIRA_KEY}` | `"Implement {JIRA_KEY} following .claude/plans.md. Print [DEVELOPING_COMPLETE] when done."` |
+| Review | `/open-pr --draft parent:{PARENT_BRANCH}` | `"Create a draft PR targeting {PARENT_BRANCH}. Print [PR_COMPLETE] when done."` |
+
+> **Tip:** If using /commands, the marker should be printed as the **very last output** of the command. A fallback idle timeout ensures progress even if the marker is missed.
+
 **Available template variables:**
 
 | Variable | Description |
@@ -282,8 +314,8 @@ Tickets are executed through a configurable phase pipeline. Each phase runs a co
 
 | Phase | Default Command | Completion Marker | Ticket State |
 |-------|----------------|-------------------|-------------|
-| **Planning** | `/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}` | `[PLANNING_COMPLETE]` | Planning |
-| **Developing** | `/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}` | `[DEVELOPING_COMPLETE]` | Developing |
+| **Planning** | `/planning-task {JIRA_KEY}` | `[PLANNING_COMPLETE]` | Planning |
+| **Developing** | `/developing-task {JIRA_KEY}` | `[DEVELOPING_COMPLETE]` | Developing |
 | **Review** | `/open-pr --draft parent:{PARENT_BRANCH}` | `[PR_COMPLETE]` | Review |
 
 **Phase resume on retry:** If a worker fails during the developing phase, the next retry skips the planning phase (already completed) and resumes from developing. Progress is tracked via the `last_completed_phase` field.
