@@ -12,8 +12,7 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 - **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
 - **Any CLI agent** — Claude Code or any CLI tool via configurable agent profiles
-- **Live terminal** — watch each worker's output in real-time, tab-switch between active workers
-- **Live Process overlay** — fullscreen interactive terminal with resizable split panes, minimize to floating pill, and ad-hoc sessions for review/done tickets
+- **Live terminal** — fullscreen interactive terminal with tab switching, smart scroll, and mobile-responsive sizing
 - **Jira integration** — load tickets from epics or paste Jira URLs, auto-sync board state to Jira
 - **Auto PR creation** — draft PRs opened automatically when workers finish
 - **Multi-repo support** — register multiple repositories, auto-match tickets by `[bracket]` tags in summaries
@@ -133,9 +132,14 @@ Register the git repository where AI agents will create branches and worktrees:
 | **Name** | Display name | `my-app` |
 | **Path** | Absolute path on disk | `/Users/you/projects/my-app` |
 | **Default Branch** | Branch to fork from | `main` or `develop` |
-| **Jira Prefix** | Auto-match tickets by key | `MC` (matches `MC-1234`) |
+| **Jira Prefix** | Auto-match tickets by `[bracket]` tags in summaries | `Flex` (matches `[Flex] Create endpoint`) |
 
 > The repository must be a git repo. Task Ninja creates worktrees inside a `.worktrees/` directory at the repo root.
+
+**How Jira Prefix matching works:** When loading tickets, Task Ninja auto-assigns each ticket to a repository using a two-tier strategy:
+
+1. **Key prefix match** — extracts the prefix from the Jira key (e.g., `MC` from `MC-1234`) and matches it against the repository's Jira Prefix (case-insensitive).
+2. **Labels/components fallback** — if no key match, checks the ticket's Jira labels and components for a substring match against the prefix (e.g., prefix `back` matches label `backend`).
 
 ### 3. Agent Profile
 
@@ -160,10 +164,10 @@ For interactive mode, configure phases in the agent profile:
 ```yaml
 phases:
   planning:
-    commands: ["/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"]
+    commands: ["/planning-task {JIRA_KEY}"]
     marker: "[PLANNING_COMPLETE]"
   developing:
-    commands: ["/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}"]
+    commands: ["/developing-task {JIRA_KEY}"]
     marker: "[DEVELOPING_COMPLETE]"
   review:
     commands: ["/open-pr --draft parent:{PARENT_BRANCH}"]
@@ -251,7 +255,8 @@ To create an app password: [BitBucket App Passwords](https://bitbucket.org/accou
 ![Kanban Board — Review Column](docs/screenshots/kanban-review.png)
 
 - **Drag-and-drop** cards between columns to change status
-- **Pause/Resume** active workers from the card menu
+- **Pause** — kills the worker process and closes the PTY session. The ticket is marked as paused and won't be picked up again until resumed. Use this to free up a worker slot or stop a ticket that's going in the wrong direction.
+- **Resume** — re-queues the paused ticket. The orchestrator spawns a fresh worker, resuming from the last completed phase (e.g., if planning was done, it skips straight to developing).
 - **Live Terminal** — click any active ticket to view real-time worker output
 - **Delete** — remove any ticket from the board
 
@@ -324,13 +329,7 @@ The orchestrator picks queued tickets, creates a git worktree for each, spawns a
 
 ### Phase Pipeline
 
-Tickets are executed through a configurable phase pipeline. Each phase runs a command (slash command or prompt) and waits for a completion marker before advancing:
-
-| Phase | Default Command | Completion Marker | Ticket State |
-|-------|----------------|-------------------|-------------|
-| **Planning** | `/planning-task {JIRA_KEY}` | `[PLANNING_COMPLETE]` | Planning |
-| **Developing** | `/developing-task {JIRA_KEY}` | `[DEVELOPING_COMPLETE]` | Developing |
-| **Review** | `/open-pr --draft parent:{PARENT_BRANCH}` | `[PR_COMPLETE]` | Review |
+Each phase runs a command and waits for a [completion marker](#completion-markers) before advancing. See [Agent Profile](#3-agent-profile) for configuration details.
 
 **Phase resume on retry:** If a worker fails during the developing phase, the next retry skips the planning phase (already completed) and resumes from developing. Progress is tracked via the `last_completed_phase` field.
 
@@ -338,18 +337,10 @@ Tickets are executed through a configurable phase pipeline. Each phase runs a co
 
 ### Live Terminal
 
-Two terminal views are available:
+Click any ticket card to open its terminal. Two views are available:
 
-- **Inline logs** — bottom panel with tab-per-ticket showing parsed log output (text-based, read-only)
-- **Live Process overlay** — fullscreen interactive xterm.js terminal connected to the worker's PTY via WebSocket
-
-The Live Process overlay supports:
-
-- **Resizable split panes** — drag dividers between terminals when viewing 2-4 workers simultaneously
-- **Minimize to pill** — collapse the overlay to a floating pill at bottom-right showing terminal count; click to restore
-- **Ad-hoc sessions** — for tickets in Review/Done/Failed state, clicking Live Terminal spawns a fresh interactive Claude session in the worktree (no phase pipeline, just a shell)
-- **Smart scroll** — terminal stays at your scroll position when reading history; only auto-scrolls if you're already at the bottom
-- **Mobile responsive** — dynamic font sizing ensures 80+ columns on any screen width
+- **Inline logs** — bottom panel with tab-per-ticket showing parsed log output (read-only)
+- **Live Process overlay** — fullscreen interactive xterm.js terminal connected to the worker's PTY via WebSocket, with smart scroll, ad-hoc sessions for completed tickets, and mobile-responsive font sizing
 
 ### Branch Mismatch Detection
 
