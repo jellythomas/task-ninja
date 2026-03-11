@@ -4,5 +4,6 @@ __pycache__/
 *.db
 .env
 *.png
+!docs/screenshots/*.png
 .playwright-mcp/
 docs/plans/

@@ -6,6 +6,8 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 
 **Works on macOS, Linux, and Windows.** Just install Python 3.10+ and run — everything else is auto-configured on first launch.
 
+![Kanban Board](docs/screenshots/kanban-board.png)
+
 ## Features
 
 - **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
@@ -108,6 +110,8 @@ The wizard walks you through three required steps. You can re-open it anytime fr
 
 ### 1. Jira Connection
 
+![Setup Wizard — Jira Connection](docs/screenshots/setup-wizard-jira.png)
+
 Connect to your Atlassian instance:
 
 | Field | Value | How to get it |
@@ -119,6 +123,8 @@ Connect to your Atlassian instance:
 Click **Test Connection** to verify. You should see a green checkmark.
 
 ### 2. Repository
+
+![Setup Wizard — Repository](docs/screenshots/setup-wizard-repo.png)
 
 Register the git repository where AI agents will create branches and worktrees:
 
@@ -133,6 +139,8 @@ Register the git repository where AI agents will create branches and worktrees:
 
 ### 3. Agent Profile
 
+![Setup Wizard — Agent Profile](docs/screenshots/setup-wizard-agent.png)
+
 Configure which AI CLI agent executes tickets:
 
 | Agent | Command | Args Template | Mode |
@@ -144,6 +152,8 @@ Configure which AI CLI agent executes tickets:
 **Interactive mode** (recommended): Uses the phase pipeline — each phase sends a slash command to Claude and waits for a completion marker. You can interact with the AI via the Live Terminal.
 
 **Print mode**: Runs a single command and exits. Simpler but no live interaction.
+
+![Settings — Agent Profiles](docs/screenshots/settings-agent-profiles.png)
 
 For interactive mode, configure phases in the agent profile:
 
@@ -238,6 +248,8 @@ To create an app password: [BitBucket App Passwords](https://bitbucket.org/accou
 
 ### Board Controls
 
+![Kanban Board — Review Column](docs/screenshots/kanban-review.png)
+
 - **Drag-and-drop** cards between columns to change status
 - **Pause/Resume** active workers from the card menu
 - **Live Terminal** — click any active ticket to view real-time worker output
@@ -246,6 +258,8 @@ To create an app password: [BitBucket App Passwords](https://bitbucket.org/accou
 ---
 
 ## Optional Configuration
+
+![Settings — General](docs/screenshots/settings.png)
 
 ### Remote Access
 
