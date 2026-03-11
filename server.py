@@ -1033,7 +1033,12 @@ async def test_jira_connection():
 
 @app.put("/api/tickets/{ticket_id}/assignment")
 async def update_ticket_assignment(ticket_id: str, req: UpdateTicketAssignmentRequest):
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    # Include explicitly set fields (even if None, to allow clearing values like profile_id)
+    raw = req.model_dump()
+    updates = {k: v for k, v in raw.items() if v is not None}
+    # Allow explicit null for profile_id to clear the override
+    if "profile_id" in (req.model_fields_set or set()) and req.profile_id is None:
+        updates["profile_id"] = None
     if not updates:
         raise HTTPException(400, "No fields to update")
     await state.update_ticket(ticket_id, **updates)
