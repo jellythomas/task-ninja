@@ -201,6 +201,16 @@ class Orchestrator:
                 self.watchdog.on_ticket_completed(tid)
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, tid)
+                # Cleanup worktree for completed tickets (if setting enabled)
+                cleanup_enabled = self.config.get("git", {}).get("cleanup_worktrees", True)
+                if cleanup_enabled and ticket.worktree_path:
+                    try:
+                        run = await self.state.get_run(self._run_id)
+                        git = GitManager(run.project_path, self.config.get("git", {}).get("worktree_dir", ".worktrees"))
+                        await git.cleanup_worktree(ticket.worktree_path)
+                        print(f"[orchestrator] Cleaned up worktree for completed ticket {tid}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[orchestrator] Failed to cleanup worktree for ticket {tid}: {e}", file=sys.stderr)
 
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
