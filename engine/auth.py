@@ -1,7 +1,11 @@
 """Authentication middleware for Task Ninja."""
 
-from fastapi import Request, WebSocket, HTTPException, status
+from __future__ import annotations
+
+from fastapi import Request, WebSocket, status
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
 from engine.env_manager import get_env, verify_token
 
 # Paths that don't require auth
@@ -33,7 +37,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Allow the login/auth check endpoint
-        if path == "/api/auth/login" or path == "/api/auth/status":
+        if path in {"/api/auth/login", "/api/auth/status"}:
             return await call_next(request)
 
         # Check Authorization header
@@ -48,7 +52,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if token_param and _check_token(token_param):
             return await call_next(request)
 
-        from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={"detail": "Authentication required"},

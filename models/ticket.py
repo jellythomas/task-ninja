@@ -1,8 +1,9 @@
 """Ticket and Run models."""
 
+from __future__ import annotations
+
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -27,99 +28,100 @@ class RunStatus(str, Enum):
 
 # Valid state transitions — permissive for kanban board manual moves
 _ALL_STATES = set(TicketState)
-VALID_TRANSITIONS = {state: _ALL_STATES for state in TicketState}
+VALID_TRANSITIONS = dict.fromkeys(TicketState, _ALL_STATES)
 
 
 class Ticket(BaseModel):
     id: str
     run_id: str
     jira_key: str
-    summary: Optional[str] = None
+    summary: str | None = None
     state: TicketState = TicketState.TODO
     rank: int = 0
-    branch_name: Optional[str] = None
-    worktree_path: Optional[str] = None
-    pr_url: Optional[str] = None
-    pr_number: Optional[int] = None
-    worker_pid: Optional[int] = None
+    branch_name: str | None = None
+    worktree_path: str | None = None
+    pr_url: str | None = None
+    pr_number: int | None = None
+    worker_pid: int | None = None
     paused: bool = False
-    log_file: Optional[str] = None
-    repository_id: Optional[int] = None
-    parent_branch: Optional[str] = None
-    profile_id: Optional[int] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    input_type: Optional[str] = None
-    input_data: Optional[str] = None  # JSON blob
-    last_completed_phase: Optional[str] = None  # planning, developing, review
-    error: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    log_file: str | None = None
+    repository_id: int | None = None
+    parent_branch: str | None = None
+    profile_id: int | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    input_type: str | None = None
+    input_data: str | None = None  # JSON blob
+    last_completed_phase: str | None = None  # planning, developing, review
+    error: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class Run(BaseModel):
     id: str
     name: str
-    epic_key: Optional[str] = None
+    epic_key: str | None = None
     max_parallel: int = 2
     status: RunStatus = RunStatus.IDLE
-    project_path: Optional[str] = None
-    parent_branch: Optional[str] = None
-    repository_id: Optional[int] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    project_path: str | None = None
+    parent_branch: str | None = None
+    repository_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class Repository(BaseModel):
-    id: Optional[int] = None
+    id: int | None = None
     name: str
     path: str
     default_branch: str = "main"
-    jira_label: Optional[str] = None  # e.g. "MC", "CKYC" — prefix for matching tickets
-    default_profile_id: Optional[int] = None
+    jira_label: str | None = None  # e.g. "MC", "CKYC" — prefix for matching tickets
+    default_profile_id: int | None = None
     is_deleted: bool = False
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class LabelRepoMapping(BaseModel):
-    id: Optional[int] = None
+    id: int | None = None
     jira_label: str
     repository_id: int
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
 
 class AgentProfile(BaseModel):
-    id: Optional[int] = None
+    id: int | None = None
     name: str
     command: str
     args_template: str
     log_format: str = "plain-text"
     is_default: bool = False
-    phases_config: Optional[str] = None  # JSON blob of phase pipeline config
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    phases_config: str | None = None  # JSON blob of phase pipeline config
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class Schedule(BaseModel):
     id: str
     run_id: str
     schedule_type: str  # one-time | recurring
-    cron_expression: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    next_run: Optional[datetime] = None
+    cron_expression: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    next_run: datetime | None = None
     enabled: bool = True
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
 
 # --- Request/Response models ---
 
+
 class CreateRunRequest(BaseModel):
     name: str
-    project_path: Optional[str] = None
-    repository_id: Optional[int] = None
-    parent_branch: Optional[str] = None
+    project_path: str | None = None
+    repository_id: int | None = None
+    parent_branch: str | None = None
     max_parallel: int = 2
 
 
@@ -132,20 +134,20 @@ class FetchTicketsRequest(BaseModel):
 
 
 class TicketAssignment(BaseModel):
-    repository_id: Optional[int] = None
-    parent_branch: Optional[str] = None
-    profile_id: Optional[int] = None
+    repository_id: int | None = None
+    parent_branch: str | None = None
+    profile_id: int | None = None
 
 
 class AddTicketsRequest(BaseModel):
     keys: list[str]
-    summaries: Optional[dict[str, str]] = None  # jira_key -> summary
+    summaries: dict[str, str] | None = None  # jira_key -> summary
     # Global fallback fields
-    repository_id: Optional[int] = None
-    parent_branch: Optional[str] = None
-    profile_id: Optional[int] = None
+    repository_id: int | None = None
+    parent_branch: str | None = None
+    profile_id: int | None = None
     # Per-ticket overrides (takes precedence over global)
-    assignments: Optional[dict[str, TicketAssignment]] = None
+    assignments: dict[str, TicketAssignment] | None = None
 
 
 class MoveTicketRequest(BaseModel):
@@ -157,39 +159,40 @@ class UpdateRankRequest(BaseModel):
 
 
 class UpdateConfigRequest(BaseModel):
-    max_parallel: Optional[int] = None
+    max_parallel: int | None = None
 
 
 class CreateScheduleRequest(BaseModel):
     run_id: str
     schedule_type: str
-    cron_expression: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    cron_expression: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
 
 
 class UpdateScheduleRequest(BaseModel):
-    enabled: Optional[bool] = None
-    cron_expression: Optional[str] = None
-    end_time: Optional[datetime] = None
+    enabled: bool | None = None
+    cron_expression: str | None = None
+    end_time: datetime | None = None
 
 
 # --- Repository & Settings request models ---
+
 
 class CreateRepositoryRequest(BaseModel):
     name: str
     path: str
     default_branch: str = "main"
-    jira_label: Optional[str] = None
-    default_profile_id: Optional[int] = None
+    jira_label: str | None = None
+    default_profile_id: int | None = None
 
 
 class UpdateRepositoryRequest(BaseModel):
-    name: Optional[str] = None
-    path: Optional[str] = None
-    default_branch: Optional[str] = None
-    jira_label: Optional[str] = None
-    default_profile_id: Optional[int] = None
+    name: str | None = None
+    path: str | None = None
+    default_branch: str | None = None
+    jira_label: str | None = None
+    default_profile_id: int | None = None
 
 
 class CreateLabelMappingRequest(BaseModel):
@@ -202,15 +205,15 @@ class CreateAgentProfileRequest(BaseModel):
     command: str
     args_template: str
     log_format: str = "plain-text"
-    phases_config: Optional[str] = None
+    phases_config: str | None = None
 
 
 class UpdateAgentProfileRequest(BaseModel):
-    name: Optional[str] = None
-    command: Optional[str] = None
-    args_template: Optional[str] = None
-    log_format: Optional[str] = None
-    phases_config: Optional[str] = None
+    name: str | None = None
+    command: str | None = None
+    args_template: str | None = None
+    log_format: str | None = None
+    phases_config: str | None = None
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -218,9 +221,9 @@ class UpdateSettingsRequest(BaseModel):
 
 
 class UpdateTicketAssignmentRequest(BaseModel):
-    repository_id: Optional[int] = None
-    parent_branch: Optional[str] = None
-    profile_id: Optional[int] = None
+    repository_id: int | None = None
+    parent_branch: str | None = None
+    profile_id: int | None = None
 
 
 class ResolveInputRequest(BaseModel):

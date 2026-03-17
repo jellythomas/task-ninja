@@ -1,27 +1,28 @@
 """Interactive terminal sessions via WebSocket + PTY."""
 
-import asyncio
+from __future__ import annotations
+
+import contextlib
 import fcntl
+import logging
 import os
 import pty
 import select
 import signal
 import struct
-import sys
 import termios
-from typing import Optional
 
-from fastapi import WebSocket
+logger = logging.getLogger(__name__)
 
 
 class TerminalSession:
     """Manages a single PTY-backed terminal session."""
 
-    def __init__(self, cwd: str, session_id: str):
+    def __init__(self, cwd: str, session_id: str) -> None:
         self.cwd = cwd
         self.session_id = session_id
-        self.master_fd: Optional[int] = None
-        self.pid: Optional[int] = None
+        self.master_fd: int | None = None
+        self.pid: int | None = None
         self._closed = False
 
     def start(self) -> None:
@@ -32,7 +33,7 @@ class TerminalSession:
         if pid == 0:
             # Child process
             os.chdir(self.cwd)
-            os.execvpe(shell, [shell, "-l"], os.environ)
+            os.execvpe(shell, [shell, "-l"], os.environ)  # noqa: S606 — intentional exec in child process
         else:
             # Parent process
             self.pid = pid
@@ -52,7 +53,7 @@ class TerminalSession:
         if self.master_fd is not None and not self._closed:
             os.write(self.master_fd, data)
 
-    def read(self, size: int = 4096) -> Optional[bytes]:
+    def read(self, size: int = 4096) -> bytes | None:
         """Read available data from the PTY (terminal output). Non-blocking."""
         if self.master_fd is None or self._closed:
             return None
@@ -69,7 +70,7 @@ class TerminalSession:
         if self.pid is None:
             return False
         try:
-            pid, status = os.waitpid(self.pid, os.WNOHANG)
+            pid, _status = os.waitpid(self.pid, os.WNOHANG)
             return pid == 0
         except ChildProcessError:
             return False
@@ -78,23 +79,19 @@ class TerminalSession:
         """Close the PTY session."""
         self._closed = True
         if self.master_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(self.master_fd)
-            except OSError:
-                pass
             self.master_fd = None
         if self.pid is not None:
-            try:
+            with contextlib.suppress(OSError, ProcessLookupError):
                 os.kill(self.pid, signal.SIGHUP)
-            except (OSError, ProcessLookupError):
-                pass
             self.pid = None
 
 
 class TerminalManager:
     """Manages multiple terminal sessions."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._sessions: dict[str, TerminalSession] = {}
 
     def create_session(self, session_id: str, cwd: str) -> TerminalSession:
@@ -106,17 +103,17 @@ class TerminalManager:
         session = TerminalSession(cwd, session_id)
         session.start()
         self._sessions[session_id] = session
-        print(f"[terminal] Created session {session_id} in {cwd}", file=sys.stderr)
+        logger.info("Created session %s in %s", session_id, cwd)
         return session
 
-    def get_session(self, session_id: str) -> Optional[TerminalSession]:
+    def get_session(self, session_id: str) -> TerminalSession | None:
         return self._sessions.get(session_id)
 
     def close_session(self, session_id: str) -> None:
         session = self._sessions.pop(session_id, None)
         if session:
             session.close()
-            print(f"[terminal] Closed session {session_id}", file=sys.stderr)
+            logger.info("Closed session %s", session_id)
 
     def close_all(self) -> None:
         for sid in list(self._sessions.keys()):

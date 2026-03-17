@@ -1,18 +1,21 @@
 """Direct Jira REST API client — replaces claude_helper for orchestrator-level Jira calls."""
 
-import sys
-from typing import Optional
+from __future__ import annotations
+
+import logging
 
 import httpx
 
 from engine.env_manager import get_env
 
+logger = logging.getLogger(__name__)
+
 
 class JiraClient:
     """Async Jira REST API client using credentials from .env."""
 
-    def __init__(self):
-        self._client: Optional[httpx.AsyncClient] = None
+    def __init__(self) -> None:
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_credentials(self) -> tuple[str, str, str]:
         """Fetch Jira credentials from .env. Raises ValueError if missing."""
@@ -42,7 +45,8 @@ class JiraClient:
         jql = f'"Epic Link" = {epic_key} OR parent = {epic_key} ORDER BY rank ASC'
         try:
             resp = await self._request(
-                "GET", "/rest/api/3/search/jql",
+                "GET",
+                "/rest/api/3/search/jql",
                 params={"jql": jql, "maxResults": 100, "fields": "summary,status,assignee,labels,components"},
             )
             data = resp.json()
@@ -52,30 +56,33 @@ class JiraClient:
                 assignee = fields.get("assignee")
                 labels = fields.get("labels", [])
                 components = [c.get("name", "") for c in fields.get("components", [])]
-                results.append({
-                    "key": issue.get("key", ""),
-                    "summary": fields.get("summary", ""),
-                    "status": fields.get("status", {}).get("name", "To Do"),
-                    "assignee": assignee.get("displayName", "") if assignee else "",
-                    "labels": labels,
-                    "components": components,
-                })
+                results.append(
+                    {
+                        "key": issue.get("key", ""),
+                        "summary": fields.get("summary", ""),
+                        "status": fields.get("status", {}).get("name", "To Do"),
+                        "assignee": assignee.get("displayName", "") if assignee else "",
+                        "labels": labels,
+                        "components": components,
+                    }
+                )
             return results
         except httpx.HTTPStatusError as e:
-            print(f"[jira_client] Search failed ({e.response.status_code}): {e.response.text[:200]}", file=sys.stderr)
+            logger.error("Search failed (%d): %s", e.response.status_code, e.response.text[:200])
             return []
         except ValueError as e:
-            print(f"[jira_client] {e}", file=sys.stderr)
+            logger.error("%s", e)
             return []
-        except Exception as e:
-            print(f"[jira_client] Error fetching epic children: {e}", file=sys.stderr)
+        except httpx.RequestError as e:
+            logger.error("Error fetching epic children: %s", e)
             return []
 
-    async def get_issue(self, jira_key: str) -> Optional[dict]:
+    async def get_issue(self, jira_key: str) -> dict | None:
         """Fetch a single Jira issue."""
         try:
             resp = await self._request(
-                "GET", f"/rest/api/3/issue/{jira_key}",
+                "GET",
+                f"/rest/api/3/issue/{jira_key}",
                 params={"fields": "summary,status,assignee,labels,components"},
             )
             data = resp.json()
@@ -89,8 +96,8 @@ class JiraClient:
                 "labels": fields.get("labels", []),
                 "components": [c.get("name", "") for c in fields.get("components", [])],
             }
-        except Exception as e:
-            print(f"[jira_client] Error fetching issue {jira_key}: {e}", file=sys.stderr)
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as e:
+            logger.error("Error fetching issue %s: %s", jira_key, e)
             return None
 
     async def get_transitions(self, jira_key: str) -> list[dict]:
@@ -98,12 +105,9 @@ class JiraClient:
         try:
             resp = await self._request("GET", f"/rest/api/3/issue/{jira_key}/transitions")
             data = resp.json()
-            return [
-                {"id": t["id"], "name": t["name"]}
-                for t in data.get("transitions", [])
-            ]
-        except Exception as e:
-            print(f"[jira_client] Error fetching transitions for {jira_key}: {e}", file=sys.stderr)
+            return [{"id": t["id"], "name": t["name"]} for t in data.get("transitions", [])]
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as e:
+            logger.error("Error fetching transitions for %s: %s", jira_key, e)
             return []
 
     async def transition_issue(self, jira_key: str, target_status: str) -> bool:
@@ -112,18 +116,23 @@ class JiraClient:
             transitions = await self.get_transitions(jira_key)
             match = next((t for t in transitions if t["name"].lower() == target_status.lower()), None)
             if not match:
-                print(f"[jira_client] No transition '{target_status}' found for {jira_key}. "
-                      f"Available: {[t['name'] for t in transitions]}", file=sys.stderr)
+                logger.warning(
+                    "No transition '%s' found for %s. Available: %s",
+                    target_status,
+                    jira_key,
+                    [t["name"] for t in transitions],
+                )
                 return False
 
             await self._request(
-                "POST", f"/rest/api/3/issue/{jira_key}/transitions",
+                "POST",
+                f"/rest/api/3/issue/{jira_key}/transitions",
                 json={"transition": {"id": match["id"]}},
             )
-            print(f"[jira_client] Transitioned {jira_key} -> {target_status}", file=sys.stderr)
+            logger.info("Transitioned %s -> %s", jira_key, target_status)
             return True
-        except Exception as e:
-            print(f"[jira_client] Transition failed for {jira_key}: {e}", file=sys.stderr)
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as e:
+            logger.error("Transition failed for %s: %s", jira_key, e)
             return False
 
     async def is_configured(self) -> bool:

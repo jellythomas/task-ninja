@@ -1,19 +1,22 @@
 """Orchestrator — manages worker pool and ticket execution lifecycle."""
 
-import asyncio
-import json
-import sys
-from typing import Optional
+from __future__ import annotations
 
-import yaml
+import asyncio
+import contextlib
+import json
+import logging
+import os
 
 from engine.broadcaster import Broadcaster
-from engine.git_manager import GitManager, WorktreeResult
+from engine.git_manager import GitManager
 from engine.jira_client import JiraClient
 from engine.state import StateManager
 from engine.ticket_watchdog import TicketWatchdog
 from engine.worker import Worker
 from models.ticket import RunStatus, TicketState
+
+logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
@@ -27,7 +30,7 @@ class Orchestrator:
         self._tasks: dict[str, asyncio.Task] = {}  # ticket_id -> Task
         self._adhoc_terminals: dict = {}  # ticket_id -> AdHocTerminal
         self._running = False
-        self._run_id: Optional[str] = None
+        self._run_id: str | None = None
         self.jira_client = JiraClient()
         self.notifier = None  # Set by server.py after construction
         self.watchdog = TicketWatchdog(state, broadcaster)
@@ -47,12 +50,11 @@ class Orchestrator:
         # Recover stale tickets: planning/developing with no live worker → back to queued
         await self._recover_stale_tickets(run_id)
 
-        print(f"[orchestrator] Started for run {run_id}", file=sys.stderr)
-        asyncio.create_task(self._loop())
+        logger.info("Started for run %s", run_id)
+        self._loop_task = asyncio.create_task(self._loop())
 
     async def _recover_stale_tickets(self, run_id: str) -> None:
         """Move orphaned planning/developing tickets back to queued."""
-        import os
         for st in (TicketState.PLANNING, TicketState.DEVELOPING):
             tickets = await self.state.get_tickets_by_state(run_id, st)
             for ticket in tickets:
@@ -65,11 +67,11 @@ class Orchestrator:
                             continue  # Process is alive, skip
                         except OSError:
                             pass  # Process is dead
-                    print(f"[orchestrator] Recovering stale ticket {ticket.jira_key} ({st}) -> queued", file=sys.stderr)
+                    logger.info("Recovering stale ticket %s (%s) -> queued", ticket.jira_key, st)
                     await self.state.update_ticket_state(ticket.id, TicketState.QUEUED)
                     await self.broadcaster.broadcast_ticket_update(run_id, ticket.id, TicketState.QUEUED)
 
-    async def pause(self, run_id: str = None) -> None:
+    async def pause(self, run_id: str | None = None) -> None:
         """Stop picking new tickets. Active workers continue."""
         self._running = False
         rid = run_id or self._run_id
@@ -77,9 +79,9 @@ class Orchestrator:
             self._run_id = rid
             await self.state.update_run_status(rid, RunStatus.PAUSED)
             await self.broadcaster.broadcast_run_status(rid, RunStatus.PAUSED)
-        print("[orchestrator] Paused", file=sys.stderr)
+        logger.info("Paused")
 
-    async def resume(self, run_id: str = None) -> None:
+    async def resume(self, run_id: str | None = None) -> None:
         """Resume picking new tickets."""
         rid = run_id or self._run_id
         if rid:
@@ -87,8 +89,8 @@ class Orchestrator:
             self._running = True
             await self.state.update_run_status(rid, RunStatus.RUNNING)
             await self.broadcaster.broadcast_run_status(rid, RunStatus.RUNNING)
-            asyncio.create_task(self._loop())
-            print("[orchestrator] Resumed", file=sys.stderr)
+            self._loop_task = asyncio.create_task(self._loop())
+            logger.info("Resumed")
 
     async def pause_ticket(self, ticket_id: str) -> None:
         """Pause a specific ticket — kill its worker."""
@@ -102,9 +104,7 @@ class Orchestrator:
 
         await self.state.update_ticket(ticket_id, paused=True, worker_pid=None)
         ticket = await self.state.get_ticket(ticket_id)
-        await self.broadcaster.broadcast_ticket_update(
-            self._run_id, ticket_id, ticket.state, paused=True
-        )
+        await self.broadcaster.broadcast_ticket_update(self._run_id, ticket_id, ticket.state, paused=True)
 
     async def resume_ticket(self, ticket_id: str) -> None:
         """Resume a paused ticket — move back to queued for re-pickup."""
@@ -115,9 +115,7 @@ class Orchestrator:
         await self.state.update_ticket(ticket_id, paused=False)
         # Move back to queued so orchestrator picks it up
         await self.state.update_ticket_state(ticket_id, TicketState.QUEUED)
-        await self.broadcaster.broadcast_ticket_update(
-            self._run_id, ticket_id, TicketState.QUEUED, paused=False
-        )
+        await self.broadcaster.broadcast_ticket_update(self._run_id, ticket_id, TicketState.QUEUED, paused=False)
 
     async def delete_ticket(self, ticket_id: str) -> None:
         """Delete a ticket — kill worker if running, remove from board."""
@@ -137,12 +135,10 @@ class Orchestrator:
                     run = await self.state.get_run(self._run_id)
                     git = GitManager(run.project_path, self.config.get("git", {}).get("worktree_dir", ".worktrees"))
                     await git.cleanup_worktree(ticket.worktree_path)
-                except Exception:
+                except (RuntimeError, OSError):
                     pass
 
-            await self.broadcaster.broadcast(
-                self._run_id, "ticket_deleted", {"ticket_id": ticket_id}
-            )
+            await self.broadcaster.broadcast(self._run_id, "ticket_deleted", {"ticket_id": ticket_id})
 
     def interrupt_worker(self, ticket_id: str) -> bool:
         """Send SIGINT to a worker's process. Returns True if signal sent."""
@@ -171,7 +167,7 @@ class Orchestrator:
             try:
                 await self._tick()
             except Exception as e:
-                print(f"[orchestrator] Error in tick: {e}", file=sys.stderr)
+                logger.exception("Error in tick: %s", e)
 
             await asyncio.sleep(poll_interval)
 
@@ -194,9 +190,7 @@ class Orchestrator:
             if ticket and ticket.state == TicketState.FAILED:
                 self.watchdog.on_ticket_failed(tid)
                 if self.notifier:
-                    await self.notifier.notify_ticket_failed(
-                        ticket.jira_key, tid, ticket.error or ""
-                    )
+                    await self.notifier.notify_ticket_failed(ticket.jira_key, tid, ticket.error or "")
             elif ticket and ticket.state in (TicketState.DONE, TicketState.REVIEW):
                 self.watchdog.on_ticket_completed(tid)
                 if self.notifier:
@@ -208,9 +202,9 @@ class Orchestrator:
                         run = await self.state.get_run(self._run_id)
                         git = GitManager(run.project_path, self.config.get("git", {}).get("worktree_dir", ".worktrees"))
                         await git.cleanup_worktree(ticket.worktree_path)
-                        print(f"[orchestrator] Cleaned up worktree for completed ticket {tid}", file=sys.stderr)
-                    except Exception as e:
-                        print(f"[orchestrator] Failed to cleanup worktree for ticket {tid}: {e}", file=sys.stderr)
+                        logger.info("Cleaned up worktree for completed ticket %s", tid)
+                    except (RuntimeError, OSError) as e:
+                        logger.warning("Failed to cleanup worktree for ticket %s: %s", tid, e)
 
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
@@ -247,10 +241,13 @@ class Orchestrator:
                 return  # No work tickets at all, don't auto-complete
 
             all_terminal = all(
-                t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED}
+                t.state in {TicketState.DONE, TicketState.REVIEW, TicketState.FAILED} for t in work_tickets
+            )
+            active = any(
+                t.state
+                in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED, TicketState.AWAITING_INPUT}
                 for t in work_tickets
             )
-            active = any(t.state in {TicketState.PLANNING, TicketState.DEVELOPING, TicketState.QUEUED, TicketState.AWAITING_INPUT} for t in work_tickets)
 
             if all_terminal and not active:
                 self._running = False
@@ -263,12 +260,10 @@ class Orchestrator:
         """Mark a ticket as failed with error message, broadcast update."""
         await self.state.update_ticket(ticket_id, error=error)
         await self.state.update_ticket_state(ticket_id, TicketState.FAILED)
-        try:
+        with contextlib.suppress(RuntimeError, OSError):
             await self.broadcaster.broadcast_ticket_update(
                 self._run_id, ticket_id, TicketState.FAILED, error=error
-            )
-        except Exception:
-            pass  # DB state is already FAILED — broadcast is best-effort
+            )  # DB state is already FAILED — broadcast is best-effort
         self.watchdog.on_ticket_failed(ticket_id)
         if self.notifier:
             await self.notifier.notify_ticket_failed(jira_key=None, ticket_id=ticket_id, error=error)
@@ -290,7 +285,9 @@ class Orchestrator:
             project_path = repo.path
 
         if not project_path:
-            await self._fail_ticket(ticket_id, "No project path configured. Assign a repository or set project_path on the run.")
+            await self._fail_ticket(
+                ticket_id, "No project path configured. Assign a repository or set project_path on the run."
+            )
             return
 
         # Resolve parent branch: ticket > run > repo default > config default
@@ -318,11 +315,13 @@ class Orchestrator:
 
         # Check for branch parent mismatch — pause and ask user
         if result.mismatch:
-            input_data = json.dumps({
-                "current_parent": result.current_parent,
-                "expected_parent": result.expected_parent,
-                "branch_existed": result.branch_existed,
-            })
+            input_data = json.dumps(
+                {
+                    "current_parent": result.current_parent,
+                    "expected_parent": result.expected_parent,
+                    "branch_existed": result.branch_existed,
+                }
+            )
             await self.state.update_ticket(
                 ticket_id,
                 worktree_path=result.path,
@@ -332,12 +331,18 @@ class Orchestrator:
             )
             await self.state.update_ticket_state(ticket_id, TicketState.AWAITING_INPUT)
             await self.broadcaster.broadcast_ticket_update(
-                self._run_id, ticket_id, TicketState.AWAITING_INPUT,
+                self._run_id,
+                ticket_id,
+                TicketState.AWAITING_INPUT,
                 input_type="branch_mismatch",
                 input_data=json.loads(input_data),
             )
-            print(f"[orchestrator] Branch mismatch for {jira_key}: "
-                  f"expected {result.expected_parent}, got {result.current_parent}", file=sys.stderr)
+            logger.warning(
+                "Branch mismatch for %s: expected %s, got %s",
+                jira_key,
+                result.expected_parent,
+                result.current_parent,
+            )
             return
 
         worktree_path = result.path
@@ -371,6 +376,7 @@ class Orchestrator:
                 args_str = args_str.replace("{JIRA_SUMMARY}", ticket.summary)
             # Split args respecting quoted strings
             import shlex
+
             worker_flags = shlex.split(args_str)
         else:
             # Fallback when no agent profile exists (DB always seeds one, but just in case)
@@ -406,7 +412,7 @@ class Orchestrator:
         self._workers[ticket_id] = worker
         self._tasks[ticket_id] = asyncio.create_task(worker.run())
         self.watchdog.on_ticket_active(ticket_id)
-        print(f"[orchestrator] Spawned worker for {jira_key} in {worktree_path}", file=sys.stderr)
+        logger.info("Spawned worker for %s in %s", jira_key, worktree_path)
 
     async def resolve_input(self, ticket_id: str, choice: str) -> dict:
         """Resolve an AWAITING_INPUT ticket based on user's choice.
@@ -464,9 +470,7 @@ class Orchestrator:
                 raise ValueError("No expected_parent in input_data for fresh_start")
             try:
                 fresh_result = await git.fresh_start(ticket.jira_key, expected_parent)
-                await self.state.update_ticket(
-                    ticket_id, worktree_path=fresh_result.path
-                )
+                await self.state.update_ticket(ticket_id, worktree_path=fresh_result.path)
                 result_msg = f"Fresh start from origin/{expected_parent}"
             except RuntimeError as e:
                 await self._fail_ticket(ticket_id, f"Fresh start failed: {e}")
@@ -476,19 +480,15 @@ class Orchestrator:
             raise ValueError(f"Unknown choice: {choice}")
 
         # Clear input fields and move back to queued
-        await self.state.update_ticket(
-            ticket_id, input_type=None, input_data=None
-        )
+        await self.state.update_ticket(ticket_id, input_type=None, input_data=None)
         await self.state.update_ticket_state(ticket_id, TicketState.QUEUED)
-        await self.broadcaster.broadcast_ticket_update(
-            ticket.run_id, ticket_id, TicketState.QUEUED
-        )
+        await self.broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.QUEUED)
 
         # Auto-resume orchestrator if needed
         if not self._running and ticket.run_id:
             await self.resume(ticket.run_id)
 
-        print(f"[orchestrator] Resolved input for {ticket.jira_key}: {choice} — {result_msg}", file=sys.stderr)
+        logger.info("Resolved input for %s: %s — %s", ticket.jira_key, choice, result_msg)
         return {"status": "resolved", "choice": choice, "message": result_msg}
 
     async def _watchdog_requeue(self, run_id: str) -> None:

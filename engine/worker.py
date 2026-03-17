@@ -1,19 +1,22 @@
 """CLI worker — spawns an AI agent process per ticket with PTY for live terminal access."""
 
+from __future__ import annotations
+
 import asyncio
+import contextlib
 import fcntl
 import json
+import logging
 import os
 import pty
 import re
 import select
 import signal
 import struct
-import sys
 import termios
 import time
+
 from pathlib import Path
-from typing import Optional
 
 from fastapi import WebSocket
 
@@ -23,18 +26,20 @@ from engine.jira_client import JiraClient
 from engine.state import StateManager
 from models.ticket import TicketState
 
+logger = logging.getLogger(__name__)
+
 # Cursor-forward sequences → replace with spaces (preserves word spacing)
-_CURSOR_FWD_RE = re.compile(r'\x1b\[(\d+)C')
-_CURSOR_FWD_1_RE = re.compile(r'\x1b\[C')
+_CURSOR_FWD_RE = re.compile(r"\x1b\[(\d+)C")
+_CURSOR_FWD_1_RE = re.compile(r"\x1b\[C")
 # Strip remaining ANSI escape codes for log parsing
-_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b\[\?[0-9;]*[hl]|\r')
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b\[\?[0-9;]*[hl]|\r")
 
 
 def _clean_ansi(text: str) -> str:
     """Strip ANSI codes, converting cursor-forward to spaces."""
-    text = _CURSOR_FWD_RE.sub(lambda m: ' ' * int(m.group(1)), text)
-    text = _CURSOR_FWD_1_RE.sub(' ', text)
-    return _ANSI_RE.sub('', text)
+    text = _CURSOR_FWD_RE.sub(lambda m: " " * int(m.group(1)), text)
+    text = _CURSOR_FWD_1_RE.sub(" ", text)
+    return _ANSI_RE.sub("", text)
 
 
 class Worker:
@@ -49,10 +54,10 @@ class Worker:
         state_manager: StateManager,
         broadcaster: Broadcaster,
         claude_command: str = "claude",
-        claude_flags: list[str] = None,
-        jira_status_mapping: dict = None,
+        claude_flags: list[str] | None = None,
+        jira_status_mapping: dict | None = None,
         pr_base_branch: str = "master",
-        phases_config: list[dict] = None,
+        phases_config: list[dict] | None = None,
         idle_timeout: int = 10,
     ):
         self.ticket_id = ticket_id
@@ -66,21 +71,21 @@ class Worker:
         self.jira_status_mapping = jira_status_mapping or {}
         self.pr_base_branch = pr_base_branch
         self.claude_helper = ClaudeHelper(claude_command)
-        self.jira_client: Optional[JiraClient] = None
-        self.process: Optional[asyncio.subprocess.Process] = None
+        self.jira_client: JiraClient | None = None
+        self.process: asyncio.subprocess.Process | None = None
         self._cancelled = False
 
         # Phase pipeline config
         self.phases_config = phases_config  # None = legacy --print mode
         self.idle_timeout = idle_timeout
-        self._current_phase: Optional[str] = None
-        self._phase_marker: Optional[str] = None
+        self._current_phase: str | None = None
+        self._phase_marker: str | None = None
         self._marker_detected = asyncio.Event()
         self._last_output_time: float = 0
         self._user_active: bool = False
 
         # PTY and viewer management
-        self._master_fd: Optional[int] = None
+        self._master_fd: int | None = None
         self._viewers: set[WebSocket] = set()
         self._output_buffer = bytearray()  # Scrollback for late-joining viewers
         self._max_buffer = 256 * 1024  # 256KB
@@ -90,11 +95,11 @@ class Worker:
         """Execute the ticket using interactive mode with phase pipeline."""
         try:
             # Build command — interactive mode (no --print)
-            cmd = [self.claude_command] + self.claude_flags
+            cmd = [self.claude_command, *self.claude_flags]
 
             # Log
             cmd_str = " ".join(cmd)
-            print(f"[worker] Running (interactive): {cmd_str} in {self.worktree_path}", file=sys.stderr)
+            logger.info("Running (interactive): %s in %s", cmd_str, self.worktree_path)
             await self.state.append_log(self.ticket_id, f"[worker] $ {cmd_str}")
             await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, f"[worker] $ {cmd_str}")
             await self.state.append_log(self.ticket_id, f"[worker] cwd: {self.worktree_path}")
@@ -104,7 +109,7 @@ class Worker:
             log_dir = Path(self.worktree_path).parent
             log_dir.mkdir(parents=True, exist_ok=True)
             self._log_file_path = log_dir / f"log-{self.jira_key.lower()}.txt"
-            self._log_fh = open(self._log_file_path, "a", buffering=1)
+            self._log_fh = open(self._log_file_path, "a", buffering=1)  # noqa: SIM115 — kept open for lifetime of worker
 
             # Create PTY
             master_fd, slave_fd = pty.openpty()
@@ -134,8 +139,8 @@ class Worker:
                 self.run_id, self.ticket_id, None, worker_pid=self.process.pid
             )
 
-            # Start PTY read loop in background
-            asyncio.create_task(self._pty_read_loop())
+            # Start PTY read loop in background (task ref prevents GC)
+            self._pty_task = asyncio.create_task(self._pty_read_loop())
 
             # Wait for Claude to be ready (give it a moment to start)
             await asyncio.sleep(3)
@@ -170,25 +175,30 @@ class Worker:
                 # Skip already-completed phases on retry
                 if skip_until_after:
                     if phase_name == skip_until_after:
-                        await self.state.append_log(self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ===")
+                        await self.state.append_log(
+                            self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
+                        )
                         await self.broadcaster.broadcast_log(
-                            self.run_id, self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
+                            self.run_id,
+                            self.ticket_id,
+                            f"[worker] === Phase: {phase_name} (already completed, skipping) ===",
                         )
                         skip_until_after = None  # Next phase will run
                         continue
-                    else:
-                        await self.state.append_log(self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ===")
-                        await self.broadcaster.broadcast_log(
-                            self.run_id, self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
-                        )
-                        continue
+                    await self.state.append_log(
+                        self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
+                    )
+                    await self.broadcaster.broadcast_log(
+                        self.run_id,
+                        self.ticket_id,
+                        f"[worker] === Phase: {phase_name} (already completed, skipping) ===",
+                    )
+                    continue
 
                 # Transition state
                 if ticket_state:
                     await self.state.update_ticket_state(self.ticket_id, ticket_state)
-                    await self.broadcaster.broadcast_ticket_update(
-                        self.run_id, self.ticket_id, ticket_state
-                    )
+                    await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, ticket_state)
                     await self._sync_jira_status(phase_name)
 
                 self._current_phase = phase_name
@@ -201,7 +211,8 @@ class Worker:
 
                 # Send all prompts for this phase as a single block
                 full_prompt = "\n".join(
-                    p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts
+                    p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch)
+                    for p in prompts
                 )
                 self._send_to_pty(full_prompt + "\r")
 
@@ -221,7 +232,12 @@ class Worker:
                     ticket = await self.state.get_ticket(self.ticket_id)
                     current_state = ticket.state if ticket else None
                     if current_state in (TicketState.REVIEW, TicketState.DONE):
-                        print(f"[worker] Process exited (code={self.process.returncode}) during {phase_name}, ticket in {current_state} — keeping state", file=sys.stderr)
+                        logger.info(
+                            "Process exited (code=%d) during %s, ticket in %s — keeping state",
+                            self.process.returncode,
+                            phase_name,
+                            current_state,
+                        )
                         await self._notify_viewers_exit(self.process.returncode)
                         return True
                     error = f"CLI exited with code {self.process.returncode} during {phase_name}"
@@ -262,20 +278,16 @@ class Worker:
             # Don't overwrite review/done state with FAILED (phase pipeline path)
             ticket = await self.state.get_ticket(self.ticket_id)
             if ticket and ticket.state in (TicketState.REVIEW, TicketState.DONE):
-                print(f"[worker] Exception during {ticket.state} — keeping state: {e}", file=sys.stderr)
+                logger.info("Exception during %s — keeping state: %s", ticket.state, e)
                 return True
             error = str(e)
             await self.state.update_ticket(self.ticket_id, error=error)
-            try:
+            with contextlib.suppress(ValueError):
                 await self.state.update_ticket_state(self.ticket_id, TicketState.FAILED)
-            except ValueError:
-                pass
-            try:
+            with contextlib.suppress(RuntimeError, OSError):
                 await self.broadcaster.broadcast_ticket_update(
                     self.run_id, self.ticket_id, TicketState.FAILED, error=error
                 )
-            except Exception:
-                pass
             return False
         finally:
             # Kill process if still running
@@ -290,7 +302,7 @@ class Worker:
                 except ProcessLookupError:
                     pass
             self._close_pty()
-            if hasattr(self, '_log_fh') and self._log_fh:
+            if hasattr(self, "_log_fh") and self._log_fh:
                 self._log_fh.close()
             if not self._cancelled:
                 await self.state.update_ticket(self.ticket_id, worker_pid=None)
@@ -319,7 +331,7 @@ class Worker:
         when multiple workers run concurrently. Coalesces available data per
         frame (~30fps) so xterm.js receives complete escape sequences.
         """
-        FRAME_INTERVAL = 0.033  # ~30fps
+        frame_interval = 0.033  # ~30fps
         loop = asyncio.get_event_loop()
 
         def _read_batch():
@@ -345,7 +357,7 @@ class Worker:
             try:
                 # Non-blocking wait for data, then read batch in executor
                 ready = await loop.run_in_executor(
-                    None, lambda: select.select([self._master_fd], [], [], FRAME_INTERVAL)[0]
+                    None, lambda: select.select([self._master_fd], [], [], frame_interval)[0]
                 )
                 if not ready:
                     if self.process.returncode is not None:
@@ -359,21 +371,19 @@ class Worker:
                 # Store in scrollback buffer
                 self._output_buffer.extend(data)
                 if len(self._output_buffer) > self._max_buffer:
-                    self._output_buffer = self._output_buffer[-self._max_buffer:]
+                    self._output_buffer = self._output_buffer[-self._max_buffer :]
 
                 # Forward entire batch to viewers
-                try:
-                    await self._send_to_viewers(data)
-                except Exception:
-                    pass  # Never let viewer errors kill the read loop
+                with contextlib.suppress(RuntimeError, OSError):
+                    await self._send_to_viewers(data)  # Never let viewer errors kill the read loop
 
                 # Write to log file
-                if hasattr(self, '_log_fh') and self._log_fh:
-                    self._log_fh.write(data.decode('utf-8', errors='replace'))
+                if hasattr(self, "_log_fh") and self._log_fh:
+                    self._log_fh.write(data.decode("utf-8", errors="replace"))
                     self._log_fh.flush()
 
                 # Parse for state transitions, PR URLs, and log broadcasting
-                text = data.decode('utf-8', errors='replace')
+                text = data.decode("utf-8", errors="replace")
                 await self._process_output(text)
             except (OSError, ValueError):
                 break
@@ -392,15 +402,13 @@ class Worker:
                     break
                 self._output_buffer.extend(data)
                 if len(self._output_buffer) > self._max_buffer:
-                    self._output_buffer = self._output_buffer[-self._max_buffer:]
-                try:
+                    self._output_buffer = self._output_buffer[-self._max_buffer :]
+                with contextlib.suppress(RuntimeError, OSError):
                     await self._send_to_viewers(data)
-                except Exception:
-                    pass
-                if hasattr(self, '_log_fh') and self._log_fh:
-                    self._log_fh.write(data.decode('utf-8', errors='replace'))
+                if hasattr(self, "_log_fh") and self._log_fh:
+                    self._log_fh.write(data.decode("utf-8", errors="replace"))
                     self._log_fh.flush()
-                text = data.decode('utf-8', errors='replace')
+                text = data.decode("utf-8", errors="replace")
                 await self._process_output(text)
         except OSError:
             pass
@@ -414,7 +422,7 @@ class Worker:
             *(ws.send_bytes(data) for ws in viewers),
             return_exceptions=True,
         )
-        disconnected = {ws for ws, r in zip(viewers, results) if isinstance(r, Exception)}
+        disconnected = {ws for ws, r in zip(viewers, results, strict=False) if isinstance(r, Exception)}
         if disconnected:
             self._viewers -= disconnected
 
@@ -432,10 +440,8 @@ class Worker:
     def _close_pty(self) -> None:
         """Close the PTY master fd."""
         if self._master_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(self._master_fd)
-            except OSError:
-                pass
             self._master_fd = None
 
     # --- Viewer management (attach/detach) ---
@@ -444,10 +450,10 @@ class Worker:
         """Attach a WebSocket viewer. Sends scrollback buffer in chunks."""
         if self._output_buffer:
             buf = bytes(self._output_buffer)
-            CHUNK = 32768  # 32KB chunks to avoid blocking
+            chunk_size = 32768  # 32KB chunks to avoid blocking
             try:
-                for i in range(0, len(buf), CHUNK):
-                    await ws.send_bytes(buf[i:i + CHUNK])
+                for i in range(0, len(buf), chunk_size):
+                    await ws.send_bytes(buf[i : i + chunk_size])
             except Exception:
                 return
         self._viewers.add(ws)
@@ -470,7 +476,7 @@ class Worker:
         This cancels the current tool call without killing the session."""
         if self._master_fd is not None and not self._cancelled:
             try:
-                os.write(self._master_fd, b'\x1b')  # Escape key
+                os.write(self._master_fd, b"\x1b")  # Escape key
                 self._user_active = True
                 return True
             except OSError:
@@ -496,14 +502,12 @@ class Worker:
     def _send_to_pty(self, text: str) -> None:
         """Write a command/prompt to the PTY."""
         if self._master_fd is not None and not self._cancelled:
-            try:
+            with contextlib.suppress(OSError):
                 os.write(self._master_fd, text.encode())
-            except OSError:
-                pass
 
     # --- Phase completion ---
 
-    async def _wait_for_phase_completion(self, marker: Optional[str]) -> bool:
+    async def _wait_for_phase_completion(self, marker: str | None) -> bool:
         """Wait for phase to complete via marker detection or idle debounce.
 
         Returns True if phase completed, False if process died.
@@ -540,8 +544,8 @@ class Worker:
         self._last_output_time = time.time()
 
         self._line_buffer += text
-        while '\n' in self._line_buffer:
-            line, self._line_buffer = self._line_buffer.split('\n', 1)
+        while "\n" in self._line_buffer:
+            line, self._line_buffer = self._line_buffer.split("\n", 1)
             line = line.strip()
             if not line:
                 continue
@@ -572,11 +576,9 @@ class Worker:
             pr_url = self._extract_pr_url(parsed)
             if pr_url:
                 await self.state.update_ticket(self.ticket_id, pr_url=pr_url)
-                await self.broadcaster.broadcast_ticket_update(
-                    self.run_id, self.ticket_id, None, pr_url=pr_url
-                )
+                await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, None, pr_url=pr_url)
 
-    def _parse_stream_line(self, raw: str) -> Optional[str]:
+    def _parse_stream_line(self, raw: str) -> str | None:
         """Parse a line from claude --output-format stream-json. Falls back to raw text."""
         try:
             data = json.loads(raw)
@@ -598,17 +600,16 @@ class Worker:
             if tool == "Bash":
                 cmd = inp.get("command", "")
                 return f"[tool] Bash: {cmd[:200]}"
-            elif tool in ("Edit", "Write"):
+            if tool in ("Edit", "Write"):
                 path = inp.get("file_path", "")
                 return f"[tool] {tool}: {path}"
-            elif tool == "Read":
+            if tool == "Read":
                 path = inp.get("file_path", "")
                 return f"[tool] Read: {path}"
-            elif tool == "Grep":
+            if tool == "Grep":
                 pattern = inp.get("pattern", "")
                 return f"[tool] Grep: {pattern}"
-            else:
-                return f"[tool] {tool}"
+            return f"[tool] {tool}"
 
         # Tool result
         if msg_type == "tool_result":
@@ -628,12 +629,12 @@ class Worker:
 
         return None
 
-    def _extract_pr_url(self, line: str) -> Optional[str]:
+    def _extract_pr_url(self, line: str) -> str | None:
         """Extract PR/pull-request URL from output line."""
         patterns = [
-            r'(https?://bitbucket\.org/[^\s]+/pull-requests/\d+)',
-            r'(https?://github\.com/[^\s]+/pull/\d+)',
-            r'(https?://[^\s]*pull[_-]?request[^\s]*\d+)',
+            r"(https?://bitbucket\.org/[^\s]+/pull-requests/\d+)",
+            r"(https?://github\.com/[^\s]+/pull/\d+)",
+            r"(https?://[^\s]*pull[_-]?request[^\s]*\d+)",
         ]
         for pattern in patterns:
             match = re.search(pattern, line)
@@ -653,10 +654,10 @@ class Worker:
             else:
                 success = await self.claude_helper.transition_jira_issue(self.jira_key, target)
             if success:
-                print(f"[worker] Synced {self.jira_key} -> {target} on Jira", file=sys.stderr)
+                logger.info("Synced %s -> %s on Jira", self.jira_key, target)
                 await self.state.append_log(self.ticket_id, f"[jira] Transitioned to {target}")
-        except Exception as e:
-            print(f"[worker] Jira sync failed for {self.jira_key}: {e}", file=sys.stderr)
+        except (RuntimeError, ValueError, OSError) as e:
+            logger.warning("Jira sync failed for %s: %s", self.jira_key, e)
 
 
 class AdHocTerminal:
@@ -670,18 +671,19 @@ class AdHocTerminal:
     def __init__(self, worktree_path: str, claude_command: str = "claude"):
         self.worktree_path = worktree_path
         self.claude_command = claude_command
-        self.process: Optional[asyncio.subprocess.Process] = None
-        self._master_fd: Optional[int] = None
+        self.process: asyncio.subprocess.Process | None = None
+        self._master_fd: int | None = None
         self._viewers: set = set()
         self._output_buffer = bytearray()
         self._max_buffer = 256 * 1024
-        self._read_task: Optional[asyncio.Task] = None
+        self._read_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Spawn an interactive Claude session in the worktree."""
         import shlex
+
         parts = shlex.split(self.claude_command) if " " in self.claude_command else [self.claude_command]
-        cmd = parts + ["--dangerously-skip-permissions"]
+        cmd = [*parts, "--dangerously-skip-permissions"]
 
         master_fd, slave_fd = pty.openpty()
         self._master_fd = master_fd
@@ -694,22 +696,22 @@ class AdHocTerminal:
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=self.worktree_path,
-            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
             env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
         )
         os.close(slave_fd)
 
         self._read_task = asyncio.create_task(self._pty_read_loop())
-        print(f"[adhoc] Spawned interactive session in {self.worktree_path} (pid={self.process.pid})", file=sys.stderr)
+        logger.info("Spawned interactive session in %s (pid=%s)", self.worktree_path, self.process.pid)
 
     async def _pty_read_loop(self) -> None:
         """Read from PTY and forward to viewers."""
         loop = asyncio.get_event_loop()
         while True:
             try:
-                ready = await loop.run_in_executor(
-                    None, lambda: select.select([self._master_fd], [], [], 0.5)[0]
-                )
+                ready = await loop.run_in_executor(None, lambda: select.select([self._master_fd], [], [], 0.5)[0])
                 if not ready:
                     if self.process.returncode is not None:
                         break
@@ -719,27 +721,20 @@ class AdHocTerminal:
                     break
                 self._output_buffer.extend(data)
                 if len(self._output_buffer) > self._max_buffer:
-                    self._output_buffer = self._output_buffer[-self._max_buffer:]
-                try:
+                    self._output_buffer = self._output_buffer[-self._max_buffer :]
+                with contextlib.suppress(RuntimeError, OSError):
                     await self._send_to_viewers(data)
-                except Exception:
-                    pass
             except (OSError, ValueError):
                 break
 
         # Notify viewers that process exited, then close PTY
-        import json as _json
-        exit_msg = _json.dumps({"type": "process_exit", "code": self.process.returncode if self.process else -1})
+        exit_msg = json.dumps({"type": "process_exit", "code": self.process.returncode if self.process else -1})
         for ws in list(self._viewers):
-            try:
+            with contextlib.suppress(Exception):
                 await ws.send_text(exit_msg)
-            except Exception:
-                pass
         if self._master_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(self._master_fd)
-            except OSError:
-                pass
             self._master_fd = None
 
     async def _send_to_viewers(self, data: bytes) -> None:
@@ -750,17 +745,17 @@ class AdHocTerminal:
             *(ws.send_bytes(data) for ws in viewers),
             return_exceptions=True,
         )
-        disconnected = {ws for ws, r in zip(viewers, results) if isinstance(r, Exception)}
+        disconnected = {ws for ws, r in zip(viewers, results, strict=False) if isinstance(r, Exception)}
         if disconnected:
             self._viewers -= disconnected
 
     async def attach_viewer(self, ws) -> None:
         if self._output_buffer:
             buf = bytes(self._output_buffer)
-            CHUNK = 32768
+            chunk_size = 32768
             try:
-                for i in range(0, len(buf), CHUNK):
-                    await ws.send_bytes(buf[i:i + CHUNK])
+                for i in range(0, len(buf), chunk_size):
+                    await ws.send_bytes(buf[i : i + chunk_size])
             except Exception:
                 return
         self._viewers.add(ws)
@@ -770,18 +765,14 @@ class AdHocTerminal:
 
     def write_input(self, data: bytes) -> None:
         if self._master_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.write(self._master_fd, data)
-            except OSError:
-                pass
 
     def resize_pty(self, rows: int, cols: int) -> None:
         if self._master_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 winsize = struct.pack("HHHH", rows, cols, 0, 0)
                 fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
-            except OSError:
-                pass
 
     @property
     def is_running(self) -> bool:
@@ -796,10 +787,8 @@ class AdHocTerminal:
             except asyncio.TimeoutError:
                 self.process.kill()
         if self._master_fd is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.close(self._master_fd)
-            except OSError:
-                pass
             self._master_fd = None
         if self._read_task:
             self._read_task.cancel()

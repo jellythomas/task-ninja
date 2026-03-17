@@ -1,28 +1,36 @@
 """Git worktree management for parallel ticket execution."""
 
+from __future__ import annotations
+
 import asyncio
+import contextlib
 import json
-import os
 import shutil
-from dataclasses import dataclass, asdict
+
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
 
 # Hidden files/dirs to copy from main repo to new worktrees
 DEFAULT_HIDDEN_COPIES = [
-    ".env", ".claude", ".tool-versions", ".ruby-version",
-    ".node-version", ".nvmrc", ".python-version",
+    ".env",
+    ".claude",
+    ".tool-versions",
+    ".ruby-version",
+    ".node-version",
+    ".nvmrc",
+    ".python-version",
 ]
 
 
 @dataclass
 class WorktreeResult:
     """Result of a worktree creation attempt."""
+
     path: str
     created: bool  # True if newly created, False if reused
     branch_existed: bool
-    current_parent: Optional[str] = None  # Detected merge-base branch
-    expected_parent: Optional[str] = None  # Requested parent_branch
+    current_parent: str | None = None  # Detected merge-base branch
+    expected_parent: str | None = None  # Requested parent_branch
     mismatch: bool = False  # True if current_parent != expected_parent
 
     def to_dict(self) -> dict:
@@ -32,14 +40,21 @@ class WorktreeResult:
 class GitManager:
     """Creates and cleans up git worktrees for isolated ticket work."""
 
-    def __init__(self, project_path: str, worktree_dir: str = ".worktrees", branch_prefix: str = "feat",
-                 hidden_copies: list[str] = None):
+    def __init__(
+        self,
+        project_path: str,
+        worktree_dir: str = ".worktrees",
+        branch_prefix: str = "feat",
+        hidden_copies: list[str] | None = None,
+    ):
         self.project_path = Path(project_path).expanduser().resolve()
         self.worktree_base = self.project_path / worktree_dir
         self.hidden_copies = hidden_copies or DEFAULT_HIDDEN_COPIES
         self.branch_prefix = branch_prefix
 
-    async def create_worktree(self, jira_key: str, parent_branch: str = None, clean: bool = False) -> WorktreeResult:
+    async def create_worktree(
+        self, jira_key: str, parent_branch: str | None = None, clean: bool = False
+    ) -> WorktreeResult:
         """Create a git worktree for a ticket. Returns a WorktreeResult.
 
         Args:
@@ -54,10 +69,8 @@ class GitManager:
         self.worktree_base.mkdir(parents=True, exist_ok=True)
 
         # Always prune stale worktree refs first
-        try:
+        with contextlib.suppress(RuntimeError):
             await self._run_git("worktree", "prune")
-        except RuntimeError:
-            pass
 
         # Handle existing worktree
         if worktree_path.exists():
@@ -91,18 +104,15 @@ class GitManager:
             self._copy_hidden_files(worktree_path)
             # Sync existing branch with latest origin
             if parent_branch and fetched_remote:
-                try:
+                with contextlib.suppress(RuntimeError):
                     await self._run_git("-C", str(worktree_path), "merge", f"origin/{parent_branch}", "--ff-only")
-                except RuntimeError:
-                    pass  # May have diverged, skip auto-merge
+                    # May have diverged, skip auto-merge
 
             # Check if branch parent matches expected parent
             mismatch = False
             current_parent = None
             if parent_branch and fetched_remote:
-                mismatch, current_parent = await self._check_parent_mismatch(
-                    branch_name, parent_branch
-                )
+                mismatch, current_parent = await self._check_parent_mismatch(branch_name, parent_branch)
 
             return WorktreeResult(
                 path=str(worktree_path),
@@ -112,23 +122,19 @@ class GitManager:
                 expected_parent=parent_branch,
                 mismatch=mismatch,
             )
-        else:
-            # Create new branch from origin/<parent_branch> (latest remote) or local fallback
-            if parent_branch and fetched_remote:
-                start_point = f"origin/{parent_branch}"
-            else:
-                start_point = parent_branch or "HEAD"
-            await self._run_git("worktree", "add", "-b", branch_name, str(worktree_path), start_point)
-            # Copy hidden files to worktree
-            self._copy_hidden_files(worktree_path)
+        # Create new branch from origin/<parent_branch> (latest remote) or local fallback
+        start_point = f"origin/{parent_branch}" if parent_branch and fetched_remote else parent_branch or "HEAD"
+        await self._run_git("worktree", "add", "-b", branch_name, str(worktree_path), start_point)
+        # Copy hidden files to worktree
+        self._copy_hidden_files(worktree_path)
 
-            return WorktreeResult(
-                path=str(worktree_path),
-                created=True,
-                branch_existed=False,
-                expected_parent=parent_branch,
-                mismatch=False,
-            )
+        return WorktreeResult(
+            path=str(worktree_path),
+            created=True,
+            branch_existed=False,
+            expected_parent=parent_branch,
+            mismatch=False,
+        )
 
     def _copy_hidden_files(self, worktree_path: Path):
         """Copy hidden files/dirs from main repo to worktree."""
@@ -142,7 +148,7 @@ class GitManager:
                     shutil.copytree(str(src), str(dst), symlinks=True)
                 else:
                     shutil.copy2(str(src), str(dst))
-            except Exception:
+            except OSError:
                 pass  # Best-effort, don't fail worktree creation
         # Write permissive settings.local.json so --dangerously-skip-permissions
         # works correctly for subagents in interactive PTY sessions.
@@ -172,7 +178,7 @@ class GitManager:
                 }
             }
             settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-        except Exception:
+        except OSError:
             pass  # Best-effort
 
     async def rebase_onto(self, jira_key: str, new_parent: str) -> str:
@@ -181,31 +187,22 @@ class GitManager:
         worktree_path = self.worktree_base / f"worktree-{jira_key.lower()}"
 
         # Fetch latest
-        try:
+        with contextlib.suppress(RuntimeError):
             await self._run_git("fetch", "origin", new_parent)
-        except RuntimeError:
-            pass
 
         # Find the merge-base between branch and its current parent
         # Then rebase only the branch's own commits onto the new parent
         try:
-            merge_base = await self._run_git(
-                "-C", str(worktree_path),
-                "merge-base", branch_name, "HEAD"
-            )
+            merge_base = await self._run_git("-C", str(worktree_path), "merge-base", branch_name, "HEAD")
         except RuntimeError:
             merge_base = None
 
         if merge_base:
             await self._run_git(
-                "-C", str(worktree_path),
-                "rebase", "--onto", f"origin/{new_parent}", merge_base, branch_name
+                "-C", str(worktree_path), "rebase", "--onto", f"origin/{new_parent}", merge_base, branch_name
             )
         else:
-            await self._run_git(
-                "-C", str(worktree_path),
-                "rebase", f"origin/{new_parent}"
-            )
+            await self._run_git("-C", str(worktree_path), "rebase", f"origin/{new_parent}")
 
         return str(worktree_path)
 
@@ -218,24 +215,20 @@ class GitManager:
         await self._remove_worktree(worktree_path)
 
         # Delete the branch
-        try:
-            await self._run_git("branch", "-D", branch_name)
-        except RuntimeError:
-            pass  # Branch may not exist
+        with contextlib.suppress(RuntimeError):
+            await self._run_git("branch", "-D", branch_name)  # Branch may not exist
 
         # Create fresh via create_worktree
         return await self.create_worktree(jira_key, parent_branch, clean=False)
 
-    async def _check_parent_mismatch(self, branch_name: str, expected_parent: str) -> tuple[bool, Optional[str]]:
+    async def _check_parent_mismatch(self, branch_name: str, expected_parent: str) -> tuple[bool, str | None]:
         """Check if a branch's actual parent matches the expected parent.
 
         Returns (mismatch: bool, detected_parent_desc: str or None).
         """
         try:
             # Get merge-base between branch and expected parent
-            merge_base = await self._run_git(
-                "merge-base", branch_name, f"origin/{expected_parent}"
-            )
+            merge_base = await self._run_git("merge-base", branch_name, f"origin/{expected_parent}")
             # Get the tip of the expected parent
             parent_tip = await self._run_git("rev-parse", f"origin/{expected_parent}")
 
@@ -251,7 +244,7 @@ class GitManager:
             # Can't determine — assume no mismatch
             return False, None
 
-    async def _detect_branch_parent(self, branch_name: str) -> Optional[str]:
+    async def _detect_branch_parent(self, branch_name: str) -> str | None:
         """Best-effort detection of which branch this was forked from."""
         try:
             # Check common parent branches
@@ -264,14 +257,12 @@ class GitManager:
                     continue
 
             # Also check all remote branches that look like epics or features
-            try:
+            with contextlib.suppress(RuntimeError):
                 refs_output = await self._run_git("branch", "-r", "--format=%(refname:short)")
                 for ref in refs_output.splitlines():
                     ref = ref.strip().removeprefix("origin/")
                     if ref.startswith("EPIC-") or ref.startswith("feat/"):
                         candidates.append(ref)
-            except RuntimeError:
-                pass
 
             # Find which candidate has the closest merge-base to branch tip
             branch_tip = await self._run_git("rev-parse", branch_name)
@@ -280,9 +271,7 @@ class GitManager:
 
             for candidate in candidates:
                 try:
-                    merge_base = await self._run_git(
-                        "merge-base", branch_name, f"origin/{candidate}"
-                    )
+                    merge_base = await self._run_git("merge-base", branch_name, f"origin/{candidate}")
                     # Count commits between merge-base and branch tip
                     count_output = await self._run_git(
                         "rev-list", "--count", f"{merge_base.strip()}..{branch_tip.strip()}"
@@ -301,7 +290,10 @@ class GitManager:
     async def _branch_exists(self, branch_name: str) -> bool:
         """Check if a local branch exists."""
         proc = await asyncio.create_subprocess_exec(
-            "git", "branch", "--list", branch_name,
+            "git",
+            "branch",
+            "--list",
+            branch_name,
             cwd=str(self.project_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -311,18 +303,13 @@ class GitManager:
 
     async def _remove_worktree(self, worktree_path: Path) -> None:
         """Force-remove a worktree directory and clean up git refs."""
-        try:
+        with contextlib.suppress(RuntimeError):
             await self._run_git("worktree", "remove", str(worktree_path), "--force")
-        except RuntimeError:
-            pass
         # Force-remove directory if git couldn't clean it
         if worktree_path.exists():
-            import shutil
             shutil.rmtree(str(worktree_path), ignore_errors=True)
-        try:
+        with contextlib.suppress(RuntimeError):
             await self._run_git("worktree", "prune")
-        except RuntimeError:
-            pass
 
     async def cleanup_worktree(self, worktree_path: str) -> None:
         """Remove a worktree (keeps the branch)."""
@@ -336,7 +323,8 @@ class GitManager:
 
     async def _run_git(self, *args: str) -> str:
         proc = await asyncio.create_subprocess_exec(
-            "git", *args,
+            "git",
+            *args,
             cwd=str(self.project_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

@@ -1,10 +1,15 @@
 """Manage .env file for secrets and configuration."""
 
+from __future__ import annotations
+
 import hashlib
+import logging
 import os
 import secrets
-import sys
+
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 ENV_PATH = Path(__file__).parent.parent / ".env"
 
@@ -62,13 +67,24 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 def _write_env_file(path: Path, values: dict[str, str]) -> None:
     """Write .env file with sections and comments."""
     sections = {
-        "Server": ["TASK_NINJA_SECRET_HASH", "TASK_NINJA_SECRET_SALT", "TASK_NINJA_HOST", "TASK_NINJA_PORT", "TASK_NINJA_REMOTE_ACCESS"],
+        "Server": [
+            "TASK_NINJA_SECRET_HASH",
+            "TASK_NINJA_SECRET_SALT",
+            "TASK_NINJA_HOST",
+            "TASK_NINJA_PORT",
+            "TASK_NINJA_REMOTE_ACCESS",
+        ],
         "Jira": ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"],
         "Bitbucket": ["BITBUCKET_WORKSPACE", "BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD"],
         "Notifications": ["NOTIFICATIONS_ENABLED", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_EMAIL"],
         "Scheduler": [
-            "AUTO_RETRY_ENABLED", "AUTO_RETRY_DELAY_MINUTES", "AUTO_RETRY_MAX",
-            "WORKING_HOURS_ENABLED", "WORKING_HOURS_START", "WORKING_HOURS_END", "WORKING_HOURS_DAYS",
+            "AUTO_RETRY_ENABLED",
+            "AUTO_RETRY_DELAY_MINUTES",
+            "AUTO_RETRY_MAX",
+            "WORKING_HOURS_ENABLED",
+            "WORKING_HOURS_START",
+            "WORKING_HOURS_END",
+            "WORKING_HOURS_DAYS",
         ],
     }
 
@@ -93,9 +109,7 @@ def _write_env_file(path: Path, values: dict[str, str]) -> None:
 
 def _hash_token(token: str, salt: str) -> str:
     """Hash a token with salt using SHA-256 with 100k iterations (PBKDF2)."""
-    return hashlib.pbkdf2_hmac(
-        "sha256", token.encode(), salt.encode(), iterations=100_000
-    ).hex()
+    return hashlib.pbkdf2_hmac("sha256", token.encode(), salt.encode(), iterations=100_000).hex()
 
 
 def generate_token() -> str:
@@ -151,8 +165,8 @@ def load_env() -> dict[str, str]:
             salt = secrets.token_urlsafe(16)
             current["TASK_NINJA_SECRET_HASH"] = _hash_token(legacy, salt)
             current["TASK_NINJA_SECRET_SALT"] = salt
-            print(f"[env] Migrated TASK_NINJA_SECRET to hashed storage", file=sys.stderr)
-            print(f"[env] Your existing token still works — no action needed", file=sys.stderr)
+            logger.info("Migrated TASK_NINJA_SECRET to hashed storage")
+            logger.info("Your existing token still works — no action needed")
             # Remove the plain-text key
             current.pop("TASK_NINJA_SECRET", None)
         else:
@@ -161,16 +175,16 @@ def load_env() -> dict[str, str]:
             salt = secrets.token_urlsafe(16)
             current["TASK_NINJA_SECRET_HASH"] = _hash_token(raw_token, salt)
             current["TASK_NINJA_SECRET_SALT"] = salt
-            print(f"", file=sys.stderr)
-            print(f"  ╔══════════════════════════════════════════════════════╗", file=sys.stderr)
-            print(f"  ║  Your Task Ninja auth token (save it now!):         ║", file=sys.stderr)
-            print(f"  ║                                                      ║", file=sys.stderr)
-            print(f"  ║  {raw_token}  ║", file=sys.stderr)
-            print(f"  ║                                                      ║", file=sys.stderr)
-            print(f"  ║  This token is shown ONCE and never stored on disk.  ║", file=sys.stderr)
-            print(f"  ║  To regenerate: python server.py --regenerate-token  ║", file=sys.stderr)
-            print(f"  ╚══════════════════════════════════════════════════════╝", file=sys.stderr)
-            print(f"", file=sys.stderr)
+            logger.info("")
+            logger.info("  ╔══════════════════════════════════════════════════════╗")
+            logger.info("  ║  Your Task Ninja auth token (save it now!):         ║")
+            logger.info("  ║                                                      ║")
+            logger.info("  ║  %s  ║", raw_token)
+            logger.info("  ║                                                      ║")
+            logger.info("  ║  This token is shown ONCE and never stored on disk.  ║")
+            logger.info("  ║  To regenerate: python server.py --regenerate-token  ║")
+            logger.info("  ╚══════════════════════════════════════════════════════╝")
+            logger.info("")
 
     # Merge with defaults (existing values take precedence)
     merged = {**ENV_DEFAULTS, **current}
