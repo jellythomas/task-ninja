@@ -1,7 +1,10 @@
 """SSE broadcaster for real-time UI updates."""
 
+from __future__ import annotations
+
 import asyncio
 import json
+
 from enum import Enum
 from typing import Any
 
@@ -16,7 +19,7 @@ class _EnumEncoder(json.JSONEncoder):
 class Broadcaster:
     """Manages SSE connections and broadcasts events to all listeners."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._subscribers: dict[str, list[asyncio.Queue]] = {}  # run_id -> queues
 
     def subscribe(self, run_id: str) -> asyncio.Queue:
@@ -38,7 +41,7 @@ class Broadcaster:
         for queue in self._subscribers.get(run_id, []):
             await queue.put(message)
 
-    async def broadcast_ticket_update(self, run_id: str, ticket_id: str, state: str = None, **extra) -> None:
+    async def broadcast_ticket_update(self, run_id: str, ticket_id: str, state: str | None = None, **extra) -> None:
         """Broadcast a ticket update (state change, PR URL, etc)."""
         data = {"ticket_id": ticket_id, **extra}
         if state is not None:
@@ -47,10 +50,14 @@ class Broadcaster:
 
     async def broadcast_log(self, run_id: str, ticket_id: str, line: str) -> None:
         """Broadcast a log line from a worker."""
-        await self.broadcast(run_id, "log", {
-            "ticket_id": ticket_id,
-            "line": line,
-        })
+        await self.broadcast(
+            run_id,
+            "log",
+            {
+                "ticket_id": ticket_id,
+                "line": line,
+            },
+        )
 
     async def broadcast_run_status(self, run_id: str, status: str) -> None:
         """Broadcast a run status change."""

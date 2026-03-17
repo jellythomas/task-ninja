@@ -3,26 +3,32 @@
 No polling. Timers are created per-ticket only when needed.
 """
 
+from __future__ import annotations
+
 import asyncio
-import sys
-from datetime import datetime, time as dtime
-from typing import Callable, Optional
+import logging
+
+from collections.abc import Callable
+from datetime import datetime
+from datetime import time as dtime
 
 from engine.env_manager import get_env
 from engine.state import StateManager
 from models.ticket import TicketState
 
+logger = logging.getLogger(__name__)
+
 
 class TicketWatchdog:
     """Manages per-ticket timers for retry and staleness detection."""
 
-    def __init__(self, state: StateManager, broadcaster):
+    def __init__(self, state: StateManager, broadcaster: object) -> None:
         self.state = state
         self.broadcaster = broadcaster
         self._timers: dict[str, asyncio.TimerHandle] = {}  # ticket_id -> handle
         self._retry_counts: dict[str, int] = {}  # ticket_id -> retries so far
-        self._requeue_callback: Optional[Callable] = None  # set by orchestrator
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._requeue_callback: Callable | None = None  # set by orchestrator
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def set_callbacks(self, requeue_cb: Callable):
         """Set callbacks for retry actions."""
@@ -57,14 +63,13 @@ class TicketWatchdog:
         count = self._retry_counts.get(ticket_id, 0)
         max_retries = self._get_max_retries()
         if count >= max_retries:
-            print(f"[watchdog] {ticket_id}: max retries ({max_retries}) reached", file=sys.stderr)
+            logger.info("%s: max retries (%d) reached", ticket_id, max_retries)
             self._retry_counts.pop(ticket_id, None)
             return
 
         delay = self._get_retry_delay()
         self._retry_counts[ticket_id] = count + 1
-        print(f"[watchdog] {ticket_id}: scheduling retry {count + 1}/{max_retries} in {delay}s",
-              file=sys.stderr)
+        logger.info("%s: scheduling retry %d/%d in %ds", ticket_id, count + 1, max_retries, delay)
         self._set_timer(ticket_id, delay, self._on_retry, ticket_id)
 
     def on_ticket_manual_move(self, ticket_id: str):
@@ -95,9 +100,8 @@ class TicketWatchdog:
         current_time = now.time()
         if start <= end:
             return start <= current_time <= end
-        else:
-            # Overnight window (e.g., 22:00-06:00)
-            return current_time >= start or current_time <= end
+        # Overnight window (e.g., 22:00-06:00)
+        return current_time >= start or current_time <= end
 
     # --- Timer callbacks ---
 
@@ -110,7 +114,7 @@ class TicketWatchdog:
             return  # Already moved, nothing to do
 
         error = f"Worker timeout exceeded ({self._get_worker_timeout() // 60}min)"
-        print(f"[watchdog] {ticket_id}: stale — {error}", file=sys.stderr)
+        logger.warning("%s: stale — %s", ticket_id, error)
         await self.state.update_ticket(ticket_id, state=TicketState.FAILED, error=error)
         await self.broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.FAILED, error=error)
 
@@ -121,7 +125,7 @@ class TicketWatchdog:
         """Retry a failed ticket by re-queuing it."""
         if not self.is_within_working_hours():
             # Defer retry to start of next working window
-            print(f"[watchdog] {ticket_id}: outside working hours, deferring retry", file=sys.stderr)
+            logger.info("%s: outside working hours, deferring retry", ticket_id)
             self._set_timer(ticket_id, 300, self._on_retry, ticket_id)  # check again in 5min
             return
 
@@ -132,7 +136,7 @@ class TicketWatchdog:
             return  # Already moved
 
         count = self._retry_counts.get(ticket_id, 0)
-        print(f"[watchdog] {ticket_id}: retrying (attempt {count})", file=sys.stderr)
+        logger.info("%s: retrying (attempt %d)", ticket_id, count)
 
         await self.state.update_ticket(ticket_id, state=TicketState.QUEUED, error=None)
         await self.broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.QUEUED)
@@ -195,7 +199,7 @@ class TicketWatchdog:
         """Get current watchdog status for API/UI."""
         return {
             "active_timers": len(self._timers),
-            "pending_retries": {tid: count for tid, count in self._retry_counts.items()},
+            "pending_retries": dict(self._retry_counts),
             "auto_retry_enabled": self._is_auto_retry_enabled(),
             "working_hours_enabled": self._is_working_hours_enabled(),
             "within_working_hours": self.is_within_working_hours(),

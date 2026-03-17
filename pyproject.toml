@@ -1,0 +1,163 @@
+[project]
+name = "task-ninja"
+version = "0.1.0"
+description = "AI agent orchestrator for parallel Jira ticket execution"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "mcp[cli]>=1.0.0",
+    "aiosqlite>=0.20.0",
+    "apscheduler>=3.10.0",
+    "sse-starlette>=2.0.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
+    "httpx>=0.27.0",
+    "pywebpush>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "yoyo-migrations>=9.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+indent-width = 4
+
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "migrations",
+    "*.egg-info",
+    "static",
+]
+
+[tool.ruff.lint]
+select = [
+    # Correctness
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "B",      # flake8-bugbear
+    # Security
+    "S",      # flake8-bandit
+    # Modernization
+    "UP",     # pyupgrade
+    "I",      # isort
+    "ASYNC",  # flake8-async
+    # Code Quality
+    "SIM",    # flake8-simplify
+    "C4",     # flake8-comprehensions
+    "RET",    # flake8-return
+    "N",      # pep8-naming
+    "A",      # flake8-builtins
+    "ARG",    # flake8-unused-arguments
+    # Performance
+    "PERF",   # perflint
+    # Debugging
+    "T20",    # flake8-print
+    # Ruff-specific
+    "RUF",    # ruff-specific rules
+]
+
+ignore = [
+    "E501",    # line too long — handled by formatter
+    "B008",    # function call in default argument — FastAPI Depends() pattern
+    "S101",    # assert usage — handled via per-file-ignores for tests
+    "RET504",  # assign before return — sometimes aids readability
+    # Bootstrap prints in server.py / migrator.py before logging is configured
+    "T20",     # re-enabled selectively via noqa where print is intentional
+    # S603/S607: subprocess with variable args — necessary for dependency install
+    "S603",
+    "S607",
+    # S104: binding to all interfaces — intentional for remote access mode
+    "S104",
+    # ASYNC2xx: project uses asyncio (not trio/anyio) — Path/subprocess calls are intentional
+    "ASYNC220",
+    "ASYNC230",
+    "ASYNC240",
+    # PERF203: try/except inside loops is intentional for per-iteration error handling
+    "PERF203",
+]
+
+fixable = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can use assert, print, magic values
+"tests/**/*.py" = [
+    "S101",  # assert is fine in tests
+    "S106",  # hardcoded passwords in test fixtures
+    "ARG",   # unused arguments in fixtures are normal
+    "T20",   # print() ok in tests for debugging
+]
+# Init files re-export symbols
+"__init__.py" = ["F401", "E402"]
+# Migrations have auto-generated code
+"migrations/**/*.py" = ["E501", "N", "ERA"]
+# Server bootstrap runs before logging is available — print to stderr is correct
+# E402: imports after bootstrap guards are intentional
+"server.py" = ["T20", "E402"]
+# Migrator has intentional print for CLI output mode
+"engine/migrator.py" = ["T20"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "config", "engine", "models"]
+force-single-line = false
+lines-between-types = 1
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+skip-magic-trailing-comma = false
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.10"
+warn_unreachable = true
+show_error_codes = true
+show_column_numbers = true
+# Not strict — project uses many untyped third-party libs; tighten over time
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = "migrations.*"
+ignore_errors = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests requiring a database",
+]

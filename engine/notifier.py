@@ -1,11 +1,14 @@
 """Push notification manager — stores subscriptions, sends via pywebpush or SSE."""
 
+from __future__ import annotations
+
 import json
-import sys
-from typing import Optional
+import logging
 
 from engine.env_manager import get_env
 from engine.state import StateManager
+
+logger = logging.getLogger(__name__)
 
 
 class Notifier:
@@ -47,7 +50,7 @@ class Notifier:
         for listener in list(self._listeners):
             try:
                 await listener(payload)
-            except Exception:
+            except (RuntimeError, OSError):
                 self._listeners.remove(listener)
 
     async def notify_ticket_completed(self, jira_key: str, ticket_id: str) -> None:
@@ -80,17 +83,13 @@ class Notifier:
             return
 
         try:
-            from pywebpush import webpush, WebPushException
+            from pywebpush import webpush
         except ImportError:
             return  # pywebpush not installed, skip silently
 
         # Load all stored subscriptions
         all_settings = await self.state.get_all_settings()
-        subs = [
-            json.loads(v)
-            for k, v in all_settings.items()
-            if k.startswith("push_sub_")
-        ]
+        subs = [json.loads(v) for k, v in all_settings.items() if k.startswith("push_sub_")]
 
         vapid_claims = {"sub": f"mailto:{vapid_email}"}
         data = json.dumps(payload)
@@ -104,8 +103,8 @@ class Notifier:
                     vapid_claims=vapid_claims,
                 )
             except Exception as e:
-                print(f"[notifier] Web push failed: {e}", file=sys.stderr)
+                logger.warning("Web push failed: %s", e)
 
-    def get_vapid_public_key(self) -> Optional[str]:
+    def get_vapid_public_key(self) -> str | None:
         """Get VAPID public key for client-side subscription."""
         return get_env("VAPID_PUBLIC_KEY") or None
