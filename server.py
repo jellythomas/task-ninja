@@ -668,6 +668,18 @@ async def move_ticket(ticket_id: str, req: MoveTicketRequest):
         if req.state == TicketState.QUEUED and not orchestrator._running and ticket.run_id:
             await orchestrator.resume(ticket.run_id)
 
+        # Cleanup worktree when ticket is moved to done/review (if setting enabled)
+        if req.state in {TicketState.DONE, TicketState.REVIEW} and ticket.worktree_path:
+            cleanup_enabled = config.get("git", {}).get("cleanup_worktrees", True)
+            if cleanup_enabled:
+                try:
+                    run = await state.get_run(ticket.run_id)
+                    git = GitManager(run.project_path, config.get("git", {}).get("worktree_dir", ".worktrees"))
+                    await git.cleanup_worktree(ticket.worktree_path)
+                    print(f"[move_ticket] Cleaned up worktree for {ticket_id}", file=sys.stderr)
+                except Exception as e:
+                    print(f"[move_ticket] Failed to cleanup worktree for {ticket_id}: {e}", file=sys.stderr)
+
         # Sync to Jira for manually-triggered state changes (fire and forget)
         mcp_cfg = config.get("mcp", {})
         jira_mapping = mcp_cfg.get("jira_status_mapping", {})
