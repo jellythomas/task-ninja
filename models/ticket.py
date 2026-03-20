@@ -54,6 +54,18 @@ class Ticket(BaseModel):
     input_data: str | None = None  # JSON blob
     last_completed_phase: str | None = None  # planning, developing, review
     error: str | None = None
+    blocked_by_keys: str | None = None  # JSON array: '["MC-101","MC-102"]'
+    predicted_files: str | None = None  # JSON array of predicted file paths
+    planning_started_at: datetime | None = None
+    planning_completed_at: datetime | None = None
+    developing_started_at: datetime | None = None
+    developing_completed_at: datetime | None = None
+    review_started_at: datetime | None = None
+    review_completed_at: datetime | None = None
+    pr_status: str | None = None  # "open", "merged", "declined", "draft"
+    pr_approvals: int | None = None
+    pr_comment_count: int | None = None
+    pr_last_checked_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -142,6 +154,8 @@ class TicketAssignment(BaseModel):
 class AddTicketsRequest(BaseModel):
     keys: list[str]
     summaries: dict[str, str] | None = None  # jira_key -> summary
+    blocked_by_keys: dict[str, list[str]] | None = None  # jira_key -> list of blocker keys
+    predicted_files: dict[str, list[str]] | None = None  # jira_key -> list of predicted file paths
     # Global fallback fields
     repository_id: int | None = None
     parent_branch: str | None = None

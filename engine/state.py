@@ -192,10 +192,19 @@ class StateManager:
         now = datetime.utcnow().isoformat()
         updates = {"state": new_state, "updated_at": now}
 
-        if new_state in {TicketState.PLANNING} and not ticket.started_at:
-            updates["started_at"] = now
+        if new_state == TicketState.PLANNING:
+            if not ticket.started_at:
+                updates["started_at"] = now
+            updates["planning_started_at"] = now
+        if new_state == TicketState.DEVELOPING:
+            updates["planning_completed_at"] = now
+            updates["developing_started_at"] = now
+        if new_state == TicketState.REVIEW:
+            updates["developing_completed_at"] = now
+            updates["review_started_at"] = now
         if new_state == TicketState.DONE:
             updates["completed_at"] = now
+            updates["review_completed_at"] = now
         if new_state in {TicketState.TODO, TicketState.QUEUED}:
             updates["paused"] = False
             updates["worker_pid"] = None
@@ -232,6 +241,31 @@ class StateManager:
             await db.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
             await db.commit()
         return ticket
+
+    async def get_tickets_by_jira_keys(self, run_id: str, jira_keys: list[str]) -> list[Ticket]:
+        """Return tickets in a run whose jira_key matches any of the given keys."""
+        if not jira_keys:
+            return []
+        placeholders = ", ".join("?" * len(jira_keys))
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                f"SELECT * FROM tickets WHERE run_id = ? AND jira_key IN ({placeholders})",  # noqa: S608
+                [run_id, *jira_keys],
+            )
+            rows = await cursor.fetchall()
+            return [Ticket(**dict(r)) for r in rows]
+
+    async def count_dependents(self, run_id: str, jira_key: str) -> int:
+        """Count tickets in the run that list jira_key as a blocker in blocked_by_keys."""
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                'SELECT COUNT(*) FROM tickets WHERE run_id = ? AND blocked_by_keys LIKE ?',  # noqa: S608
+                (run_id, f'%"{jira_key}"%'),
+            )
+            row = await cursor.fetchone()
+            return row[0]
 
     async def count_active_tickets(self, run_id: str) -> int:
         async with self._connect() as db:
@@ -551,3 +585,157 @@ class StateManager:
             await self._setup_db(db)
             await db.execute("DELETE FROM settings WHERE key = ?", (key,))
             await db.commit()
+
+    # --- Analytics ---
+
+    async def get_run_analytics(self, run_id: str) -> dict:
+        """Compute analytics for a run's tickets."""
+        async with self._connect() as db:
+            await self._setup_db(db)
+
+            # Main stats query
+            cursor = await db.execute(
+                """
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN state = 'done' THEN 1 ELSE 0 END) as done,
+                    SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) as failed,
+                    SUM(CASE WHEN state = 'review' THEN 1 ELSE 0 END) as review,
+                    AVG(CASE WHEN planning_started_at IS NOT NULL AND planning_completed_at IS NOT NULL
+                        THEN (CAST(strftime('%s', planning_completed_at) AS REAL) -
+                              CAST(strftime('%s', planning_started_at) AS REAL)) / 60.0
+                        END) as avg_planning_min,
+                    AVG(CASE WHEN developing_started_at IS NOT NULL AND developing_completed_at IS NOT NULL
+                        THEN (CAST(strftime('%s', developing_completed_at) AS REAL) -
+                              CAST(strftime('%s', developing_started_at) AS REAL)) / 60.0
+                        END) as avg_developing_min,
+                    AVG(CASE WHEN review_started_at IS NOT NULL AND review_completed_at IS NOT NULL
+                        THEN (CAST(strftime('%s', review_completed_at) AS REAL) -
+                              CAST(strftime('%s', review_started_at) AS REAL)) / 60.0
+                        END) as avg_review_min,
+                    AVG(CASE WHEN started_at IS NOT NULL AND completed_at IS NOT NULL
+                        THEN (CAST(strftime('%s', completed_at) AS REAL) -
+                              CAST(strftime('%s', started_at) AS REAL)) / 60.0
+                        END) as avg_total_min
+                FROM tickets
+                WHERE run_id = ? AND state IN ('done', 'failed', 'review')
+                """,
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+
+            total = row["total"] or 0
+            done = row["done"] or 0
+            failed = row["failed"] or 0
+            review = row["review"] or 0
+            success_rate = round(done / total * 100, 1) if total > 0 else 0.0
+
+            avg_planning_min = round(row["avg_planning_min"], 1) if row["avg_planning_min"] is not None else None
+            avg_developing_min = round(row["avg_developing_min"], 1) if row["avg_developing_min"] is not None else None
+            avg_review_min = round(row["avg_review_min"], 1) if row["avg_review_min"] is not None else None
+            avg_total_min = round(row["avg_total_min"], 1) if row["avg_total_min"] is not None else None
+
+            # Determine bottleneck (phase with longest average duration)
+            phases = {
+                "planning": avg_planning_min,
+                "developing": avg_developing_min,
+                "review": avg_review_min,
+            }
+            bottleneck = max(
+                (k for k, v in phases.items() if v is not None),
+                key=lambda k: phases[k],
+                default=None,
+            )
+
+            # Fastest/slowest tickets by total duration
+            cursor2 = await db.execute(
+                """
+                SELECT jira_key,
+                    (CAST(strftime('%s', completed_at) AS REAL) -
+                     CAST(strftime('%s', started_at) AS REAL)) / 60.0 as duration_min
+                FROM tickets
+                WHERE run_id = ? AND state = 'done'
+                    AND started_at IS NOT NULL AND completed_at IS NOT NULL
+                ORDER BY duration_min ASC
+                """,
+                (run_id,),
+            )
+            duration_rows = await cursor2.fetchall()
+
+            fastest = None
+            slowest = None
+            if duration_rows:
+                fastest = {
+                    "jira_key": duration_rows[0]["jira_key"],
+                    "duration_min": round(duration_rows[0]["duration_min"], 1),
+                }
+                slowest = {
+                    "jira_key": duration_rows[-1]["jira_key"],
+                    "duration_min": round(duration_rows[-1]["duration_min"], 1),
+                }
+
+            return {
+                "run_id": run_id,
+                "total": total,
+                "done": done,
+                "failed": failed,
+                "review": review,
+                "success_rate": success_rate,
+                "avg_planning_min": avg_planning_min,
+                "avg_developing_min": avg_developing_min,
+                "avg_review_min": avg_review_min,
+                "avg_total_min": avg_total_min,
+                "bottleneck": bottleneck,
+                "fastest": fastest,
+                "slowest": slowest,
+            }
+
+    async def get_weekly_trends(self, weeks: int = 12) -> list[dict]:
+        """Get weekly aggregated trends across all runs."""
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                """
+                SELECT
+                    strftime('%Y-W%W', completed_at) as week,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN state = 'done' THEN 1 ELSE 0 END) as success,
+                    SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) as failed,
+                    AVG(CASE WHEN started_at IS NOT NULL AND completed_at IS NOT NULL
+                        THEN (CAST(strftime('%s', completed_at) AS REAL) -
+                              CAST(strftime('%s', started_at) AS REAL)) / 60.0
+                        END) as avg_duration_min
+                FROM tickets
+                WHERE completed_at IS NOT NULL AND state IN ('done', 'failed')
+                GROUP BY week
+                ORDER BY week DESC
+                LIMIT ?
+                """,
+                (weeks,),
+            )
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "week": r["week"],
+                    "total": r["total"],
+                    "success": r["success"],
+                    "failed": r["failed"],
+                    "avg_duration_min": round(r["avg_duration_min"] or 0, 1),
+                }
+                for r in rows
+            ]
+
+    # --- Queue Estimates ---
+
+    async def get_avg_ticket_duration(self, run_id: str) -> float | None:
+        """Get average total duration in seconds for completed tickets in this run."""
+        async with self._connect() as db:
+            await self._setup_db(db)
+            cursor = await db.execute(
+                "SELECT AVG(CAST(strftime('%s', completed_at) AS REAL) - "
+                "CAST(strftime('%s', started_at) AS REAL)) "
+                "FROM tickets WHERE run_id = ? AND state = ? AND completed_at IS NOT NULL AND started_at IS NOT NULL",
+                (run_id, TicketState.DONE),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else None

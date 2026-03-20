@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
-from api.dependencies import get_broadcaster, get_orchestrator, get_state
+from api.dependencies import get_orchestrator, get_state
 from engine.auth import verify_ws_token
 from engine.broadcaster import Broadcaster
 from engine.orchestrator import Orchestrator
@@ -27,14 +27,16 @@ router = APIRouter(tags=["terminals"])
 async def terminal_ws(
     websocket: WebSocket,
     ticket_id: str,
-    state: StateManager = Depends(get_state),
-    orchestrator: Orchestrator = Depends(get_orchestrator),
-    broadcaster: Broadcaster = Depends(get_broadcaster),
 ):
     """WebSocket endpoint to attach to a running worker's live terminal.
 
     Attach/detach model: closing the terminal does NOT kill the worker process.
     """
+    # Resolve dependencies manually — WebSocket endpoints don't inject Request
+    state: StateManager = websocket.app.state.state
+    orchestrator: Orchestrator = websocket.app.state.orchestrator
+    broadcaster: Broadcaster = websocket.app.state.broadcaster
+
     if not verify_ws_token(websocket):
         await websocket.close(code=4001, reason="Authentication required")
         return

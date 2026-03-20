@@ -248,6 +248,18 @@
     <div class="flex items-center gap-3">
       <!-- logo removed -->
       <h1 class="text-lg font-semibold text-white hidden sm:block">Task Ninja</h1>
+      <!-- Health status dot -->
+      <div class="relative group hidden sm:block">
+        <div class="w-2 h-2 rounded-full"
+             :class="healthStatus.status === 'healthy' ? 'bg-emerald-500' : healthStatus.status === 'unknown' ? 'bg-gray-500' : 'bg-red-500'"></div>
+        <div class="absolute left-0 top-4 hidden group-hover:block z-50 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs whitespace-nowrap shadow-lg">
+          <div class="text-gray-300 font-medium capitalize" x-text="healthStatus.status"></div>
+          <div class="text-gray-500 mt-0.5">DB: <span :class="healthStatus.db_ok ? 'text-emerald-400' : 'text-red-400'" x-text="healthStatus.db_ok ? 'OK' : 'Error'"></span></div>
+          <template x-if="healthStatus.uptime_seconds">
+            <div class="text-gray-500">Uptime: <span class="text-gray-400" x-text="Math.floor(healthStatus.uptime_seconds / 3600) + 'h ' + Math.floor((healthStatus.uptime_seconds % 3600) / 60) + 'm'"></span></div>
+          </template>
+        </div>
+      </div>
     </div>
     <div class="flex items-center gap-2">
       <!-- View Toggle: Kanban / Office -->
@@ -260,7 +272,12 @@
       <button @click="openSetupWizard()" class="p-2 hover:bg-gray-800 rounded-lg transition text-gray-400" title="Setup Wizard">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
       </button>
-      <button @click="showSettings = !showSettings" :class="showSettings ? 'bg-gray-700 text-white' : 'text-gray-400'" class="p-2 hover:bg-gray-800 rounded-lg transition" title="Settings">
+      <button @click="showAnalytics = !showAnalytics; if (showAnalytics) { showSettings = false; loadAnalytics(); }" :class="showAnalytics ? 'bg-gray-700 text-white' : 'text-gray-400'" class="p-2 hover:bg-gray-800 rounded-lg transition" title="Analytics">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+      </button>
+      <button @click="showSettings = !showSettings; if (showSettings) showAnalytics = false" :class="showSettings ? 'bg-gray-700 text-white' : 'text-gray-400'" class="p-2 hover:bg-gray-800 rounded-lg transition" title="Settings">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
@@ -382,8 +399,172 @@
             'bg-blue-900/50 text-blue-400 border-blue-800': currentRun.status === 'completed',
           }" class="px-2.5 py-0.5 text-xs font-medium rounded-full border" x-text="currentRun.status.toUpperCase()"></span>
         </template>
+        <!-- Queue Estimates (only when run is not completed) -->
+        <template x-if="currentRun && currentRun.status !== 'completed' && queueEstimates && queueEstimates.queued_count > 0">
+          <div class="hidden sm:flex items-center gap-1.5 text-xs text-gray-500 border-l border-gray-700 pl-3">
+            <svg class="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span x-text="queueEstimates.queued_count + ' queued'"></span>
+            <template x-if="queueEstimates.estimated_wait_minutes">
+              <span class="text-gray-600">~<span class="text-gray-400" x-text="formatDuration(queueEstimates.estimated_wait_minutes)"></span></span>
+            </template>
+          </div>
+        </template>
 
         <div class="ml-auto"></div>
+
+      </div>
+    </div>
+
+    <!-- Analytics Drawer (slide-out from right) -->
+    <div x-show="showAnalytics" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+         class="fixed inset-0 bg-black/50 z-40" @click="showAnalytics = false"></div>
+    <div x-show="showAnalytics" x-transition:enter="transition ease-out duration-300 transform" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+         x-transition:leave="transition ease-in duration-200 transform" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
+         class="fixed top-0 right-0 h-full w-full sm:w-[520px] bg-gray-900 border-l border-gray-800 z-50 flex flex-col shadow-2xl">
+      <!-- Drawer Header -->
+      <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
+        <h2 class="text-base font-semibold text-white">Analytics</h2>
+        <div class="flex items-center gap-2">
+          <button @click="loadAnalytics()" class="p-1.5 hover:bg-gray-800 rounded-lg transition text-gray-500 hover:text-white" title="Refresh">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          </button>
+          <button @click="showAnalytics = false" class="p-1.5 hover:bg-gray-800 rounded-lg transition text-gray-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <!-- Drawer Body -->
+      <div class="flex-1 overflow-y-auto p-5 space-y-6">
+
+        <!-- No run selected -->
+        <template x-if="!currentRun">
+          <p class="text-sm text-gray-500 text-center py-8">No active run. Start a run to see analytics.</p>
+        </template>
+
+        <!-- Run Analytics -->
+        <template x-if="currentRun && analyticsData">
+          <div class="space-y-5">
+            <!-- Success Rate -->
+            <div class="bg-gray-800 rounded-xl p-4 text-center">
+              <div class="text-5xl font-bold mb-1"
+                   :class="analyticsData.success_rate >= 80 ? 'text-emerald-400' : analyticsData.success_rate >= 50 ? 'text-amber-400' : 'text-red-400'"
+                   x-text="Math.round(analyticsData.success_rate || 0) + '%'"></div>
+              <div class="text-xs text-gray-500">Success Rate</div>
+            </div>
+            <!-- Stat Cards -->
+            <div class="grid grid-cols-4 gap-2">
+              <div class="bg-gray-800 rounded-lg p-3 text-center">
+                <div class="text-lg font-semibold text-white" x-text="analyticsData.total || 0"></div>
+                <div class="text-[10px] text-gray-500">Total</div>
+              </div>
+              <div class="bg-gray-800 rounded-lg p-3 text-center">
+                <div class="text-lg font-semibold text-emerald-400" x-text="analyticsData.done || 0"></div>
+                <div class="text-[10px] text-gray-500">Done</div>
+              </div>
+              <div class="bg-gray-800 rounded-lg p-3 text-center">
+                <div class="text-lg font-semibold text-red-400" x-text="analyticsData.failed || 0"></div>
+                <div class="text-[10px] text-gray-500">Failed</div>
+              </div>
+              <div class="bg-gray-800 rounded-lg p-3 text-center">
+                <div class="text-lg font-semibold text-purple-400" x-text="analyticsData.review || 0"></div>
+                <div class="text-[10px] text-gray-500">Review</div>
+              </div>
+            </div>
+            <!-- Fastest / Slowest -->
+            <div class="grid grid-cols-2 gap-3">
+              <template x-if="analyticsData.fastest_ticket">
+                <div class="bg-gray-800 rounded-lg p-3">
+                  <div class="text-[10px] text-gray-500 mb-1">Fastest</div>
+                  <div class="text-xs font-mono text-emerald-400" x-text="analyticsData.fastest_ticket.key"></div>
+                  <div class="text-xs text-gray-400" x-text="formatDuration(analyticsData.fastest_ticket.duration_minutes)"></div>
+                </div>
+              </template>
+              <template x-if="analyticsData.slowest_ticket">
+                <div class="bg-gray-800 rounded-lg p-3">
+                  <div class="text-[10px] text-gray-500 mb-1">Slowest</div>
+                  <div class="text-xs font-mono text-amber-400" x-text="analyticsData.slowest_ticket.key"></div>
+                  <div class="text-xs text-gray-400" x-text="formatDuration(analyticsData.slowest_ticket.duration_minutes)"></div>
+                </div>
+              </template>
+            </div>
+            <!-- Bottleneck Phase -->
+            <template x-if="analyticsData.bottleneck_phase">
+              <div class="bg-amber-900/20 border border-amber-800/50 rounded-lg px-4 py-3 flex items-center gap-3">
+                <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                <div>
+                  <div class="text-xs text-amber-400 font-medium">Bottleneck: <span class="capitalize" x-text="analyticsData.bottleneck_phase"></span></div>
+                  <div class="text-[10px] text-gray-500">This phase is taking the most time on average</div>
+                </div>
+              </div>
+            </template>
+            <!-- Average Phase Durations -->
+            <template x-if="analyticsData.avg_phase_durations">
+              <div class="space-y-2">
+                <div class="text-xs text-gray-400 font-medium">Avg Phase Durations</div>
+                <template x-if="analyticsData.avg_phase_durations.planning">
+                  <div class="flex items-center justify-between py-1.5 border-b border-gray-800">
+                    <span class="text-xs text-yellow-400">Planning</span>
+                    <span class="text-xs text-gray-300" x-text="formatDuration(analyticsData.avg_phase_durations.planning)"></span>
+                  </div>
+                </template>
+                <template x-if="analyticsData.avg_phase_durations.developing">
+                  <div class="flex items-center justify-between py-1.5 border-b border-gray-800">
+                    <span class="text-xs text-blue-400">Developing</span>
+                    <span class="text-xs text-gray-300" x-text="formatDuration(analyticsData.avg_phase_durations.developing)"></span>
+                  </div>
+                </template>
+                <template x-if="analyticsData.avg_phase_durations.review">
+                  <div class="flex items-center justify-between py-1.5">
+                    <span class="text-xs text-purple-400">Review</span>
+                    <span class="text-xs text-gray-300" x-text="formatDuration(analyticsData.avg_phase_durations.review)"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Loading state -->
+        <template x-if="currentRun && !analyticsData">
+          <p class="text-sm text-gray-500 text-center py-8">Loading analytics...</p>
+        </template>
+
+        <!-- Weekly Trends -->
+        <template x-if="trendsData && trendsData.length > 0">
+          <div class="space-y-3">
+            <div class="text-xs text-gray-400 font-medium border-t border-gray-800 pt-5">Weekly Trends</div>
+            <div class="bg-gray-800 rounded-lg overflow-hidden">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="border-b border-gray-700">
+                    <th class="text-left px-3 py-2 text-gray-500 font-medium">Week</th>
+                    <th class="text-right px-3 py-2 text-gray-500 font-medium">Total</th>
+                    <th class="text-right px-3 py-2 text-gray-500 font-medium">Done</th>
+                    <th class="text-right px-3 py-2 text-gray-500 font-medium">Failed</th>
+                    <th class="text-right px-3 py-2 text-gray-500 font-medium">Avg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="(row, idx) in trendsData" :key="row.week">
+                    <tr class="border-b border-gray-700/50 hover:bg-gray-700/30 transition">
+                      <td class="px-3 py-2 text-gray-400 font-mono" x-text="row.week"></td>
+                      <td class="px-3 py-2 text-right text-gray-300">
+                        <span x-text="row.total"></span>
+                        <template x-if="idx > 0 && trendsData[idx-1].total !== row.total">
+                          <span :class="row.total > trendsData[idx-1].total ? 'text-emerald-400' : 'text-red-400'" x-text="row.total > trendsData[idx-1].total ? ' ↑' : ' ↓'"></span>
+                        </template>
+                      </td>
+                      <td class="px-3 py-2 text-right text-emerald-400" x-text="row.success || 0"></td>
+                      <td class="px-3 py-2 text-right text-red-400" x-text="row.failed || 0"></td>
+                      <td class="px-3 py-2 text-right text-gray-400" x-text="formatDuration(row.avg_duration)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
 
       </div>
     </div>
@@ -1040,6 +1221,13 @@
                         </button>
                       </div>
                     </div>
+                    <!-- Blocked by indicator -->
+                    <template x-if="ticket.blocked_by_keys && parseBlockedBy(ticket.blocked_by_keys).length > 0">
+                      <div class="flex items-center gap-1 mb-1">
+                        <svg class="w-3 h-3 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                        <span class="text-[10px] text-red-400">Blocked by <span x-text="parseBlockedBy(ticket.blocked_by_keys).join(', ')"></span></span>
+                      </div>
+                    </template>
                     <!-- Summary -->
                     <p class="text-xs text-gray-400 mb-1.5" :class="expanded ? '' : 'line-clamp-2'" x-text="ticket.summary || 'No summary'"></p>
                     <!-- Inline indicators -->
@@ -1063,6 +1251,31 @@
                         <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400 hover:text-purple-300 hover:underline flex items-center gap-1">
                           <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                           <span x-text="ticket.pr_number ? 'PR #' + ticket.pr_number : 'Draft PR'"></span>
+                          <!-- PR status badge -->
+                          <template x-if="ticket.pr_status">
+                            <span class="px-1 py-0.5 rounded text-[9px] font-medium"
+                                  :class="{
+                                    'bg-blue-500/20 text-blue-400': ticket.pr_status === 'open',
+                                    'bg-emerald-500/20 text-emerald-400': ticket.pr_status === 'merged',
+                                    'bg-red-500/20 text-red-400': ticket.pr_status === 'declined',
+                                    'bg-gray-500/20 text-gray-400': ticket.pr_status === 'draft',
+                                  }"
+                                  x-text="ticket.pr_status.charAt(0).toUpperCase() + ticket.pr_status.slice(1)"></span>
+                          </template>
+                          <!-- Approval count -->
+                          <template x-if="ticket.pr_approvals > 0">
+                            <span class="flex items-center gap-0.5 text-emerald-400">
+                              <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                              <span x-text="ticket.pr_approvals"></span>
+                            </span>
+                          </template>
+                          <!-- Comment count -->
+                          <template x-if="ticket.pr_comment_count > 0">
+                            <span class="flex items-center gap-0.5 text-gray-400">
+                              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                              <span x-text="ticket.pr_comment_count"></span>
+                            </span>
+                          </template>
                         </a>
                       </template>
                       <!-- Repo badge -->
@@ -1116,6 +1329,51 @@
                       <div>
                         <span class="text-gray-500">Completed:</span>
                         <span class="text-gray-300 ml-1" x-text="new Date(ticket.completed_at).toLocaleString()"></span>
+                      </div>
+                    </template>
+                    <!-- Phase Timeline -->
+                    <template x-if="ticket.planning_started_at || ticket.developing_started_at || ticket.review_started_at">
+                      <div class="mt-1 pt-1.5 border-t border-gray-700/50 space-y-1">
+                        <div class="text-[10px] text-gray-500 font-medium mb-1">Phase Timeline</div>
+                        <template x-if="ticket.planning_started_at">
+                          <div class="flex items-start gap-2">
+                            <span class="text-[10px] text-yellow-400 w-16 flex-shrink-0">Planning</span>
+                            <div class="text-[10px] text-gray-500">
+                              <span x-text="new Date(ticket.planning_started_at).toLocaleTimeString()"></span>
+                              <template x-if="ticket.planning_completed_at">
+                                <span> → <span x-text="new Date(ticket.planning_completed_at).toLocaleTimeString()"></span>
+                                  <span class="text-gray-600 ml-1" x-text="'(' + formatDuration((new Date(ticket.planning_completed_at) - new Date(ticket.planning_started_at)) / 60000) + ')'"></span>
+                                </span>
+                              </template>
+                            </div>
+                          </div>
+                        </template>
+                        <template x-if="ticket.developing_started_at">
+                          <div class="flex items-start gap-2">
+                            <span class="text-[10px] text-blue-400 w-16 flex-shrink-0">Developing</span>
+                            <div class="text-[10px] text-gray-500">
+                              <span x-text="new Date(ticket.developing_started_at).toLocaleTimeString()"></span>
+                              <template x-if="ticket.developing_completed_at">
+                                <span> → <span x-text="new Date(ticket.developing_completed_at).toLocaleTimeString()"></span>
+                                  <span class="text-gray-600 ml-1" x-text="'(' + formatDuration((new Date(ticket.developing_completed_at) - new Date(ticket.developing_started_at)) / 60000) + ')'"></span>
+                                </span>
+                              </template>
+                            </div>
+                          </div>
+                        </template>
+                        <template x-if="ticket.review_started_at">
+                          <div class="flex items-start gap-2">
+                            <span class="text-[10px] text-purple-400 w-16 flex-shrink-0">Review</span>
+                            <div class="text-[10px] text-gray-500">
+                              <span x-text="new Date(ticket.review_started_at).toLocaleTimeString()"></span>
+                              <template x-if="ticket.review_completed_at">
+                                <span> → <span x-text="new Date(ticket.review_completed_at).toLocaleTimeString()"></span>
+                                  <span class="text-gray-600 ml-1" x-text="'(' + formatDuration((new Date(ticket.review_completed_at) - new Date(ticket.review_started_at)) / 60000) + ')'"></span>
+                                </span>
+                              </template>
+                            </div>
+                          </div>
+                        </template>
                       </div>
                     </template>
                     <div>
@@ -1760,6 +2018,11 @@
         newSchedule: { type: 'recurring', cron: '0 9 * * 1-5', startTime: '', endTime: '', cronDays: [1,2,3,4,5], cronHour: 9, cronMinute: 0 },
         autoRetry: { enabled: false, delay: 15, max: 3 },
         workingHours: { enabled: false, start: '09:00', end: '18:00', days: ['mon','tue','wed','thu','fri'] },
+        showAnalytics: false,
+        analyticsData: null,
+        trendsData: [],
+        healthStatus: { status: 'unknown', uptime_seconds: 0, db_ok: false },
+        queueEstimates: {},
 
         settingsTabs: [
           { id: 'general', label: 'General' },
@@ -1834,6 +2097,9 @@
           this.loadSchedules();
           this.$nextTick(() => this.initSortable());
           setInterval(() => this.tick++, 5000);
+          this.checkHealth();
+          setInterval(() => this.checkHealth(), 60000);
+          if (this.currentRun) this.loadQueueEstimates();
         },
 
         initSortable() {
@@ -3153,6 +3419,38 @@
             this.eventSource = null;
             setTimeout(() => this.connectSSE(), 3000);
           };
+        },
+
+        async loadAnalytics() {
+          if (!this.currentRun) return;
+          const [analytics, trends] = await Promise.all([
+            this.api('GET', `/api/analytics/run/${this.currentRun.id}`),
+            this.api('GET', '/api/analytics/trends'),
+          ]);
+          this.analyticsData = analytics;
+          this.trendsData = trends || [];
+        },
+
+        async checkHealth() {
+          try {
+            const res = await fetch('/health');
+            this.healthStatus = await res.json();
+          } catch(e) { this.healthStatus = { status: 'error', uptime_seconds: 0, db_ok: false }; }
+        },
+
+        async loadQueueEstimates() {
+          if (!this.currentRun || this.currentRun.status === 'completed') return;
+          this.queueEstimates = await this.api('GET', `/api/runs/${this.currentRun.id}/queue-estimates`) || {};
+        },
+
+        formatDuration(minutes) {
+          if (!minutes) return '-';
+          if (minutes < 60) return Math.round(minutes) + 'm';
+          return Math.round(minutes / 60) + 'h ' + Math.round(minutes % 60) + 'm';
+        },
+
+        parseBlockedBy(jsonStr) {
+          try { return JSON.parse(jsonStr || '[]'); } catch(e) { return []; }
         },
       };
     }

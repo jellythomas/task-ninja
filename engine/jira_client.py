@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
 from engine.env_manager import get_env
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_text_from_adf(node: dict | list) -> str:
+    """Recursively extract plain text from Jira ADF (Atlassian Document Format)."""
+    if isinstance(node, list):
+        return " ".join(_extract_text_from_adf(n) for n in node)
+    if isinstance(node, dict):
+        if node.get("type") == "text":
+            return node.get("text", "")
+        content = node.get("content", [])
+        return " ".join(_extract_text_from_adf(c) for c in content)
+    return str(node) if node else ""
 
 
 class JiraClient:
@@ -40,6 +53,38 @@ class JiraClient:
             resp.raise_for_status()
             return resp
 
+    @staticmethod
+    def _parse_blocked_by(issuelinks: list[dict]) -> list[str]:
+        """Extract blocker keys from Jira issuelinks.
+
+        Returns a list of Jira keys that block this ticket (inward 'is blocked by').
+        """
+        blocked_by = []
+        for link in issuelinks:
+            link_type = link.get("type", {})
+            # inward relationship with type "Blocks" means this ticket is blocked by inwardIssue
+            if link_type.get("name") == "Blocks" and "inwardIssue" in link:
+                key = link["inwardIssue"].get("key", "")
+                if key:
+                    blocked_by.append(key)
+        return blocked_by
+
+    @staticmethod
+    def _extract_file_paths(description: str | dict | None) -> list[str]:
+        """Extract file/directory paths mentioned in ticket description."""
+        if not description:
+            return []
+        # Handle Jira's Atlassian Document Format (ADF) - description may be a dict
+        if isinstance(description, dict):
+            description = _extract_text_from_adf(description)
+
+        # Match common source paths
+        pattern = r'(?:src|app|lib|api|engine|models|services|controllers|workers|spec|test|tests|config|db|migrations)/[\w./\-]+'
+        matches = re.findall(pattern, description)
+        # Deduplicate and normalize (preserve order, remove dupes)
+        paths = list(dict.fromkeys(matches))
+        return paths[:20]  # Cap at 20 to avoid noise
+
     async def fetch_epic_children(self, epic_key: str) -> list[dict]:
         """Fetch child tickets from a Jira epic via REST API."""
         jql = f'"Epic Link" = {epic_key} OR parent = {epic_key} ORDER BY rank ASC'
@@ -47,7 +92,7 @@ class JiraClient:
             resp = await self._request(
                 "GET",
                 "/rest/api/3/search/jql",
-                params={"jql": jql, "maxResults": 100, "fields": "summary,status,assignee,labels,components"},
+                params={"jql": jql, "maxResults": 100, "fields": "summary,status,assignee,labels,components,issuelinks,description"},
             )
             data = resp.json()
             results = []
@@ -56,6 +101,8 @@ class JiraClient:
                 assignee = fields.get("assignee")
                 labels = fields.get("labels", [])
                 components = [c.get("name", "") for c in fields.get("components", [])]
+                issuelinks = fields.get("issuelinks", [])
+                description = fields.get("description")
                 results.append(
                     {
                         "key": issue.get("key", ""),
@@ -64,6 +111,8 @@ class JiraClient:
                         "assignee": assignee.get("displayName", "") if assignee else "",
                         "labels": labels,
                         "components": components,
+                        "blocked_by": self._parse_blocked_by(issuelinks),
+                        "predicted_files": self._extract_file_paths(description),
                     }
                 )
             return results
@@ -83,11 +132,13 @@ class JiraClient:
             resp = await self._request(
                 "GET",
                 f"/rest/api/3/issue/{jira_key}",
-                params={"fields": "summary,status,assignee,labels,components"},
+                params={"fields": "summary,status,assignee,labels,components,issuelinks,description"},
             )
             data = resp.json()
             fields = data.get("fields", {})
             assignee = fields.get("assignee")
+            issuelinks = fields.get("issuelinks", [])
+            description = fields.get("description")
             return {
                 "key": data.get("key", ""),
                 "summary": fields.get("summary", ""),
@@ -95,6 +146,8 @@ class JiraClient:
                 "assignee": assignee.get("displayName", "") if assignee else "",
                 "labels": fields.get("labels", []),
                 "components": [c.get("name", "") for c in fields.get("components", [])],
+                "blocked_by": self._parse_blocked_by(issuelinks),
+                "predicted_files": self._extract_file_paths(description),
             }
         except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as e:
             logger.error("Error fetching issue %s: %s", jira_key, e)

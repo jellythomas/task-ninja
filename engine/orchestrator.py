@@ -7,14 +7,17 @@ import contextlib
 import json
 import logging
 import os
+import re
+from datetime import datetime, timezone
 
+from engine.bitbucket_client import BitbucketClient
 from engine.broadcaster import Broadcaster
 from engine.git_manager import GitManager
 from engine.jira_client import JiraClient
 from engine.state import StateManager
 from engine.ticket_watchdog import TicketWatchdog
 from engine.worker import Worker
-from models.ticket import RunStatus, TicketState
+from models.ticket import RunStatus, Ticket, TicketState
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +35,11 @@ class Orchestrator:
         self._running = False
         self._run_id: str | None = None
         self.jira_client = JiraClient()
+        self.bitbucket_client = BitbucketClient()
         self.notifier = None  # Set by server.py after construction
         self.watchdog = TicketWatchdog(state, broadcaster)
         self.watchdog.set_callbacks(requeue_cb=self._watchdog_requeue)
+        self._last_pr_check: datetime | None = None
 
     async def start(self, run_id: str) -> None:
         """Start the orchestration loop for a run."""
@@ -217,12 +222,11 @@ class Orchestrator:
         if not self.watchdog.is_within_working_hours():
             return
 
-        # Pick next queued tickets
+        # Pick next queued tickets (smart priority ordering)
         spawned_any = False
         queued = await self.state.get_tickets_by_state(self._run_id, TicketState.QUEUED)
-        for ticket in queued[:available_slots]:
-            if ticket.paused:
-                continue
+        prioritized = await self._prioritize_queue(queued)
+        for ticket in prioritized[:available_slots]:
             await self._spawn_worker(ticket.id, ticket.jira_key, run)
             spawned_any = True
 
@@ -255,6 +259,175 @@ class Orchestrator:
                 await self.broadcaster.broadcast_run_status(self._run_id, RunStatus.COMPLETED)
                 if self.notifier:
                     await self.notifier.notify_run_completed(run.name or self._run_id)
+
+        # Poll PR statuses for REVIEW tickets (at most once every 60 seconds)
+        await self._check_pr_statuses()
+
+    async def _prioritize_queue(self, queued: list[Ticket]) -> list[Ticket]:
+        """Sort queued tickets by computed priority. Skip blocked and paused tickets."""
+        scored = []
+        for t in queued:
+            if t.paused:
+                continue
+            # Skip blocked tickets
+            if await self._is_blocked(t):
+                logger.debug("Ticket %s is blocked by unfinished dependencies — skipping", t.jira_key)
+                continue
+            score = 1000 - t.rank  # Lower rank = higher score
+            # Bonus if other tickets depend on this one
+            dependents = await self.state.count_dependents(self._run_id, t.jira_key)
+            if dependents > 0:
+                score += 50 * dependents  # More dependents = higher priority
+            scored.append((score, t))
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Collect predicted_files from all active workers to detect file conflicts
+        active_files: set[str] = set()
+        for tid in self._workers:
+            t = await self.state.get_ticket(tid)
+            if t and t.predicted_files:
+                try:
+                    active_files.update(json.loads(t.predicted_files))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        # Filter: skip candidates whose predicted files overlap with active workers
+        result = []
+        for score, ticket in scored:
+            if ticket.predicted_files:
+                try:
+                    candidate_files = set(json.loads(ticket.predicted_files))
+                except (json.JSONDecodeError, TypeError):
+                    candidate_files = set()
+
+                if candidate_files & active_files:
+                    logger.debug(
+                        "Ticket %s skipped — predicted files conflict with active workers",
+                        ticket.jira_key,
+                    )
+                    continue  # Skip — would cause merge conflict
+
+                # Add this ticket's files to active set (for subsequent candidates)
+                active_files.update(candidate_files)
+
+            result.append(ticket)
+
+        return result
+
+    async def _check_pr_statuses(self) -> None:
+        """Poll Bitbucket PR status for all REVIEW tickets. Rate-limited to once per 60 seconds."""
+        if not self._run_id:
+            return
+
+        now = datetime.now(tz=timezone.utc)
+        if self._last_pr_check is not None:
+            elapsed = (now - self._last_pr_check).total_seconds()
+            if elapsed < 60:
+                return
+
+        if not await self.bitbucket_client.is_configured():
+            return
+
+        self._last_pr_check = now
+
+        review_tickets = await self.state.get_tickets_by_state(self._run_id, TicketState.REVIEW)
+        for ticket in review_tickets:
+            if not ticket.pr_url or not ticket.pr_number:
+                continue
+
+            # Parse repo_slug from pr_url
+            repo_slug = None
+            # Try bitbucket.org URL format first
+            match = re.search(r'bitbucket\.org/[^/]+/([^/]+)/pull-requests/\d+', ticket.pr_url)
+            if match:
+                repo_slug = match.group(1)
+            else:
+                # Try API URL format
+                match = re.search(r'repositories/[^/]+/([^/]+)/pullrequests/\d+', ticket.pr_url)
+                if match:
+                    repo_slug = match.group(1)
+
+            if not repo_slug:
+                logger.warning("Could not parse repo_slug from pr_url: %s", ticket.pr_url)
+                continue
+
+            pr_info = await self.bitbucket_client.get_pr_status(repo_slug, ticket.pr_number)
+            if pr_info is None:
+                continue
+
+            state = pr_info.get("state", "")
+            new_approvals = pr_info.get("approvals")
+            new_comment_count = pr_info.get("comment_count") or 0
+            checked_at = datetime.utcnow().isoformat()
+
+            # Always update pr_status, approvals, comment_count and pr_last_checked_at
+            await self.state.update_ticket(
+                ticket.id,
+                pr_status=state,
+                pr_approvals=new_approvals,
+                pr_comment_count=new_comment_count,
+                pr_last_checked_at=checked_at,
+            )
+
+            # Notify on new comments
+            old_count = ticket.pr_comment_count or 0
+            if new_comment_count > old_count and self.notifier:
+                await self.notifier.notify(
+                    title=f"{ticket.jira_key} — PR review comments",
+                    body=f"{new_comment_count - old_count} new comment(s) on PR #{ticket.pr_number}",
+                    tag=f"pr-comments-{ticket.id}",
+                )
+
+            if state == "merged":
+                logger.info("PR merged for ticket %s — moving to DONE", ticket.jira_key)
+                await self.state.update_ticket_state(ticket.id, TicketState.DONE)
+                await self.broadcaster.broadcast_ticket_update(self._run_id, ticket.id, TicketState.DONE)
+                # Transition Jira to Done
+                mcp_cfg = self.config.get("mcp", {})
+                jira_mapping = mcp_cfg.get("jira_status_mapping", {})
+                done_status = jira_mapping.get(TicketState.DONE.value)
+                if done_status and await self.jira_client.is_configured():
+                    try:
+                        await self.jira_client.transition_issue(ticket.jira_key, done_status)
+                    except Exception as e:
+                        logger.warning("Failed to transition Jira issue %s: %s", ticket.jira_key, e)
+                # Cleanup worktree
+                cleanup_enabled = self.config.get("git", {}).get("cleanup_worktrees", True)
+                if cleanup_enabled and ticket.worktree_path:
+                    try:
+                        run = await self.state.get_run(self._run_id)
+                        git = GitManager(
+                            run.project_path,
+                            self.config.get("git", {}).get("worktree_dir", ".worktrees"),
+                        )
+                        await git.cleanup_worktree(ticket.worktree_path)
+                    except (RuntimeError, OSError) as e:
+                        logger.warning("Failed to cleanup worktree for %s: %s", ticket.id, e)
+                # Notify
+                if self.notifier:
+                    await self.notifier.notify_ticket_completed(ticket.jira_key, ticket.id)
+
+            elif state == "declined":
+                logger.info("PR declined for ticket %s — moving to FAILED", ticket.jira_key)
+                await self.state.update_ticket(ticket.id, error="PR was declined")
+                await self.state.update_ticket_state(ticket.id, TicketState.FAILED)
+                await self.broadcaster.broadcast_ticket_update(
+                    self._run_id, ticket.id, TicketState.FAILED, error="PR was declined"
+                )
+
+    async def _is_blocked(self, ticket: Ticket) -> bool:
+        """Return True if any of the ticket's blockers are not yet DONE in this run."""
+        if not ticket.blocked_by_keys:
+            return False
+        try:
+            blocker_keys: list[str] = json.loads(ticket.blocked_by_keys)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if not blocker_keys:
+            return False
+        blockers = await self.state.get_tickets_by_jira_keys(self._run_id, blocker_keys)
+        done_keys = {t.jira_key for t in blockers if t.state == TicketState.DONE}
+        return not all(key in done_keys for key in blocker_keys)
 
     async def _fail_ticket(self, ticket_id: str, error: str) -> None:
         """Mark a ticket as failed with error message, broadcast update."""
