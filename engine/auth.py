@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from engine.env_manager import get_env, verify_token
 
 # Paths that don't require auth
-PUBLIC_PATHS = {"/", "/login", "/favicon.ico"}
+PUBLIC_PATHS = {"/", "/login", "/favicon.ico", "/health"}
 PUBLIC_PREFIXES = ("/static/", "/assets/", "/js/")
 
 

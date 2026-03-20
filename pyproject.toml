@@ -161,3 +161,8 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks integration tests requiring a database",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

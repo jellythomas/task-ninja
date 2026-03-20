@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 
@@ -108,6 +109,8 @@ async def load_epic(
                 if matched_repo_id:
                     break
 
+        blocked_by = child.get("blocked_by", [])
+        predicted_files = child.get("predicted_files", [])
         ticket_data = {
             "jira_key": key,
             "summary": child.get("summary"),
@@ -115,11 +118,19 @@ async def load_epic(
             "already_added": existing is not None,
             "labels": child.get("labels", []),
             "components": child.get("components", []),
+            "blocked_by": blocked_by,
+            "predicted_files": predicted_files,
         }
         if matched_repo_id:
             repo = repo_map.get(matched_repo_id)
             ticket_data["matched_repository_id"] = matched_repo_id
             ticket_data["matched_repository_name"] = repo.name if repo else None
+
+        # Persist blocked_by_keys and predicted_files on existing tickets if data has changed
+        if existing and blocked_by:
+            await state.update_ticket(existing.id, blocked_by_keys=json.dumps(blocked_by))
+        if existing and predicted_files:
+            await state.update_ticket(existing.id, predicted_files=json.dumps(predicted_files))
 
         tickets.append(ticket_data)
 
@@ -167,6 +178,7 @@ async def fetch_tickets(
         if key_prefix and key_prefix in label_to_repo:
             matched_repo_id = label_to_repo[key_prefix]
 
+        blocked_by = issue.get("blocked_by", []) if issue else []
         ticket_data = {
             "jira_key": key,
             "summary": issue.get("summary", "") if issue else None,
@@ -174,11 +186,16 @@ async def fetch_tickets(
             "already_added": existing is not None,
             "labels": issue.get("labels", []) if issue else [],
             "components": issue.get("components", []) if issue else [],
+            "blocked_by": blocked_by,
         }
         if matched_repo_id:
             repo = repo_map.get(matched_repo_id)
             ticket_data["matched_repository_id"] = matched_repo_id
             ticket_data["matched_repository_name"] = repo.name if repo else None
+
+        # Persist blocked_by_keys on existing tickets if data has changed
+        if existing and blocked_by:
+            await state.update_ticket(existing.id, blocked_by_keys=json.dumps(blocked_by))
 
         tickets.append(ticket_data)
 
@@ -199,6 +216,8 @@ async def add_tickets(
 
     added = []
     summaries = req.summaries or {}
+    blocked_by_map = req.blocked_by_keys or {}
+    predicted_files_map = req.predicted_files or {}
     for raw_key in req.keys:
         raw_key = raw_key.strip()
         if not raw_key:
@@ -221,6 +240,12 @@ async def add_tickets(
             assignment["parent_branch"] = branch
         if profile:
             assignment["profile_id"] = profile
+        blockers = blocked_by_map.get(key, [])
+        if blockers:
+            assignment["blocked_by_keys"] = json.dumps(blockers)
+        pfiles = predicted_files_map.get(key, [])
+        if pfiles:
+            assignment["predicted_files"] = json.dumps(pfiles)
         if assignment:
             await state.update_ticket(ticket.id, **assignment)
             ticket = await state.get_ticket(ticket.id)

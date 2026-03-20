@@ -145,7 +145,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from api.error_handlers import register_error_handlers
-from api.routers import profiles, runs, settings, terminals, tickets
+from api.routers import analytics, health, profiles, runs, settings, terminals, tickets
 from config import AppConfig
 from engine.auth import AuthMiddleware
 from engine.broadcaster import Broadcaster
@@ -235,11 +235,13 @@ def create_app() -> FastAPI:
     register_error_handlers(_app)
 
     # Routers
+    _app.include_router(health.router)
     _app.include_router(runs.router)
     _app.include_router(tickets.router)
     _app.include_router(terminals.router)
     _app.include_router(profiles.router)
     _app.include_router(settings.router)
+    _app.include_router(analytics.router)
 
     # --- Auth ---
 

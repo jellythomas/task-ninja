@@ -13,6 +13,7 @@ from models.ticket import (
     UpdateConfigRequest,
 )
 
+
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
@@ -114,3 +115,29 @@ async def resume_run(
 ):
     await orchestrator.resume(run_id)
     return {"status": "resumed"}
+
+
+@router.get("/{run_id}/queue-estimates")
+async def get_queue_estimates(
+    run_id: str,
+    state: StateManager = Depends(get_state),
+):
+    """Return estimated wait time in seconds for each queued ticket in this run.
+
+    Formula: wait_estimate_seconds = queue_position * avg_duration / max_parallel
+    """
+    run = await state.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    queued = await state.get_tickets_by_state(run_id, TicketState.QUEUED)
+    avg_duration = await state.get_avg_ticket_duration(run_id)
+
+    estimates: dict[str, float | None] = {}
+    for position, ticket in enumerate(queued, start=1):
+        if avg_duration is not None and run.max_parallel > 0:
+            estimates[ticket.id] = round(position * avg_duration / run.max_parallel, 1)
+        else:
+            estimates[ticket.id] = None
+
+    return {"estimates": estimates}
