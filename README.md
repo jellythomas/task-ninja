@@ -13,6 +13,7 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 - **Parallel AI execution** — run multiple AI agents simultaneously, each in isolated git worktrees
 - **Any CLI agent** — Claude Code or any CLI tool via configurable agent profiles
 - **Live terminal** — fullscreen interactive terminal with tab switching, smart scroll, and mobile-responsive sizing
+- **Multi-viewer terminals** — view the same terminal from PC and phone simultaneously with independent sizing (powered by tmux)
 - **Jira integration** — load tickets from epics or paste Jira URLs, auto-sync board state to Jira
 - **Auto PR creation** — draft PRs opened automatically when workers finish
 - **Multi-repo support** — register multiple repositories, auto-match tickets by `[bracket]` tags in summaries
@@ -21,7 +22,7 @@ An AI-powered ticket execution engine with a visual kanban board. Point it at a 
 - **Push notifications** — browser alerts when tickets complete or fail (Web Push for background)
 - **Remote access** — access from your phone via Tailscale, ngrok, or Cloudflare Tunnel
 - **Scheduler** — one-time or recurring runs with visual cron builder, all features optional
-- **Auto-install** — missing Python dependencies installed automatically on first run
+- **Auto-install** — missing Python dependencies and tmux installed automatically on first run
 
 ---
 
@@ -78,9 +79,10 @@ python server.py         # Windows
 On first run, Task Ninja will:
 
 1. **Auto-install dependencies** — reads `requirements.txt` and installs missing packages
-2. **Create `.env`** — configuration file with default settings
-3. **Initialize the database** — SQLite database created at `task_ninja.db` with all migrations applied
-4. **Generate an auth token** — displayed once in the terminal:
+2. **Auto-install tmux** — detects and installs tmux for multi-viewer terminal support (brew on macOS, apt/dnf/yum on Linux). Falls back to single-viewer mode if unavailable.
+3. **Create `.env`** — configuration file with default settings
+4. **Initialize the database** — SQLite database created at `task_ninja.db` with all migrations applied
+5. **Generate an auth token** — displayed once in the terminal:
 
 ```
   ╔══════════════════════════════════════════════════════╗

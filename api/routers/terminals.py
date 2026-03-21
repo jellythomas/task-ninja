@@ -84,13 +84,15 @@ async def terminal_ws(
                     await adhoc.start()
                     orchestrator._adhoc_terminals[ticket_id] = adhoc
                     worker = adhoc
-                    if adhoc.process and adhoc.process.pid:
-                        await state.update_ticket(ticket_id, worker_pid=adhoc.process.pid)
+                    # Get PID — tmux mode uses _tmux_pid, raw PTY uses process.pid
+                    adhoc_pid = getattr(adhoc, "_tmux_pid", None) or (adhoc.process.pid if adhoc.process else None)
+                    if adhoc_pid:
+                        await state.update_ticket(ticket_id, worker_pid=adhoc_pid)
                         await broadcaster.broadcast_ticket_update(
                             orchestrator._run_id,
                             ticket_id,
                             ticket.state,
-                            worker_pid=adhoc.process.pid,
+                            worker_pid=adhoc_pid,
                         )
                 except (OSError, RuntimeError) as e:
                     logger.error("Failed to spawn ad-hoc terminal for %s: %s", ticket_id, e)
@@ -104,23 +106,56 @@ async def terminal_ws(
                 return
 
     await websocket.accept()
-    await worker.attach_viewer(websocket)
+
+    # In tmux mode, wait for the first resize message before attaching.
+    # This ensures the grouped session is created at the viewer's actual
+    # dimensions (e.g. 45 cols on phone vs 200 cols on desktop), preventing
+    # garbled initial renders from size mismatch.
+    use_tmux = getattr(worker, "_use_tmux", False)
+    initial_rows, initial_cols = 24, 80
+    if use_tmux:
+        try:
+            # Wait up to 2s for the first resize message from the frontend
+            first_msg = await asyncio.wait_for(websocket.receive(), timeout=2.0)
+            if first_msg.get("text"):
+                try:
+                    ctrl = _json.loads(first_msg["text"])
+                    if ctrl.get("type") == "resize":
+                        initial_rows = ctrl.get("rows", 24)
+                        initial_cols = ctrl.get("cols", 80)
+                except (_json.JSONDecodeError, KeyError):
+                    pass
+        except (asyncio.TimeoutError, WebSocketDisconnect):
+            pass
+
+    await worker.attach_viewer(websocket, rows=initial_rows, cols=initial_cols)
 
     try:
         while True:
             message = await websocket.receive()
             if message["type"] == "websocket.receive":
                 if message.get("bytes"):
-                    worker.write_input(message["bytes"])
+                    # Use per-viewer input in tmux mode for lower latency
+                    if hasattr(worker, "write_input_from_viewer"):
+                        worker.write_input_from_viewer(websocket, message["bytes"])
+                    else:
+                        worker.write_input(message["bytes"])
                 elif message.get("text"):
                     try:
                         ctrl = _json.loads(message["text"])
                         if ctrl.get("type") == "resize":
-                            worker.resize_pty(ctrl.get("rows", 24), ctrl.get("cols", 80))
+                            # Per-viewer resize in tmux mode, shared resize in raw PTY mode
+                            if hasattr(worker, "resize_viewer_pty"):
+                                worker.resize_viewer_pty(websocket, ctrl.get("rows", 24), ctrl.get("cols", 80))
+                            else:
+                                worker.resize_pty(ctrl.get("rows", 24), ctrl.get("cols", 80))
                         elif ctrl.get("type") == "ping":
                             await websocket.send_text(_json.dumps({"type": "pong"}))
                     except (_json.JSONDecodeError, KeyError):
-                        worker.write_input(message["text"].encode())
+                        if hasattr(worker, "write_input_from_viewer"):
+                            worker.write_input_from_viewer(websocket, message["text"].encode())
+                        else:
+                            worker.write_input(message["text"].encode())
             elif message["type"] == "websocket.disconnect":
                 break
     except WebSocketDisconnect:
