@@ -56,6 +56,25 @@ def _check_node() -> None:
         print("[server] Install with: sudo apt install nodejs npm", file=sys.stderr)
 
 
+def _check_tmux() -> None:
+    """Check if tmux is available, auto-install if missing.
+
+    tmux enables multi-viewer terminal support (PC + phone simultaneously).
+    Falls back to raw PTY if unavailable.
+    """
+    from engine.tmux import auto_install, is_available
+
+    if is_available():
+        return
+    if not auto_install():
+        print(
+            "[server] WARNING: tmux not found — multi-viewer terminal sizing will be limited.\n"
+            "[server] Terminals will still work, but PC and phone viewers may see garbled output\n"
+            "[server] when connected simultaneously. Install tmux for the best experience.",
+            file=sys.stderr,
+        )
+
+
 def _ensure_config() -> None:
     """Create config.yaml with defaults if missing."""
     config_path = Path(__file__).parent / "config.yaml"
@@ -132,6 +151,7 @@ _check_python_version()
 _check_dependencies()
 _check_git()
 _check_node()
+_check_tmux()
 _ensure_config()
 
 import asyncio

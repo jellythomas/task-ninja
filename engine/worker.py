@@ -1,4 +1,10 @@
-"""CLI worker — spawns an AI agent process per ticket with PTY for live terminal access."""
+"""CLI worker — spawns an AI agent process per ticket with PTY for live terminal access.
+
+Supports two modes:
+- **tmux mode** (default): Each viewer gets an independent tmux grouped session with its own
+  terminal sizing. Enables simultaneous PC + phone viewing without garbled output.
+- **raw PTY mode** (fallback): Single PTY shared by all viewers. Used when tmux is unavailable.
+"""
 
 from __future__ import annotations
 
@@ -16,10 +22,12 @@ import struct
 import termios
 import time
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import WebSocket
 
+from engine import tmux as tmux_mgr
 from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
 from engine.jira_client import JiraClient
@@ -40,6 +48,29 @@ def _clean_ansi(text: str) -> str:
     text = _CURSOR_FWD_RE.sub(lambda m: " " * int(m.group(1)), text)
     text = _CURSOR_FWD_1_RE.sub(" ", text)
     return _ANSI_RE.sub("", text)
+
+
+# Whether tmux is available (checked once at import time)
+_TMUX_AVAILABLE: bool = tmux_mgr.is_available()
+
+_viewer_counter: int = 0
+
+
+def _next_viewer_id() -> int:
+    global _viewer_counter
+    _viewer_counter += 1
+    return _viewer_counter
+
+
+@dataclass
+class ViewerSession:
+    """Per-viewer tmux grouped session with its own PTY."""
+
+    ws: WebSocket
+    session_name: str
+    master_fd: int
+    pid: int
+    read_task: asyncio.Task | None = None
 
 
 class Worker:
@@ -87,9 +118,14 @@ class Worker:
         # PTY and viewer management
         self._master_fd: int | None = None
         self._viewers: set[WebSocket] = set()
-        self._output_buffer = bytearray()  # Scrollback for late-joining viewers
+        self._output_buffer = bytearray()  # Scrollback for late-joining viewers (raw PTY fallback)
         self._max_buffer = 256 * 1024  # 256KB
         self._line_buffer = ""  # Partial line accumulator for parsing
+
+        # tmux multi-viewer support
+        self._use_tmux: bool = _TMUX_AVAILABLE
+        self._tmux_session: str = f"tn-{ticket_id}"
+        self._viewer_sessions: dict[WebSocket, ViewerSession] = {}
 
     async def run(self) -> bool:
         """Execute the ticket using interactive mode with phase pipeline."""
@@ -111,32 +147,57 @@ class Worker:
             self._log_file_path = log_dir / f"log-{self.jira_key.lower()}.txt"
             self._log_fh = open(self._log_file_path, "a", buffering=1)  # noqa: SIM115 — kept open for lifetime of worker
 
-            # Create PTY
-            master_fd, slave_fd = pty.openpty()
-            self._master_fd = master_fd
-            winsize = struct.pack("HHHH", 24, 80, 0, 0)
-            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
-            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
-            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            # Spawn process — tmux mode or raw PTY fallback
+            if self._use_tmux:
+                # Create tmux session running the AI agent
+                ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
+                if not ok:
+                    logger.warning("tmux session creation failed, falling back to raw PTY")
+                    self._use_tmux = False
 
-            # Spawn interactive process
-            self.process = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=self.worktree_path,
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
-            )
-            os.close(slave_fd)
+            if self._use_tmux:
+                # Get PID of the process inside tmux
+                session_pid = await tmux_mgr.get_session_pid(self._tmux_session)
+                self._tmux_pid = session_pid
 
+                # Create a monitoring PTY (for log parsing / phase detection only)
+                monitor_session = f"{self._tmux_session}-monitor"
+                await tmux_mgr.create_grouped_session(self._tmux_session, monitor_session)
+                result = await tmux_mgr.attach_pty(monitor_session)
+                if result:
+                    self._master_fd, _ = result
+                else:
+                    logger.warning("tmux monitor attach failed, falling back to raw PTY")
+                    await tmux_mgr.kill_session(self._tmux_session)
+                    self._use_tmux = False
+
+            if not self._use_tmux:
+                # Raw PTY fallback (original behavior)
+                master_fd, slave_fd = pty.openpty()
+                self._master_fd = master_fd
+                winsize = struct.pack("HHHH", 24, 80, 0, 0)
+                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+                fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                self.process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=self.worktree_path,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
+                )
+                os.close(slave_fd)
+
+            worker_pid = self._tmux_pid if self._use_tmux else (self.process.pid if self.process else None)
             await self.state.update_ticket(
                 self.ticket_id,
-                worker_pid=self.process.pid,
+                worker_pid=worker_pid,
                 log_file=str(self._log_file_path),
             )
             await self.broadcaster.broadcast_ticket_update(
-                self.run_id, self.ticket_id, None, worker_pid=self.process.pid
+                self.run_id, self.ticket_id, None, worker_pid=worker_pid
             )
 
             # Start PTY read loop in background (task ref prevents GC)
@@ -225,28 +286,29 @@ class Worker:
                 if completed:
                     # Persist phase completion for resume on retry
                     await self.state.update_ticket(self.ticket_id, last_completed_phase=phase_name)
-                elif self.process.returncode is not None:
+                elif self._process_has_exited():
                     # Process died during phase — always keep review/done state
                     # Review is the last phase; core work (planning+developing) is done.
                     # If /open-pr failed, user can see it in terminal logs and open PR manually.
                     ticket = await self.state.get_ticket(self.ticket_id)
                     current_state = ticket.state if ticket else None
+                    exit_code = self._get_exit_code()
                     if current_state in (TicketState.REVIEW, TicketState.DONE):
                         logger.info(
-                            "Process exited (code=%d) during %s, ticket in %s — keeping state",
-                            self.process.returncode,
+                            "Process exited (code=%s) during %s, ticket in %s — keeping state",
+                            exit_code,
                             phase_name,
                             current_state,
                         )
-                        await self._notify_viewers_exit(self.process.returncode)
+                        await self._notify_viewers_exit(exit_code)
                         return True
-                    error = f"CLI exited with code {self.process.returncode} during {phase_name}"
+                    error = f"CLI exited with code {exit_code} during {phase_name}"
                     await self.state.update_ticket(self.ticket_id, error=error)
                     await self.state.update_ticket_state(self.ticket_id, TicketState.FAILED)
                     await self.broadcaster.broadcast_ticket_update(
                         self.run_id, self.ticket_id, TicketState.FAILED, error=error
                     )
-                    await self._notify_viewers_exit(self.process.returncode)
+                    await self._notify_viewers_exit(exit_code)
                     return False
 
             if self._cancelled:
@@ -264,7 +326,12 @@ class Worker:
             )
 
             # Wait for the process to exit naturally (user closes it or it's killed)
-            await self.process.wait()
+            if self._use_tmux:
+                # Poll tmux session existence — asyncio.Event not applicable (external process)
+                while await tmux_mgr.session_exists(self._tmux_session):  # noqa: ASYNC110
+                    await asyncio.sleep(1)
+            elif self.process:
+                await self.process.wait()
 
             # Drain any remaining PTY data
             await self._drain_pty()
@@ -290,8 +357,17 @@ class Worker:
                 )
             return False
         finally:
-            # Kill process if still running
-            if self.process and self.process.returncode is None:
+            # Kill process / tmux session
+            if self._use_tmux:
+                await tmux_mgr.kill_session(self._tmux_session)
+                # Close all viewer sessions
+                for vs in list(self._viewer_sessions.values()):
+                    if vs.read_task:
+                        vs.read_task.cancel()
+                    with contextlib.suppress(OSError):
+                        os.close(vs.master_fd)
+                self._viewer_sessions.clear()
+            elif self.process and self.process.returncode is None:
                 try:
                     self.process.send_signal(signal.SIGTERM)
                     try:
@@ -308,9 +384,17 @@ class Worker:
                 await self.state.update_ticket(self.ticket_id, worker_pid=None)
 
     async def kill(self) -> None:
-        """Kill the worker process."""
+        """Kill the worker process (or tmux session)."""
         self._cancelled = True
-        if self.process and self.process.returncode is None:
+        if self._use_tmux:
+            await tmux_mgr.kill_session(self._tmux_session)
+            for vs in list(self._viewer_sessions.values()):
+                if vs.read_task:
+                    vs.read_task.cancel()
+                with contextlib.suppress(OSError):
+                    os.close(vs.master_fd)
+            self._viewer_sessions.clear()
+        elif self.process and self.process.returncode is None:
             try:
                 self.process.send_signal(signal.SIGTERM)
                 try:
@@ -351,7 +435,9 @@ class Worker:
             return bytes(batch) if batch else None
 
         while not self._cancelled:
-            if self.process.returncode is not None:
+            if not self._use_tmux and self.process and self.process.returncode is not None:
+                break
+            if self._use_tmux and not await tmux_mgr.session_exists(self._tmux_session):
                 break
 
             try:
@@ -360,7 +446,7 @@ class Worker:
                     None, lambda: select.select([self._master_fd], [], [], frame_interval)[0]
                 )
                 if not ready:
-                    if self.process.returncode is not None:
+                    if not self._use_tmux and self.process and self.process.returncode is not None:
                         break
                     continue
 
@@ -414,7 +500,11 @@ class Worker:
             pass
 
     async def _send_to_viewers(self, data: bytes) -> None:
-        """Send raw PTY output to all connected WebSocket viewers in parallel."""
+        """Send raw PTY output to all connected WebSocket viewers in parallel.
+
+        In tmux mode, each viewer has its own read loop — this only sends to
+        raw PTY fallback viewers. tmux viewers are handled by _viewer_read_loop.
+        """
         if not self._viewers:
             return
         viewers = list(self._viewers)
@@ -446,37 +536,104 @@ class Worker:
 
     # --- Viewer management (attach/detach) ---
 
-    async def attach_viewer(self, ws: WebSocket) -> None:
-        """Attach a WebSocket viewer. Sends scrollback buffer in chunks."""
-        if self._output_buffer:
-            buf = bytes(self._output_buffer)
-            chunk_size = 32768  # 32KB chunks to avoid blocking
-            try:
-                for i in range(0, len(buf), chunk_size):
-                    await ws.send_bytes(buf[i : i + chunk_size])
-            except Exception:
+    async def attach_viewer(self, ws: WebSocket, rows: int = 24, cols: int = 80) -> None:
+        """Attach a WebSocket viewer.
+
+        tmux mode: creates a grouped session with its own PTY for independent sizing.
+        Raw PTY mode: adds to shared viewer set with scrollback replay.
+        """
+        if self._use_tmux:
+            vid = _next_viewer_id()
+            viewer_session_name = f"{self._tmux_session}-v{vid}"
+            ok = await tmux_mgr.create_grouped_session(self._tmux_session, viewer_session_name, rows, cols)
+            if not ok:
+                # Fallback: add to raw viewers
+                self._viewers.add(ws)
                 return
-        self._viewers.add(ws)
+
+            result = await tmux_mgr.attach_pty(viewer_session_name, rows, cols)
+            if not result:
+                await tmux_mgr.kill_session(viewer_session_name)
+                self._viewers.add(ws)
+                return
+
+            master_fd, pid = result
+            vs = ViewerSession(
+                ws=ws,
+                session_name=viewer_session_name,
+                master_fd=master_fd,
+                pid=pid,
+            )
+            vs.read_task = asyncio.create_task(self._viewer_read_loop(vs))
+            self._viewer_sessions[ws] = vs
+        else:
+            # Raw PTY fallback — send scrollback buffer
+            if self._output_buffer:
+                buf = bytes(self._output_buffer)
+                chunk_size = 32768  # 32KB chunks to avoid blocking
+                try:
+                    for i in range(0, len(buf), chunk_size):
+                        await ws.send_bytes(buf[i : i + chunk_size])
+                except Exception:
+                    return
+            self._viewers.add(ws)
 
     def detach_viewer(self, ws: WebSocket) -> None:
         """Detach a WebSocket viewer. Does NOT affect the running process."""
-        self._viewers.discard(ws)
+        if ws in self._viewer_sessions:
+            vs = self._viewer_sessions.pop(ws)
+            if vs.read_task:
+                vs.read_task.cancel()
+            with contextlib.suppress(OSError):
+                os.close(vs.master_fd)
+            asyncio.create_task(tmux_mgr.kill_session(vs.session_name))  # noqa: RUF006 — fire-and-forget cleanup from sync method
+        else:
+            self._viewers.discard(ws)
 
     def write_input(self, data: bytes) -> None:
         """Write user input to the PTY (from a terminal viewer)."""
-        if self._master_fd is not None and not self._cancelled:
-            try:
+        if self._cancelled:
+            return
+        self._user_active = True
+
+        if self._use_tmux:
+            # In tmux mode, write to the main session's tmux — all grouped sessions see it
+            # Find the viewer's own PTY fd for direct write (lower latency than send-keys)
+            # Actually, any viewer's input goes to the shared tmux window, so we can
+            # write to the monitor fd or any viewer fd — they all share the same pane
+            if self._master_fd is not None:
+                with contextlib.suppress(OSError):
+                    os.write(self._master_fd, data)
+        elif self._master_fd is not None:
+            with contextlib.suppress(OSError):
                 os.write(self._master_fd, data)
-                self._user_active = True  # Reset debounce timer
-            except OSError:
-                pass
+
+    def write_input_from_viewer(self, ws: WebSocket, data: bytes) -> None:
+        """Write user input from a specific viewer's PTY (tmux mode).
+
+        Each viewer has their own PTY attached to a grouped session that shares
+        the same tmux window — writing to any of them reaches the process.
+        """
+        if self._cancelled:
+            return
+        self._user_active = True
+
+        vs = self._viewer_sessions.get(ws)
+        if vs:
+            with contextlib.suppress(OSError):
+                os.write(vs.master_fd, data)
+        elif self._master_fd is not None:
+            with contextlib.suppress(OSError):
+                os.write(self._master_fd, data)
 
     def interrupt(self) -> bool:
         """Send Escape key to the PTY to interrupt Claude's current operation.
         This cancels the current tool call without killing the session."""
-        if self._master_fd is not None and not self._cancelled:
+        if self._cancelled:
+            return False
+        if self._master_fd is not None:
             try:
-                os.write(self._master_fd, b"\x1b")  # Escape key
+                os.write(self._master_fd, b"\x1b")
                 self._user_active = True
                 return True
             except OSError:
@@ -484,7 +641,7 @@ class Worker:
         return False
 
     def resize_pty(self, rows: int, cols: int) -> None:
-        """Resize the PTY terminal."""
+        """Resize the PTY terminal (raw PTY mode only — shared by all viewers)."""
         if self._master_fd is not None:
             try:
                 winsize = struct.pack("HHHH", rows, cols, 0, 0)
@@ -492,16 +649,93 @@ class Worker:
             except OSError:
                 pass
 
+    def resize_viewer_pty(self, ws: WebSocket, rows: int, cols: int) -> None:
+        """Resize a specific viewer's PTY (tmux mode — independent per viewer)."""
+        vs = self._viewer_sessions.get(ws)
+        if vs:
+            tmux_mgr.resize_pty(vs.master_fd, rows, cols)
+        else:
+            # Fallback to shared PTY resize
+            self.resize_pty(rows, cols)
+
+    async def _viewer_read_loop(self, vs: ViewerSession) -> None:
+        """Read from a viewer's tmux grouped session PTY and forward to their WebSocket."""
+        frame_interval = 0.033
+        loop = asyncio.get_event_loop()
+
+        def _read_batch():
+            batch = bytearray()
+            while True:
+                ready, _, _ = select.select([vs.master_fd], [], [], 0)
+                if not ready:
+                    break
+                try:
+                    chunk = os.read(vs.master_fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                batch.extend(chunk)
+            return bytes(batch) if batch else None
+
+        try:
+            while not self._cancelled:
+                if not await tmux_mgr.session_exists(vs.session_name):
+                    break
+                try:
+                    ready = await loop.run_in_executor(
+                        None, lambda: select.select([vs.master_fd], [], [], frame_interval)[0]
+                    )
+                    if not ready:
+                        continue
+                    data = await loop.run_in_executor(None, _read_batch)
+                    if not data:
+                        continue
+                    await vs.ws.send_bytes(data)
+                except (OSError, ValueError):
+                    break
+                except Exception:
+                    break
+        finally:
+            # Notify viewer that session ended
+            with contextlib.suppress(Exception):
+                await vs.ws.send_text(json.dumps({"type": "process_exit", "code": 0}))
+
     @property
     def is_running(self) -> bool:
         """Check if the worker process is still running."""
+        if self._use_tmux:
+            # Synchronous check — for async use session_exists directly
+            return not self._cancelled
         return self.process is not None and self.process.returncode is None
+
+    def _process_has_exited(self) -> bool:
+        """Check if the underlying process has exited (works for both modes)."""
+        if self._use_tmux:
+            return self._cancelled
+        return self.process is not None and self.process.returncode is not None
+
+    def _get_exit_code(self) -> int:
+        """Get exit code of the process (0 if unknown/tmux)."""
+        if self._use_tmux:
+            return 0
+        if self.process and self.process.returncode is not None:
+            return self.process.returncode
+        return -1
 
     # --- PTY send helper ---
 
     def _send_to_pty(self, text: str) -> None:
-        """Write a command/prompt to the PTY."""
-        if self._master_fd is not None and not self._cancelled:
+        """Write a command/prompt to the PTY (or tmux session)."""
+        if self._cancelled:
+            return
+        if self._use_tmux:
+            # Send via tmux send-keys to the main session
+            # Strip trailing \r — tmux send-keys adds Enter
+            clean = text.rstrip("\r\n")
+            if clean:
+                asyncio.create_task(tmux_mgr.send_keys(self._tmux_session, clean))  # noqa: RUF006 — fire-and-forget from sync method
+        elif self._master_fd is not None:
             with contextlib.suppress(OSError):
                 os.write(self._master_fd, text.encode())
 
@@ -516,8 +750,11 @@ class Worker:
         self._last_output_time = time.time()
 
         while not self._cancelled:
-            # Process died
-            if self.process.returncode is not None:
+            # Process died — check via tmux or subprocess
+            if self._use_tmux:
+                if not await tmux_mgr.session_exists(self._tmux_session):
+                    return False
+            elif self.process and self.process.returncode is not None:
                 return False
 
             # Marker detected
@@ -666,7 +903,11 @@ class AdHocTerminal:
     Spawns `claude --dangerously-skip-permissions` in the worktree with a PTY.
     No phase pipeline, no state transitions — just a live terminal.
     Exposes the same viewer interface as Worker so the WebSocket handler works.
+
+    Supports tmux mode for multi-viewer independent sizing, with raw PTY fallback.
     """
+
+    _adhoc_counter: int = 0
 
     def __init__(self, worktree_path: str, claude_command: str = "claude"):
         self.worktree_path = worktree_path
@@ -678,6 +919,12 @@ class AdHocTerminal:
         self._max_buffer = 256 * 1024
         self._read_task: asyncio.Task | None = None
 
+        # tmux support
+        self._use_tmux: bool = _TMUX_AVAILABLE
+        AdHocTerminal._adhoc_counter += 1
+        self._tmux_session: str = f"tn-adhoc-{AdHocTerminal._adhoc_counter}"
+        self._viewer_sessions: dict = {}
+
     async def start(self) -> None:
         """Spawn an interactive Claude session in the worktree."""
         import shlex
@@ -685,6 +932,18 @@ class AdHocTerminal:
         parts = shlex.split(self.claude_command) if " " in self.claude_command else [self.claude_command]
         cmd = [*parts, "--dangerously-skip-permissions"]
 
+        if self._use_tmux:
+            ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
+            if ok:
+                session_pid = await tmux_mgr.get_session_pid(self._tmux_session)
+                # Create a dummy process object for compatibility (pid tracking)
+                self._tmux_pid = session_pid
+                logger.info("Spawned tmux ad-hoc session %s in %s (pid=%s)", self._tmux_session, self.worktree_path, session_pid)
+                return
+            logger.warning("tmux ad-hoc session failed, falling back to raw PTY")
+            self._use_tmux = False
+
+        # Raw PTY fallback
         master_fd, slave_fd = pty.openpty()
         self._master_fd = master_fd
 
@@ -704,16 +963,16 @@ class AdHocTerminal:
         os.close(slave_fd)
 
         self._read_task = asyncio.create_task(self._pty_read_loop())
-        logger.info("Spawned interactive session in %s (pid=%s)", self.worktree_path, self.process.pid)
+        logger.info("Spawned raw PTY ad-hoc session in %s (pid=%s)", self.worktree_path, self.process.pid)
 
     async def _pty_read_loop(self) -> None:
-        """Read from PTY and forward to viewers."""
+        """Read from PTY and forward to viewers (raw PTY fallback only)."""
         loop = asyncio.get_event_loop()
         while True:
             try:
                 ready = await loop.run_in_executor(None, lambda: select.select([self._master_fd], [], [], 0.5)[0])
                 if not ready:
-                    if self.process.returncode is not None:
+                    if self.process and self.process.returncode is not None:
                         break
                     continue
                 data = os.read(self._master_fd, 65536)
@@ -749,22 +1008,98 @@ class AdHocTerminal:
         if disconnected:
             self._viewers -= disconnected
 
-    async def attach_viewer(self, ws) -> None:
-        if self._output_buffer:
-            buf = bytes(self._output_buffer)
-            chunk_size = 32768
-            try:
-                for i in range(0, len(buf), chunk_size):
-                    await ws.send_bytes(buf[i : i + chunk_size])
-            except Exception:
+    async def _viewer_read_loop(self, vs: ViewerSession) -> None:
+        """Read from a viewer's tmux grouped session PTY and forward to their WebSocket."""
+        frame_interval = 0.033
+        loop = asyncio.get_event_loop()
+
+        def _read_batch():
+            batch = bytearray()
+            while True:
+                ready, _, _ = select.select([vs.master_fd], [], [], 0)
+                if not ready:
+                    break
+                try:
+                    chunk = os.read(vs.master_fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                batch.extend(chunk)
+            return bytes(batch) if batch else None
+
+        try:
+            while True:
+                if not await tmux_mgr.session_exists(vs.session_name):
+                    break
+                try:
+                    ready = await loop.run_in_executor(
+                        None, lambda: select.select([vs.master_fd], [], [], frame_interval)[0]
+                    )
+                    if not ready:
+                        continue
+                    data = await loop.run_in_executor(None, _read_batch)
+                    if not data:
+                        continue
+                    await vs.ws.send_bytes(data)
+                except (OSError, ValueError):
+                    break
+                except Exception:
+                    break
+        finally:
+            with contextlib.suppress(Exception):
+                await vs.ws.send_text(json.dumps({"type": "process_exit", "code": 0}))
+
+    async def attach_viewer(self, ws, rows: int = 24, cols: int = 80) -> None:
+        if self._use_tmux:
+            vid = _next_viewer_id()
+            viewer_session_name = f"{self._tmux_session}-v{vid}"
+            ok = await tmux_mgr.create_grouped_session(self._tmux_session, viewer_session_name, rows, cols)
+            if not ok:
+                self._viewers.add(ws)
                 return
-        self._viewers.add(ws)
+            result = await tmux_mgr.attach_pty(viewer_session_name, rows, cols)
+            if not result:
+                await tmux_mgr.kill_session(viewer_session_name)
+                self._viewers.add(ws)
+                return
+            master_fd, pid = result
+            vs = ViewerSession(ws=ws, session_name=viewer_session_name, master_fd=master_fd, pid=pid)
+            vs.read_task = asyncio.create_task(self._viewer_read_loop(vs))
+            self._viewer_sessions[ws] = vs
+        else:
+            if self._output_buffer:
+                buf = bytes(self._output_buffer)
+                chunk_size = 32768
+                try:
+                    for i in range(0, len(buf), chunk_size):
+                        await ws.send_bytes(buf[i : i + chunk_size])
+                except Exception:
+                    return
+            self._viewers.add(ws)
 
     def detach_viewer(self, ws) -> None:
-        self._viewers.discard(ws)
+        if ws in self._viewer_sessions:
+            vs = self._viewer_sessions.pop(ws)
+            if vs.read_task:
+                vs.read_task.cancel()
+            with contextlib.suppress(OSError):
+                os.close(vs.master_fd)
+            asyncio.create_task(tmux_mgr.kill_session(vs.session_name))  # noqa: RUF006 — fire-and-forget cleanup from sync method
+        else:
+            self._viewers.discard(ws)
 
     def write_input(self, data: bytes) -> None:
         if self._master_fd is not None:
+            with contextlib.suppress(OSError):
+                os.write(self._master_fd, data)
+
+    def write_input_from_viewer(self, ws, data: bytes) -> None:
+        vs = self._viewer_sessions.get(ws)
+        if vs:
+            with contextlib.suppress(OSError):
+                os.write(vs.master_fd, data)
+        elif self._master_fd is not None:
             with contextlib.suppress(OSError):
                 os.write(self._master_fd, data)
 
@@ -774,18 +1109,36 @@ class AdHocTerminal:
                 winsize = struct.pack("HHHH", rows, cols, 0, 0)
                 fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
 
+    def resize_viewer_pty(self, ws, rows: int, cols: int) -> None:
+        vs = self._viewer_sessions.get(ws)
+        if vs:
+            tmux_mgr.resize_pty(vs.master_fd, rows, cols)
+        else:
+            self.resize_pty(rows, cols)
+
     @property
     def is_running(self) -> bool:
+        if self._use_tmux:
+            return True  # Checked async via session_exists where needed
         return self.process is not None and self.process.returncode is None
 
     async def stop(self) -> None:
         """Terminate the session."""
-        if self.process and self.process.returncode is None:
-            self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                self.process.kill()
+        if self._use_tmux:
+            await tmux_mgr.kill_session(self._tmux_session)
+            for vs in list(self._viewer_sessions.values()):
+                if vs.read_task:
+                    vs.read_task.cancel()
+                with contextlib.suppress(OSError):
+                    os.close(vs.master_fd)
+            self._viewer_sessions.clear()
+        else:
+            if self.process and self.process.returncode is None:
+                self.process.terminate()
+                try:
+                    await asyncio.wait_for(self.process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    self.process.kill()
         if self._master_fd is not None:
             with contextlib.suppress(OSError):
                 os.close(self._master_fd)
