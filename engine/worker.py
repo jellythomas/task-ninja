@@ -21,6 +21,7 @@ import signal
 import struct
 import termios
 import time
+from datetime import datetime
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,27 +149,37 @@ class Worker:
             self._log_fh = open(self._log_file_path, "a", buffering=1)  # noqa: SIM115 — kept open for lifetime of worker
 
             # Spawn process — tmux mode or raw PTY fallback
+            # On resume, the tmux session may already exist (from a previous worker).
+            # Reuse it instead of creating a new Claude Code instance.
+            self._resumed_session = False
             if self._use_tmux:
-                # Create tmux session running the AI agent
-                ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
-                if not ok:
-                    logger.warning("tmux session creation failed, falling back to raw PTY")
-                    self._use_tmux = False
+                if await tmux_mgr.session_exists(self._tmux_session):
+                    logger.info("Reusing existing tmux session %s (resume)", self._tmux_session)
+                    self._resumed_session = True
+                else:
+                    ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
+                    if not ok:
+                        logger.warning("tmux session creation failed, falling back to raw PTY")
+                        self._use_tmux = False
 
             if self._use_tmux:
                 # Get PID of the process inside tmux
                 session_pid = await tmux_mgr.get_session_pid(self._tmux_session)
                 self._tmux_pid = session_pid
 
-                # Create a monitoring PTY (for log parsing / phase detection only)
+                # Create (or recreate) a monitoring PTY for log parsing / phase detection
                 monitor_session = f"{self._tmux_session}-monitor"
+                if await tmux_mgr.session_exists(monitor_session):
+                    # Kill stale monitor from previous worker run
+                    await tmux_mgr.kill_session(monitor_session)
                 await tmux_mgr.create_grouped_session(self._tmux_session, monitor_session)
                 result = await tmux_mgr.attach_pty(monitor_session)
                 if result:
                     self._master_fd, _ = result
                 else:
                     logger.warning("tmux monitor attach failed, falling back to raw PTY")
-                    await tmux_mgr.kill_session(self._tmux_session)
+                    if not self._resumed_session:
+                        await tmux_mgr.kill_session(self._tmux_session)
                     self._use_tmux = False
 
             if not self._use_tmux:
@@ -256,12 +267,6 @@ class Worker:
                     )
                     continue
 
-                # Transition state
-                if ticket_state:
-                    await self.state.update_ticket_state(self.ticket_id, ticket_state)
-                    await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, ticket_state)
-                    await self._sync_jira_status(phase_name)
-
                 self._current_phase = phase_name
                 self._phase_marker = marker
 
@@ -270,10 +275,11 @@ class Worker:
                     self.run_id, self.ticket_id, f"[worker] === Phase: {phase_name} ==="
                 )
 
-                # Wait for Claude to finish rendering and present its input prompt
-                # before sending the next phase's prompt (TUI mode switches discard buffered input)
+                # Wait for Claude to be truly idle before injecting the next prompt.
+                # A Stop hook may cause Claude to continue processing (e.g. code review)
+                # after the phase marker is emitted — a fixed sleep is not enough.
                 if phase_name != phase_order[0]:
-                    await asyncio.sleep(5)
+                    await self._wait_for_idle(min_quiet=10, timeout=600)
 
                 # Send all prompts for this phase as a single block
                 full_prompt = "\n".join(
@@ -282,15 +288,34 @@ class Worker:
                 )
                 await self._send_to_pty(full_prompt + "\r")
 
-                # Wait for phase completion
+                # Mark phase as STARTED (prompt injected)
+                started_col = f"{phase_name}_started_at"
+                await self.state.update_ticket(self.ticket_id, **{started_col: datetime.utcnow().isoformat()})
+                logger.info("Phase %s started for ticket %s", phase_name, self.ticket_id)
+
+                # Transition state AFTER prompt is sent — not before.
+                # If we set state to REVIEW before injection and the worker dies,
+                # the orchestrator treats REVIEW as terminal and never retries.
+                if ticket_state:
+                    await self.state.update_ticket_state(self.ticket_id, ticket_state)
+                    await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, ticket_state)
+                    await self._sync_jira_status(phase_name)
+
+                # Wait for phase completion (marker detection)
                 completed = await self._wait_for_phase_completion(marker)
 
                 if self._cancelled:
                     break
 
                 if completed:
-                    # Persist phase completion for resume on retry
-                    await self.state.update_ticket(self.ticket_id, last_completed_phase=phase_name)
+                    # Mark phase as COMPLETED (marker detected) and persist for resume
+                    completed_col = f"{phase_name}_completed_at"
+                    await self.state.update_ticket(
+                        self.ticket_id,
+                        last_completed_phase=phase_name,
+                        **{completed_col: datetime.utcnow().isoformat()},
+                    )
+                    logger.info("Phase %s completed for ticket %s", phase_name, self.ticket_id)
                 elif self._process_has_exited():
                     # Process died during phase — always keep review/done state
                     # Review is the last phase; core work (planning+developing) is done.
@@ -481,8 +506,14 @@ class Worker:
                 # Parse for state transitions, PR URLs, and log broadcasting
                 text = data.decode("utf-8", errors="replace")
                 await self._process_output(text)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
+                logger.warning("PTY read loop exiting due to %s: %s", type(exc).__name__, exc)
                 break
+            except Exception:
+                logger.exception("PTY read loop unexpected error")
+                break
+
+        logger.info("PTY read loop ended for ticket %s (cancelled=%s)", self.ticket_id, self._cancelled)
 
     async def _drain_pty(self) -> None:
         """Read any remaining data from PTY after process exit."""
@@ -768,9 +799,16 @@ class Worker:
         """Wait for phase to complete via marker detection or idle debounce.
 
         Returns True if phase completed, False if process died.
+
+        Includes a fallback: if the PTY read loop dies (monitor session PTY
+        disconnects during long tasks), periodically use ``tmux capture-pane``
+        to scan recent output for the marker.  Also attempts to reconnect the
+        monitor PTY so subsequent phases work normally.
         """
         self._marker_detected.clear()
         self._last_output_time = time.time()
+        _capture_interval = 10.0  # seconds between fallback capture-pane checks
+        _last_capture_check = 0.0
 
         while not self._cancelled:
             # Process died — check via tmux or subprocess
@@ -780,9 +818,29 @@ class Worker:
             elif self.process and self.process.returncode is not None:
                 return False
 
-            # Marker detected
+            # Marker detected (primary path — via PTY read loop)
             if marker and self._marker_detected.is_set():
                 return True
+
+            # Fallback: if PTY read loop died, use capture-pane to detect marker
+            if (
+                marker
+                and self._use_tmux
+                and self._pty_task is not None
+                and self._pty_task.done()
+            ):
+                now = time.time()
+                if (now - _last_capture_check) >= _capture_interval:
+                    _last_capture_check = now
+                    pane_text = await tmux_mgr.capture_pane(self._tmux_session)
+                    if pane_text and marker in pane_text:
+                        logger.info(
+                            "Marker %s detected via capture-pane fallback (PTY read loop died)",
+                            marker,
+                        )
+                        # Attempt to reconnect monitor PTY for subsequent phases
+                        await self._reconnect_monitor_pty()
+                        return True
 
             # Idle debounce fallback (only if no marker configured)
             if not marker and self.idle_timeout > 0:
@@ -796,6 +854,71 @@ class Worker:
             await asyncio.sleep(0.5)
 
         return False
+
+    async def _reconnect_monitor_pty(self) -> None:
+        """Reconnect the monitor PTY and restart the read loop.
+
+        Called when the fallback capture-pane detects a marker, indicating the
+        original monitor PTY died.  This ensures subsequent phases can still
+        detect markers via the normal PTY read path.
+        """
+        if not self._use_tmux:
+            return
+
+        # Close old fd
+        if self._master_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._master_fd)
+            self._master_fd = None
+
+        monitor_session = f"{self._tmux_session}-monitor"
+
+        # Ensure monitor session exists (may have been destroyed)
+        if not await tmux_mgr.session_exists(monitor_session):
+            ok = await tmux_mgr.create_grouped_session(self._tmux_session, monitor_session)
+            if not ok:
+                logger.error("Failed to recreate monitor session %s", monitor_session)
+                return
+
+        result = await tmux_mgr.attach_pty(monitor_session)
+        if result:
+            self._master_fd, _ = result
+            self._pty_task = asyncio.create_task(self._pty_read_loop())
+            logger.info("Reconnected monitor PTY for %s", self._tmux_session)
+        else:
+            logger.error("Failed to reconnect monitor PTY for %s", self._tmux_session)
+
+    async def _wait_for_idle(self, min_quiet: float = 10, timeout: float = 600) -> None:
+        """Wait until PTY output has been quiet for *min_quiet* seconds.
+
+        After a phase marker is emitted, a Claude Code Stop hook may cause the
+        agent to continue processing (e.g. running /code-review).  If we inject
+        the next phase's prompt while Claude is still busy, the TUI discards it.
+
+        This method watches ``_last_output_time`` (updated by the PTY read loop
+        on every chunk) and returns once no new output has arrived for
+        *min_quiet* seconds — meaning Claude is back at the ``>`` prompt.
+
+        Falls back to *timeout* to avoid blocking forever.
+        """
+        deadline = time.time() + timeout
+        # Give Claude at least a brief moment to start any Stop-hook continuation
+        await asyncio.sleep(3)
+
+        while not self._cancelled and time.time() < deadline:
+            idle = time.time() - self._last_output_time
+            if idle >= min_quiet:
+                logger.info(
+                    "Claude idle for %.1fs — injecting next phase prompt", idle
+                )
+                return
+            await asyncio.sleep(1)
+
+        if self._cancelled:
+            return
+        logger.warning(
+            "Idle wait timed out after %.0fs — injecting prompt anyway", timeout
+        )
 
     # --- Output parsing ---
 
