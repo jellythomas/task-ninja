@@ -116,6 +116,8 @@ async def create_session(session_name: str, cmd: list[str], cwd: str, rows: int 
     post_cmds = [
         ["tmux", "set-option", "-t", session_name, "status", "off"],
         ["tmux", "set-option", "-t", session_name, "window-size", "latest"],
+        # Enable mouse globally so all grouped viewer sessions inherit it
+        ["tmux", "set-option", "-g", "mouse", "on"],
     ]
 
     try:
@@ -170,6 +172,15 @@ async def create_grouped_session(
         if proc.returncode != 0:
             logger.error("Failed to create grouped session %s: %s", viewer_session, stderr.decode())
             return False
+
+        # Enable mouse on the viewer session so scroll works in the web terminal
+        mouse_proc = await asyncio.create_subprocess_exec(
+            "tmux", "set-option", "-t", viewer_session, "mouse", "on",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await mouse_proc.communicate()
+
         logger.info("Created grouped session: %s -> %s", viewer_session, target_session)
         return True
     except (OSError, FileNotFoundError) as e:

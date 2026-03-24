@@ -270,12 +270,17 @@ class Worker:
                     self.run_id, self.ticket_id, f"[worker] === Phase: {phase_name} ==="
                 )
 
+                # Wait for Claude to finish rendering and present its input prompt
+                # before sending the next phase's prompt (TUI mode switches discard buffered input)
+                if phase_name != phase_order[0]:
+                    await asyncio.sleep(5)
+
                 # Send all prompts for this phase as a single block
                 full_prompt = "\n".join(
                     p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch)
                     for p in prompts
                 )
-                self._send_to_pty(full_prompt + "\r")
+                await self._send_to_pty(full_prompt + "\r")
 
                 # Wait for phase completion
                 completed = await self._wait_for_phase_completion(marker)
@@ -434,11 +439,16 @@ class Worker:
                 batch.extend(chunk)
             return bytes(batch) if batch else None
 
+        _session_check_interval = 5.0  # Check tmux session existence every 5s, not every frame
+        _last_session_check = time.time()
+
         while not self._cancelled:
             if not self._use_tmux and self.process and self.process.returncode is not None:
                 break
-            if self._use_tmux and not await tmux_mgr.session_exists(self._tmux_session):
-                break
+            if self._use_tmux and (time.time() - _last_session_check) > _session_check_interval:
+                _last_session_check = time.time()
+                if not await tmux_mgr.session_exists(self._tmux_session):
+                    break
 
             try:
                 # Non-blocking wait for data, then read batch in executor
@@ -660,7 +670,7 @@ class Worker:
 
     async def _viewer_read_loop(self, vs: ViewerSession) -> None:
         """Read from a viewer's tmux grouped session PTY and forward to their WebSocket."""
-        frame_interval = 0.033
+        frame_interval = 0.016  # ~60fps for smooth scrolling
         loop = asyncio.get_event_loop()
 
         def _read_batch():
@@ -678,10 +688,15 @@ class Worker:
                 batch.extend(chunk)
             return bytes(batch) if batch else None
 
+        _session_check_interval = 5.0
+        _last_session_check = time.time()
+
         try:
             while not self._cancelled:
-                if not await tmux_mgr.session_exists(vs.session_name):
-                    break
+                if (time.time() - _last_session_check) > _session_check_interval:
+                    _last_session_check = time.time()
+                    if not await tmux_mgr.session_exists(vs.session_name):
+                        break
                 try:
                     ready = await loop.run_in_executor(
                         None, lambda: select.select([vs.master_fd], [], [], frame_interval)[0]
@@ -725,7 +740,7 @@ class Worker:
 
     # --- PTY send helper ---
 
-    def _send_to_pty(self, text: str) -> None:
+    async def _send_to_pty(self, text: str) -> None:
         """Write a command/prompt to the PTY (or tmux session)."""
         if self._cancelled:
             return
@@ -734,7 +749,15 @@ class Worker:
             # Strip trailing \r — tmux send-keys adds Enter
             clean = text.rstrip("\r\n")
             if clean:
-                asyncio.create_task(tmux_mgr.send_keys(self._tmux_session, clean))  # noqa: RUF006 — fire-and-forget from sync method
+                ok = await tmux_mgr.send_keys(self._tmux_session, clean)
+                if not ok:
+                    logger.error("send_keys failed for session %s, retrying...", self._tmux_session)
+                    await asyncio.sleep(2)
+                    ok = await tmux_mgr.send_keys(self._tmux_session, clean)
+                    if not ok:
+                        logger.error("send_keys retry also failed for session %s", self._tmux_session)
+                else:
+                    logger.info("send_keys OK: %s → %s", self._tmux_session, clean[:80])
         elif self._master_fd is not None:
             with contextlib.suppress(OSError):
                 os.write(self._master_fd, text.encode())
@@ -1010,7 +1033,7 @@ class AdHocTerminal:
 
     async def _viewer_read_loop(self, vs: ViewerSession) -> None:
         """Read from a viewer's tmux grouped session PTY and forward to their WebSocket."""
-        frame_interval = 0.033
+        frame_interval = 0.016  # ~60fps for smooth scrolling
         loop = asyncio.get_event_loop()
 
         def _read_batch():
@@ -1028,10 +1051,15 @@ class AdHocTerminal:
                 batch.extend(chunk)
             return bytes(batch) if batch else None
 
+        _session_check_interval = 5.0
+        _last_session_check = time.time()
+
         try:
             while True:
-                if not await tmux_mgr.session_exists(vs.session_name):
-                    break
+                if (time.time() - _last_session_check) > _session_check_interval:
+                    _last_session_check = time.time()
+                    if not await tmux_mgr.session_exists(vs.session_name):
+                        break
                 try:
                     ready = await loop.run_in_executor(
                         None, lambda: select.select([vs.master_fd], [], [], frame_interval)[0]
