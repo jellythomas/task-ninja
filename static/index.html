@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -2593,11 +2594,19 @@
             cursorBlink: true, fontSize: isMobile ? 10 : 13,
             fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
             theme: { background: '#000000', foreground: '#e2e8f0', cursor: '#60a5fa', selectionBackground: '#334155' },
-            scrollback: 10000, convertEol: true,
+            scrollback: 3000, convertEol: true,
           });
           const fitAddon = new FitAddon.FitAddon();
           term.loadAddon(fitAddon);
           term.open(container);
+          // Use WebGL renderer for GPU-accelerated rendering (much smoother scrolling)
+          try {
+            const webglAddon = new WebglAddon.WebglAddon();
+            webglAddon.onContextLoss(() => { webglAddon.dispose(); });
+            term.loadAddon(webglAddon);
+          } catch (e) {
+            console.warn('WebGL addon failed, using DOM renderer:', e);
+          }
           fitAddon.fit();
           entry.xterm = term;
           entry.fitAddon = fitAddon;
@@ -2640,66 +2649,21 @@
               }
             }, isMobile ? 600 : 400);
           };
-          // --- Scroll behaviour ---
-          // Problem: xterm.js internally moves the viewport during term.write()
-          // when processing ANSI cursor sequences (TUI redraws, long MCP output).
-          // This causes the view to jump to the top unexpectedly.
-          //
-          // Solution: capture scroll position BEFORE each write, restore AFTER.
-          // - If user was at bottom → force back to bottom
-          // - If user scrolled up to read → freeze at their position
-          const vp = container.querySelector('.xterm-viewport');
-          let userReading = false;   // true = user scrolled up to read
-          let frozenScrollTop = 0;   // pixel position to hold while reading
-
-          function checkUserScroll() {
-            if (!vp) return;
-            requestAnimationFrame(() => {
-              const gap = vp.scrollHeight - vp.scrollTop - vp.clientHeight;
-              if (gap < 30) { userReading = false; }
-              else { userReading = true; frozenScrollTop = vp.scrollTop; }
-            });
-          }
-          if (vp) {
-            vp.addEventListener('wheel', checkUserScroll, { passive: true });
-            vp.addEventListener('touchmove', checkUserScroll, { passive: true });
-          }
-          // Typing in the terminal = user wants to see output → auto-scroll
-          term.onData(() => { userReading = false; });
-
+          // --- WebSocket → xterm rendering ---
+          // Let xterm.js handle all scroll behaviour natively.
           ws.onmessage = (evt) => {
-            // Snapshot scroll state BEFORE write
-            const wasAtBottom = vp ? (vp.scrollHeight - vp.scrollTop - vp.clientHeight < 30) : true;
-            const savedScrollTop = vp ? vp.scrollTop : 0;
-
-            const afterWrite = () => {
-              if (!vp) return;
-              if (userReading) {
-                // User scrolled up to read — freeze their position
-                vp.scrollTop = frozenScrollTop;
-                requestAnimationFrame(() => { vp.scrollTop = frozenScrollTop; });
-              } else if (wasAtBottom) {
-                // Was following output — snap back to bottom
-                vp.scrollTop = vp.scrollHeight;
-                requestAnimationFrame(() => { vp.scrollTop = vp.scrollHeight; });
-              } else {
-                // Not reading, not at bottom — hold position
-                vp.scrollTop = savedScrollTop;
-                requestAnimationFrame(() => { vp.scrollTop = savedScrollTop; });
-              }
-            };
             if (evt.data instanceof ArrayBuffer) {
-              term.write(new Uint8Array(evt.data), afterWrite);
+              term.write(new Uint8Array(evt.data));
             } else if (typeof evt.data === 'string') {
               try {
                 const msg = JSON.parse(evt.data);
                 if (msg.type === 'pong') return;
                 if (msg.type === 'process_exit') {
-                  term.write(`\r\n\x1b[33m[Process exited with code ${msg.code}]\x1b[0m\r\n`, afterWrite);
+                  term.write(`\r\n\x1b[33m[Process exited with code ${msg.code}]\x1b[0m\r\n`);
                   return;
                 }
               } catch {}
-              term.write(evt.data, afterWrite);
+              term.write(evt.data);
             }
           };
           ws.onclose = (evt) => {
