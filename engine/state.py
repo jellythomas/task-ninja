@@ -195,16 +195,10 @@ class StateManager:
         if new_state == TicketState.PLANNING:
             if not ticket.started_at:
                 updates["started_at"] = now
-            updates["planning_started_at"] = now
-        if new_state == TicketState.DEVELOPING:
-            updates["planning_completed_at"] = now
-            updates["developing_started_at"] = now
-        if new_state == TicketState.REVIEW:
-            updates["developing_completed_at"] = now
-            updates["review_started_at"] = now
         if new_state == TicketState.DONE:
             updates["completed_at"] = now
-            updates["review_completed_at"] = now
+        # Phase timestamps (started_at / completed_at) are set explicitly by
+        # the worker at the actual lifecycle moments — not during state transitions.
         if new_state in {TicketState.TODO, TicketState.QUEUED}:
             updates["paused"] = False
             updates["worker_pid"] = None

@@ -247,15 +247,24 @@ async def kill_session(session_name: str) -> None:
 
 
 async def session_exists(session_name: str) -> bool:
-    """Check if a tmux session exists."""
+    """Check if a tmux session with this exact name exists.
+
+    Uses ``list-sessions`` instead of ``has-session -t`` because ``-t``
+    also matches **group names**.  An orphaned grouped session (e.g.
+    ``foo-monitor`` in group ``foo``) causes ``has-session -t foo`` to
+    return true even when session ``foo`` is gone.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "has-session", "-t", session_name,
+            "tmux", "list-sessions", "-F", "#{session_name}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
-        return proc.returncode == 0
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return False
+        sessions = stdout.decode().strip().splitlines()
+        return session_name in sessions
     except (OSError, FileNotFoundError):
         return False
 
@@ -286,6 +295,23 @@ async def cleanup_orphans(prefix: str = SESSION_PREFIX) -> int:
     if count:
         logger.info("Cleaned up %d orphaned tmux sessions", count)
     return count
+
+
+async def capture_pane(session_name: str, history_lines: int = 200) -> str | None:
+    """Capture visible pane content plus recent scrollback. Returns text or None on failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "capture-pane", "-t", session_name, "-p",
+            "-S", str(-history_lines),  # scrollback lines to capture
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            return stdout.decode("utf-8", errors="replace")
+        return None
+    except (OSError, FileNotFoundError):
+        return None
 
 
 async def send_keys(session_name: str, keys: str) -> bool:

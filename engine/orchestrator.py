@@ -59,8 +59,13 @@ class Orchestrator:
         self._loop_task = asyncio.create_task(self._loop())
 
     async def _recover_stale_tickets(self, run_id: str) -> None:
-        """Move orphaned planning/developing tickets back to queued."""
-        for st in (TicketState.PLANNING, TicketState.DEVELOPING):
+        """Move orphaned planning/developing/review tickets back to queued.
+
+        REVIEW tickets are only recovered when their last_completed_phase shows
+        the review phase never actually ran (i.e. the worker died between setting
+        the state and completing the phase).
+        """
+        for st in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW):
             tickets = await self.state.get_tickets_by_state(run_id, st)
             for ticket in tickets:
                 # If we don't have a live worker for this ticket, it's stale
@@ -72,6 +77,13 @@ class Orchestrator:
                             continue  # Process is alive, skip
                         except OSError:
                             pass  # Process is dead
+
+                    # For REVIEW tickets, only recover if the review phase
+                    # never completed (last_completed_phase != "review").
+                    # If review DID complete, the ticket is genuinely in review.
+                    if st == TicketState.REVIEW and ticket.last_completed_phase == "review":
+                        continue  # Genuinely in review — leave it alone
+
                     logger.info("Recovering stale ticket %s (%s) -> queued", ticket.jira_key, st)
                     await self.state.update_ticket_state(ticket.id, TicketState.QUEUED)
                     await self.broadcaster.broadcast_ticket_update(run_id, ticket.id, TicketState.QUEUED)
