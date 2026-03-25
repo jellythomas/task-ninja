@@ -223,6 +223,29 @@ class Orchestrator:
                     except (RuntimeError, OSError) as e:
                         logger.warning("Failed to cleanup worktree for ticket %s: %s", tid, e)
 
+        # Recover orphaned tickets: in active state but no live worker
+        for st in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW):
+            orphaned = await self.state.get_tickets_by_state(self._run_id, st)
+            for ticket in orphaned:
+                if ticket.id in self._workers or ticket.id in self._tasks:
+                    continue
+                if ticket.paused:
+                    continue
+                if ticket.worker_pid:
+                    try:
+                        os.kill(ticket.worker_pid, 0)
+                        continue
+                    except OSError:
+                        pass
+                if st == TicketState.REVIEW and ticket.last_completed_phase == "review":
+                    continue
+                logger.info(
+                    "Recovering orphaned ticket %s (%s, last_completed=%s) -> queued",
+                    ticket.jira_key, st, ticket.last_completed_phase,
+                )
+                await self.state.update_ticket_state(ticket.id, TicketState.QUEUED)
+                await self.broadcaster.broadcast_ticket_update(self._run_id, ticket.id, TicketState.QUEUED)
+
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
         available_slots = run.max_parallel - active_count

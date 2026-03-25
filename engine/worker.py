@@ -154,12 +154,47 @@ class Worker:
             self._resumed_session = False
             if self._use_tmux:
                 if await tmux_mgr.session_exists(self._tmux_session):
-                    logger.info("Reusing existing tmux session %s (resume)", self._tmux_session)
-                    self._resumed_session = True
+                    # Verify the AI CLI is actually running, not a stale shell
+                    pane_cmd = await tmux_mgr.get_pane_command(self._tmux_session)
+                    if pane_cmd and self.claude_command in pane_cmd:
+                        logger.info("Reusing existing tmux session %s (resume, running %s)", self._tmux_session, pane_cmd)
+                        self._resumed_session = True
+                    else:
+                        logger.warning(
+                            "Stale tmux session %s found (running %s, expected %s) — recreating",
+                            self._tmux_session, pane_cmd, self.claude_command,
+                        )
+                        await tmux_mgr.kill_session(self._tmux_session)
+                        ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
+                        if not ok:
+                            logger.warning("tmux session creation failed, falling back to raw PTY")
+                            self._use_tmux = False
                 else:
                     ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
                     if not ok:
                         logger.warning("tmux session creation failed, falling back to raw PTY")
+                        self._use_tmux = False
+
+            # Verify CLI actually started inside new tmux session
+            if self._use_tmux and not self._resumed_session:
+                await asyncio.sleep(1.5)
+                pane_cmd = await tmux_mgr.get_pane_command(self._tmux_session)
+                expected_bin = self.claude_command.split("/")[-1]
+                if pane_cmd and expected_bin not in pane_cmd:
+                    logger.warning(
+                        "Session %s: CLI failed to start (pane=%s) — recreating once",
+                        self._tmux_session, pane_cmd,
+                    )
+                    await tmux_mgr.kill_session(self._tmux_session)
+                    ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
+                    if ok:
+                        await asyncio.sleep(2)
+                        pane_cmd = await tmux_mgr.get_pane_command(self._tmux_session)
+                        if pane_cmd and expected_bin not in pane_cmd:
+                            logger.error("Session %s: CLI failed twice, falling back to raw PTY", self._tmux_session)
+                            await tmux_mgr.kill_session(self._tmux_session)
+                            self._use_tmux = False
+                    else:
                         self._use_tmux = False
 
             if self._use_tmux:
@@ -317,21 +352,33 @@ class Worker:
                     )
                     logger.info("Phase %s completed for ticket %s", phase_name, self.ticket_id)
                 elif self._process_has_exited():
-                    # Process died during phase — always keep review/done state
-                    # Review is the last phase; core work (planning+developing) is done.
-                    # If /open-pr failed, user can see it in terminal logs and open PR manually.
+                    # Process died during phase — check if the phase actually completed
                     ticket = await self.state.get_ticket(self.ticket_id)
                     current_state = ticket.state if ticket else None
                     exit_code = self._get_exit_code()
-                    if current_state in (TicketState.REVIEW, TicketState.DONE):
-                        logger.info(
-                            "Process exited (code=%s) during %s, ticket in %s — keeping state",
-                            exit_code,
-                            phase_name,
-                            current_state,
-                        )
+                    last_done = ticket.last_completed_phase if ticket else None
+
+                    if current_state == TicketState.DONE:
+                        logger.info("Process exited (code=%s) during %s, ticket DONE — keeping state", exit_code, phase_name)
                         await self._notify_viewers_exit(exit_code)
                         return True
+
+                    if current_state == TicketState.REVIEW and last_done == "review":
+                        logger.info("Process exited (code=%s) during %s, review completed — keeping state", exit_code, phase_name)
+                        await self._notify_viewers_exit(exit_code)
+                        return True
+
+                    if current_state == TicketState.REVIEW and last_done != "review":
+                        # Review started but never completed — re-queue for retry
+                        logger.warning(
+                            "Process exited (code=%s) during %s, review NOT completed (last_completed=%s) — re-queuing",
+                            exit_code, phase_name, last_done,
+                        )
+                        await self.state.update_ticket_state(self.ticket_id, TicketState.QUEUED)
+                        await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, TicketState.QUEUED)
+                        await self._notify_viewers_exit(exit_code)
+                        return False
+
                     error = f"CLI exited with code {exit_code} during {phase_name}"
                     await self.state.update_ticket(self.ticket_id, error=error)
                     await self.state.update_ticket_state(self.ticket_id, TicketState.FAILED)
@@ -1079,6 +1126,10 @@ class AdHocTerminal:
         cmd = [*parts, "--dangerously-skip-permissions"]
 
         if self._use_tmux:
+            # Kill any stale session with the same name (e.g. from a previous server run)
+            if await tmux_mgr.session_exists(self._tmux_session):
+                logger.info("Cleaning up stale ad-hoc session %s before creating new one", self._tmux_session)
+                await tmux_mgr.kill_session(self._tmux_session)
             ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
             if ok:
                 session_pid = await tmux_mgr.get_session_pid(self._tmux_session)
