@@ -1892,7 +1892,7 @@
 
   <!-- Interactive Terminal Overlay -->
   <!-- Multi-terminal grid overlay (hidden when minimized) -->
-  <div x-show="openTerminals.length > 0 && !terminalMinimized" x-transition class="fixed inset-0 bg-black/90 flex flex-col z-50">
+  <div x-show="openTerminals.length > 0 && !terminalMinimized" x-transition class="fixed inset-0 bg-black/90 flex flex-col z-50" style="overscroll-behavior: contain; touch-action: none;">
     <!-- Top bar with terminal tabs -->
     <div class="flex items-center justify-between px-2 py-1 bg-gray-900 border-b border-gray-800 shrink-0">
       <div class="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-hide fullscreen-term-tabs">
@@ -1914,6 +1914,10 @@
         <span class="text-[10px] text-gray-600 italic shrink-0 ml-2 fullscreen-term-hint">Closing does NOT stop processes</span>
       </div>
       <div class="flex items-center gap-1 shrink-0 ml-2">
+        <!-- Scroll to bottom (mobile only) -->
+        <button @click="scrollTerminalToBottom()" class="sm:hidden p-1.5 hover:bg-blue-600/30 rounded-lg transition" title="Scroll to bottom">
+          <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+        </button>
         <!-- Interrupt active terminal -->
         <button @click="interruptTerminal(activeTerminalId)" class="p-1.5 hover:bg-red-600/30 rounded-lg transition" title="Interrupt (Esc)">
           <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
@@ -2599,13 +2603,16 @@
           const fitAddon = new FitAddon.FitAddon();
           term.loadAddon(fitAddon);
           term.open(container);
-          // Use WebGL renderer for GPU-accelerated rendering (much smoother scrolling)
-          try {
-            const webglAddon = new WebglAddon.WebglAddon();
-            webglAddon.onContextLoss(() => { webglAddon.dispose(); });
-            term.loadAddon(webglAddon);
-          } catch (e) {
-            console.warn('WebGL addon failed, using DOM renderer:', e);
+          // Use WebGL renderer for GPU-accelerated rendering (desktop only).
+          // On mobile, WebGL steals touch events — use canvas renderer instead.
+          if (!isMobile) {
+            try {
+              const webglAddon = new WebglAddon.WebglAddon();
+              webglAddon.onContextLoss(() => { webglAddon.dispose(); });
+              term.loadAddon(webglAddon);
+            } catch (e) {
+              console.warn('WebGL addon failed, using DOM renderer:', e);
+            }
           }
           fitAddon.fit();
           entry.xterm = term;
@@ -2635,6 +2642,70 @@
           ws.binaryType = 'arraybuffer';
           entry.ws = ws;
           let wsConnected = false;
+
+          // --- Mobile touch-scroll fix (backport of xterm.js v6.0.0 approach) ---
+          // In xterm.js 5.5.0, when mouse mode is active (tmux `mouse on`), the
+          // Viewport touch handlers bail out: `if (!areMouseEventsActive) return;`
+          // This completely disables touch scroll. Fix: capture touch events on
+          // .xterm-screen BEFORE xterm sees them, and convert swipes to mouse
+          // wheel escape sequences that tmux understands as scroll.
+          if (isMobile) {
+            const xtermScreen = container.querySelector('.xterm-screen');
+            if (xtermScreen) {
+              let _touchY = null;
+              let _touchAccum = 0;
+
+              xtermScreen.addEventListener('touchstart', (e) => {
+                _touchY = e.touches[0].pageY;
+                _touchAccum = 0;
+              }, { capture: true, passive: true });
+
+              xtermScreen.addEventListener('touchmove', (e) => {
+                if (_touchY === null) return;
+                const curY = e.touches[0].pageY;
+                const delta = curY - _touchY;
+                _touchY = curY;
+
+                e.preventDefault();
+                e.stopPropagation();
+
+                // Get cell height from xterm render dimensions
+                let cellH = 15;
+                try { cellH = term._core._renderService.dimensions.css.cell.height || 15; } catch {}
+
+                _touchAccum -= delta;
+                const lines = Math.trunc(_touchAccum / cellH);
+                if (lines === 0) return;
+                _touchAccum -= lines * cellH;
+
+                // Check if mouse protocol is active (tmux mouse on)
+                let mouseActive = false;
+                try { mouseActive = term._core.coreMouseService.areMouseEventsActive; } catch {}
+
+                if (mouseActive) {
+                  // Convert touch to mouse wheel escape sequences (SGR encoding)
+                  // Button 64 = scroll up, 65 = scroll down in SGR mouse mode
+                  const btn = lines > 0 ? 65 : 64;
+                  const abs = Math.abs(lines);
+                  const seq = `\x1b[<${btn};1;1M`;
+                  let payload = '';
+                  for (let i = 0; i < abs; i++) payload += seq;
+                  if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(new TextEncoder().encode(payload));
+                  }
+                } else {
+                  // No mouse mode: scroll the viewport directly
+                  const vp = container.querySelector('.xterm-viewport');
+                  if (vp) vp.scrollTop += lines * cellH;
+                }
+              }, { capture: true, passive: false });
+
+              xtermScreen.addEventListener('touchend', () => {
+                _touchY = null;
+                _touchAccum = 0;
+              }, { capture: true, passive: true });
+            }
+          }
 
           ws.onopen = () => {
             wsConnected = true;
@@ -2760,6 +2831,16 @@
           while (this.openTerminals.length > 0) {
             this.closeTerminal(this.openTerminals[0].ticketId);
           }
+        },
+
+        scrollTerminalToBottom() {
+          const entry = this.openTerminals.find(t => t.ticketId === this.activeTerminalId);
+          if (!entry) return;
+          // Send 'q' to exit tmux copy-mode (scroll-up puts tmux in copy mode)
+          if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+            entry.ws.send(new TextEncoder().encode('q'));
+          }
+          if (entry.xterm) entry.xterm.scrollToBottom();
         },
 
         async openExternalTerminal(ticketId) {
