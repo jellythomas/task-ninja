@@ -328,6 +328,30 @@ async def send_keys(session_name: str, keys: str) -> bool:
         return False
 
 
+async def get_pane_command(session_name: str) -> str | None:
+    """Get the start command of the active pane in a tmux session.
+
+    Uses ``pane_start_command`` (the original launch command) instead of
+    ``pane_current_command`` which may return a version string or subprocess
+    name (e.g. ``2.1.81`` for Claude Code instead of ``claude``).
+
+    Returns the full start command string or None on failure.
+    Used to detect stale sessions where the AI CLI has exited and a shell remains.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "list-panes", "-t", session_name, "-F", "#{pane_start_command}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0 and stdout.strip():
+            return stdout.decode().strip().splitlines()[0]
+    except (OSError, FileNotFoundError):
+        pass
+    return None
+
+
 async def get_session_pid(session_name: str) -> int | None:
     """Get the PID of the process running in a tmux session."""
     try:
