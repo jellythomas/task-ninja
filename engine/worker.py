@@ -33,7 +33,7 @@ from engine.broadcaster import Broadcaster
 from engine.claude_helper import ClaudeHelper
 from engine.jira_client import JiraClient
 from engine.state import StateManager
-from models.ticket import TicketState
+from models.ticket import Ticket, TicketState
 
 logger = logging.getLogger(__name__)
 
@@ -363,12 +363,17 @@ class Worker:
                         await self._notify_viewers_exit(exit_code)
                         return True
 
-                    if current_state == TicketState.REVIEW and last_done == "review":
-                        logger.info("Process exited (code=%s) during %s, review completed — keeping state", exit_code, phase_name)
+                    # Check if the current phase completed using config-driven signals:
+                    # 1. last_completed_phase matches phase name from profile config
+                    # 2. {phase}_completed_at timestamp is set (marker detected)
+                    # 3. pr_url is set for review phase (PR created, marker may have been missed)
+                    phase_done = self._is_phase_completed(ticket, current_state)
+                    if current_state in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW) and phase_done:
+                        logger.info("Process exited (code=%s) during %s, phase completed — keeping state", exit_code, phase_name)
                         await self._notify_viewers_exit(exit_code)
                         return True
 
-                    if current_state == TicketState.REVIEW and last_done != "review":
+                    if current_state == TicketState.REVIEW and not phase_done:
                         # Review started but never completed — re-queue for retry
                         logger.warning(
                             "Process exited (code=%s) during %s, review NOT completed (last_completed=%s) — re-queuing",
@@ -807,6 +812,43 @@ class Worker:
         if self._use_tmux:
             return self._cancelled
         return self.process is not None and self.process.returncode is not None
+
+    def _is_phase_completed(self, ticket: Ticket, phase_state: TicketState) -> bool:
+        """Check if a ticket's current phase has completed using config-driven signals.
+
+        Derives the phase name from the worker's phases_config (loaded from
+        the agent profile) and checks multiple completion signals:
+        1. last_completed_phase matches the phase name
+        2. {phase}_completed_at timestamp is set (marker was detected)
+        3. pr_url is set for review phase (PR created, marker may have been missed)
+        """
+        # Resolve phase name from config
+        state_to_phase = {
+            TicketState.PLANNING: "planning",
+            TicketState.DEVELOPING: "developing",
+            TicketState.REVIEW: "review",
+        }
+        phase_name = None
+        target = state_to_phase.get(phase_state)
+        if self.phases_config:
+            for p in self.phases_config:
+                if p.get("phase") == target:
+                    phase_name = target
+                    break
+        if not phase_name:
+            phase_name = phase_state.value
+
+        if ticket.last_completed_phase == phase_name:
+            return True
+
+        completed_at = getattr(ticket, f"{phase_name}_completed_at", None)
+        if completed_at:
+            return True
+
+        if phase_state == TicketState.REVIEW and ticket.pr_url:
+            return True
+
+        return False
 
     def _get_exit_code(self) -> int:
         """Get exit code of the process (0 if unknown/tmux)."""
