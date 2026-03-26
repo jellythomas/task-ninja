@@ -315,10 +315,29 @@ async def capture_pane(session_name: str, history_lines: int = 200) -> str | Non
 
 
 async def send_keys(session_name: str, keys: str) -> bool:
-    """Send keys to a tmux session (for phase prompt injection)."""
+    """Send keys to a tmux session (for phase prompt injection).
+
+    Sends text literally with ``-l`` first, then presses Enter in a
+    separate call.  Splitting avoids a race where Claude Code's TUI
+    receives Enter before the preceding text is fully buffered.
+    """
     try:
+        # 1. Send the text literally (no special-key interpretation)
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "send-keys", "-t", session_name, keys, "Enter",
+            "tmux", "send-keys", "-l", "-t", session_name, keys,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        if proc.returncode != 0:
+            return False
+
+        # Small delay so the TUI can process the buffered text
+        await asyncio.sleep(0.15)
+
+        # 2. Press Enter separately
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "send-keys", "-t", session_name, "Enter",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
