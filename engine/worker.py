@@ -911,28 +911,29 @@ class Worker:
             if marker and self._marker_detected.is_set():
                 return True
 
-            # Fallback: if PTY read loop died, use capture-pane to detect marker
-            if (
-                marker
-                and self._use_tmux
-                and self._pty_task is not None
-                and self._pty_task.done()
-            ):
+            # Fallback: periodically use capture-pane to detect marker.
+            # The PTY read loop can miss markers due to ANSI noise, chunk
+            # splitting, or other terminal quirks — so always check as a
+            # safety net, not only when the PTY task is dead.
+            if marker and self._use_tmux:
                 now = time.time()
                 if (now - _last_capture_check) >= _capture_interval:
                     _last_capture_check = now
                     pane_text = await tmux_mgr.capture_pane(self._tmux_session)
                     if pane_text and marker in pane_text:
                         logger.info(
-                            "Marker %s detected via capture-pane fallback (PTY read loop died)",
+                            "Marker %s detected via capture-pane fallback",
                             marker,
                         )
-                        # Attempt to reconnect monitor PTY for subsequent phases
-                        await self._reconnect_monitor_pty()
+                        # Reconnect monitor PTY if it died
+                        if self._pty_task is not None and self._pty_task.done():
+                            await self._reconnect_monitor_pty()
                         return True
 
-            # Idle debounce fallback (only if no marker configured)
-            if not marker and self.idle_timeout > 0:
+            # Idle debounce fallback (works with or without marker configured).
+            # If a marker is configured but was missed, idle detection prevents
+            # the worker from getting stuck forever.
+            if self.idle_timeout > 0:
                 idle_duration = time.time() - self._last_output_time
                 if idle_duration >= self.idle_timeout and not self._user_active:
                     return True
