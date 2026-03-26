@@ -58,12 +58,60 @@ class Orchestrator:
         logger.info("Started for run %s", run_id)
         self._loop_task = asyncio.create_task(self._loop())
 
+    async def _is_phase_completed(self, ticket: Ticket, phase_state: TicketState) -> bool:
+        """Check if a ticket's current phase has actually completed.
+
+        Uses multiple signals derived from the profile's phases_config:
+        1. last_completed_phase matches the phase name from config
+        2. {phase}_completed_at timestamp is set (marker was detected)
+        3. pr_url is set (PR was created — marker may have been missed)
+        """
+        # Resolve the phase name from the profile's phases_config
+        phase_name = None
+        if ticket.profile_id:
+            profile = await self.state.get_agent_profile(ticket.profile_id)
+            if profile and profile.phases_config:
+                try:
+                    phases = json.loads(profile.phases_config)
+                    # Map TicketState -> phase name from config
+                    state_to_phase = {
+                        TicketState.PLANNING: "planning",
+                        TicketState.DEVELOPING: "developing",
+                        TicketState.REVIEW: "review",
+                    }
+                    target = state_to_phase.get(phase_state)
+                    for p in phases:
+                        if p.get("phase") == target:
+                            phase_name = target
+                            break
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        if not phase_name:
+            # Fallback: derive from state
+            phase_name = phase_state.value  # "planning", "developing", "review"
+
+        # Signal 1: last_completed_phase matches this phase
+        if ticket.last_completed_phase == phase_name:
+            return True
+
+        # Signal 2: {phase}_completed_at timestamp is set
+        completed_at = getattr(ticket, f"{phase_name}_completed_at", None)
+        if completed_at:
+            return True
+
+        # Signal 3: pr_url is set (only relevant for review phase)
+        if phase_state == TicketState.REVIEW and ticket.pr_url:
+            return True
+
+        return False
+
     async def _recover_stale_tickets(self, run_id: str) -> None:
         """Move orphaned planning/developing/review tickets back to queued.
 
-        REVIEW tickets are only recovered when their last_completed_phase shows
-        the review phase never actually ran (i.e. the worker died between setting
-        the state and completing the phase).
+        Tickets are only recovered when their current phase has not completed.
+        Phase completion is determined from the profile's configured markers
+        and multiple fallback signals (timestamps, PR URL).
         """
         for st in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW):
             tickets = await self.state.get_tickets_by_state(run_id, st)
@@ -78,11 +126,9 @@ class Orchestrator:
                         except OSError:
                             pass  # Process is dead
 
-                    # For REVIEW tickets, only recover if the review phase
-                    # never completed (last_completed_phase != "review").
-                    # If review DID complete, the ticket is genuinely in review.
-                    if st == TicketState.REVIEW and ticket.last_completed_phase == "review":
-                        continue  # Genuinely in review — leave it alone
+                    # Check if the current phase actually completed
+                    if await self._is_phase_completed(ticket, st):
+                        continue  # Phase completed — leave it alone
 
                     logger.info("Recovering stale ticket %s (%s) -> queued", ticket.jira_key, st)
                     await self.state.update_ticket_state(ticket.id, TicketState.QUEUED)
@@ -237,7 +283,7 @@ class Orchestrator:
                         continue
                     except OSError:
                         pass
-                if st == TicketState.REVIEW and ticket.last_completed_phase == "review":
+                if await self._is_phase_completed(ticket, st):
                     continue
                 logger.info(
                     "Recovering orphaned ticket %s (%s, last_completed=%s) -> queued",
