@@ -317,25 +317,43 @@ async def capture_pane(session_name: str, history_lines: int = 200) -> str | Non
 async def send_keys(session_name: str, keys: str) -> bool:
     """Send keys to a tmux session (for phase prompt injection).
 
-    Sends text literally with ``-l`` first, then presses Enter in a
-    separate call.  Splitting avoids a race where Claude Code's TUI
-    receives Enter before the preceding text is fully buffered.
+    Each line is sent literally with ``-l`` (no special-key interpretation)
+    and lines are joined with Shift+Enter so Claude Code's TUI treats them
+    as a single multi-line input.  A final Enter submits the prompt.
+
+    Splitting text from control keys avoids a race where the TUI receives
+    Enter before the preceding text is fully buffered.
     """
     try:
-        # 1. Send the text literally (no special-key interpretation)
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "send-keys", "-l", "-t", session_name, keys,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-        if proc.returncode != 0:
-            return False
+        lines = keys.split("\n")
+        for i, line in enumerate(lines):
+            # Send line text literally
+            if line:
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux", "send-keys", "-l", "-t", session_name, line,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+                if proc.returncode != 0:
+                    return False
+
+            # Between lines, send Shift+Enter (without -l so tmux interprets it)
+            if i < len(lines) - 1:
+                await asyncio.sleep(0.05)
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux", "send-keys", "-t", session_name, "S-Enter",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+                if proc.returncode != 0:
+                    return False
 
         # Small delay so the TUI can process the buffered text
         await asyncio.sleep(0.15)
 
-        # 2. Press Enter separately
+        # Press Enter to submit
         proc = await asyncio.create_subprocess_exec(
             "tmux", "send-keys", "-t", session_name, "Enter",
             stdout=asyncio.subprocess.PIPE,
