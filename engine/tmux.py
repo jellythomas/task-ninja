@@ -338,11 +338,12 @@ async def send_keys(session_name: str, keys: str) -> bool:
                 if proc.returncode != 0:
                     return False
 
-            # Between lines, send Shift+Enter (without -l so tmux interprets it)
+            # Between lines, send Ctrl+J (LF) which Claude Code TUI
+            # interprets as Shift+Enter (new line without submit)
             if i < len(lines) - 1:
                 await asyncio.sleep(0.05)
                 proc = await asyncio.create_subprocess_exec(
-                    "tmux", "send-keys", "-t", session_name, "S-Enter",
+                    "tmux", "send-keys", "-t", session_name, "C-j",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
