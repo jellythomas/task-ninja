@@ -118,6 +118,9 @@ async def create_session(session_name: str, cmd: list[str], cwd: str, rows: int 
         ["tmux", "set-option", "-t", session_name, "window-size", "latest"],
         # Enable mouse globally so all grouped viewer sessions inherit it
         ["tmux", "set-option", "-g", "mouse", "on"],
+        # Enable CSI u / extended keys so Shift+Enter (\x1b[13;2u) reaches
+        # the application unconditionally (required for Claude Code TUI)
+        ["tmux", "set-option", "-t", session_name, "extended-keys", "always"],
     ]
 
     try:
@@ -338,12 +341,14 @@ async def send_keys(session_name: str, keys: str) -> bool:
                 if proc.returncode != 0:
                     return False
 
-            # Between lines, send Ctrl+J (LF) which Claude Code TUI
-            # interprets as Shift+Enter (new line without submit)
+            # Between lines, send Shift+Enter via CSI u escape sequence
+            # (\x1b[13;2u) so Claude Code TUI inserts a newline without
+            # submitting.  Requires extended-keys=always on the session.
             if i < len(lines) - 1:
                 await asyncio.sleep(0.05)
                 proc = await asyncio.create_subprocess_exec(
-                    "tmux", "send-keys", "-t", session_name, "C-j",
+                    "tmux", "send-keys", "-H", "-t", session_name,
+                    "1b", "5b", "31", "33", "3b", "32", "75",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
