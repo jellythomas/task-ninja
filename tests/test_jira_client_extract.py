@@ -1,6 +1,7 @@
 """Tests for JiraClient._extract_file_paths and _extract_text_from_adf."""
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.jira_client import JiraClient, _extract_text_from_adf

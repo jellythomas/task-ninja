@@ -21,9 +21,9 @@ import signal
 import struct
 import termios
 import time
-from datetime import datetime
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -249,8 +249,10 @@ class Worker:
             # Start PTY read loop in background (task ref prevents GC)
             self._pty_task = asyncio.create_task(self._pty_read_loop())
 
-            # Wait for Claude to be ready (give it a moment to start)
-            await asyncio.sleep(3)
+            # Wait for Claude Code to fully initialize (MCP servers, CLAUDE.md, etc.)
+            # before injecting the first prompt.  A fixed sleep is not enough —
+            # startup time varies with the number of MCP servers configured.
+            await self._wait_for_startup_ready()
 
             # Execute phase pipeline
             phase_map = {
@@ -897,7 +899,20 @@ class Worker:
         self._marker_detected.clear()
         self._last_output_time = time.time()
         _capture_interval = 10.0  # seconds between fallback capture-pane checks
-        _last_capture_check = 0.0
+        _last_capture_check = time.time()  # delay first check by _capture_interval
+
+        # Count stale marker occurrences already in the pane (from resumed
+        # sessions or previous runs).  Only a NEW occurrence should count.
+        _initial_marker_count = 0
+        if marker and self._use_tmux:
+            initial_pane = await tmux_mgr.capture_pane(self._tmux_session)
+            if initial_pane:
+                _initial_marker_count = initial_pane.count(marker)
+                if _initial_marker_count:
+                    logger.info(
+                        "Marker %s already in pane %d time(s) (stale) — will only match new occurrences",
+                        marker, _initial_marker_count,
+                    )
 
         while not self._cancelled:
             # Process died — check via tmux or subprocess
@@ -920,9 +935,9 @@ class Worker:
                 if (now - _last_capture_check) >= _capture_interval:
                     _last_capture_check = now
                     pane_text = await tmux_mgr.capture_pane(self._tmux_session)
-                    if pane_text and marker in pane_text:
+                    if pane_text and pane_text.count(marker) > _initial_marker_count:
                         logger.info(
-                            "Marker %s detected via capture-pane fallback",
+                            "Marker %s detected via capture-pane fallback (new occurrence)",
                             marker,
                         )
                         # Reconnect monitor PTY if it died
@@ -930,18 +945,54 @@ class Worker:
                             await self._reconnect_monitor_pty()
                         return True
 
-            # Idle debounce fallback (works with or without marker configured).
-            # If a marker is configured but was missed, idle detection prevents
-            # the worker from getting stuck forever.
-            if self.idle_timeout > 0:
+            # Idle debounce fallback — ONLY for marker-less phases.
+            # When a marker IS configured, we rely exclusively on marker
+            # detection (PTY read loop + capture-pane fallback above).
+            # The idle timeout must NOT fire for marker phases because
+            # Claude Code's TUI always renders the ">" prompt even while
+            # agents are actively working, causing false idle detection.
+            if not marker and self.idle_timeout > 0 and not self._user_active:
                 idle_duration = time.time() - self._last_output_time
-                if idle_duration >= self.idle_timeout and not self._user_active:
+                if idle_duration >= self.idle_timeout:
                     return True
 
             # Reset user_active flag after checking
             self._user_active = False
 
             await asyncio.sleep(0.5)
+
+        return False
+
+    async def _is_claude_at_prompt(self) -> bool:
+        """Check if Claude Code is idle at the input prompt via tmux.
+
+        Captures the current pane content and inspects the last non-empty
+        lines for the ``>`` prompt character that Claude Code shows when
+        waiting for user input.  Returns False if not using tmux or if
+        Claude appears to still be working (spinners, tool output, etc.).
+        """
+        if not self._use_tmux:
+            return False
+        pane_text = await tmux_mgr.capture_pane(self._tmux_session, history_lines=0)
+        if not pane_text:
+            return False
+
+        # Get last non-empty lines from the visible pane
+        lines = [ln for ln in pane_text.splitlines() if ln.strip()]
+        if not lines:
+            return False
+
+        # Claude Code shows ">" or "❯" at the start of the input line when idle.
+        # Check the last few lines (prompt may be followed by status bar text).
+        for line in reversed(lines[-5:]):
+            stripped = line.strip()
+            # Active work indicators — Claude is still busy
+            if any(ind in stripped for ind in ("●", "◐", "◑", "◒", "◓", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")):
+                return False
+            # Prompt indicators — Claude is waiting for input
+            if stripped.startswith(">") or stripped.startswith("❯"):
+                logger.debug("Claude prompt detected: %s", stripped[:40])
+                return True
 
         return False
 
@@ -977,6 +1028,33 @@ class Worker:
             logger.info("Reconnected monitor PTY for %s", self._tmux_session)
         else:
             logger.error("Failed to reconnect monitor PTY for %s", self._tmux_session)
+
+    async def _wait_for_startup_ready(self, timeout: float = 120) -> None:
+        """Wait for Claude Code to finish initializing before first prompt.
+
+        Claude Code startup involves loading MCP servers, reading CLAUDE.md,
+        and rendering the TUI.  We detect readiness by polling tmux for the
+        ``>`` input prompt — the definitive signal that Claude Code is ready
+        to accept submissions.
+
+        Falls back to *timeout* to avoid blocking forever.
+        """
+        deadline = time.time() + timeout
+
+        # Give Claude Code a moment to start rendering before polling
+        await asyncio.sleep(2)
+
+        while not self._cancelled and time.time() < deadline:
+            if await self._is_claude_at_prompt():
+                logger.info("Claude Code prompt detected — ready for first prompt")
+                return
+            await asyncio.sleep(1)
+
+        if self._cancelled:
+            return
+        logger.warning(
+            "Startup ready wait timed out after %.0fs — injecting prompt anyway", timeout
+        )
 
     async def _wait_for_idle(self, min_quiet: float = 10, timeout: float = 600) -> None:
         """Wait until PTY output has been quiet for *min_quiet* seconds.

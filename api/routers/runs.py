@@ -13,7 +13,6 @@ from models.ticket import (
     UpdateConfigRequest,
 )
 
-
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
