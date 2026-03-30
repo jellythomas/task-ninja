@@ -323,6 +323,11 @@ class Worker:
                     p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch)
                     for p in prompts
                 )
+                # Tell Claude to print the marker when the phase is done.
+                # Without this, Claude has no idea it needs to emit the marker
+                # and the worker gets stuck waiting forever.
+                if marker:
+                    full_prompt += f"\n\nWhen you are completely done, print exactly: {marker}"
                 await self._send_to_pty(full_prompt + "\r")
 
                 # Mark phase as STARTED (prompt injected)
