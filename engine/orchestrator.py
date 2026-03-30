@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+
 from datetime import datetime, timezone
 
 from engine.bitbucket_client import BitbucketClient
@@ -308,6 +309,12 @@ class Orchestrator:
         queued = await self.state.get_tickets_by_state(self._run_id, TicketState.QUEUED)
         prioritized = await self._prioritize_queue(queued)
         for ticket in prioritized[:available_slots]:
+            # Skip tickets that already have a running worker task.
+            # The worker transitions state from QUEUED → PLANNING only after
+            # startup readiness, so multiple ticks can see the same ticket
+            # as QUEUED and spawn duplicate workers into the same tmux session.
+            if ticket.id in self._tasks and not self._tasks[ticket.id].done():
+                continue
             await self._spawn_worker(ticket.id, ticket.jira_key, run)
             spawned_any = True
 

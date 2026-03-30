@@ -255,7 +255,7 @@ class StateManager:
         async with self._connect() as db:
             await self._setup_db(db)
             cursor = await db.execute(
-                'SELECT COUNT(*) FROM tickets WHERE run_id = ? AND blocked_by_keys LIKE ?',  # noqa: S608
+                'SELECT COUNT(*) FROM tickets WHERE run_id = ? AND blocked_by_keys LIKE ?',
                 (run_id, f'%"{jira_key}"%'),
             )
             row = await cursor.fetchone()
