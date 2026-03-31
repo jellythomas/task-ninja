@@ -59,7 +59,13 @@ async def terminal_ws(
     adhoc = None
     if not worker or not worker.is_running:
         existing_adhoc = orchestrator._adhoc_terminals.get(ticket_id)
-        if existing_adhoc and existing_adhoc.is_running:
+        existing_alive = False
+        if existing_adhoc:
+            if hasattr(existing_adhoc, "async_is_running"):
+                existing_alive = await existing_adhoc.async_is_running()
+            else:
+                existing_alive = existing_adhoc.is_running
+        if existing_adhoc and existing_alive:
             worker = existing_adhoc
             adhoc = existing_adhoc
         else:

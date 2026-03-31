@@ -1258,6 +1258,32 @@ class AdHocTerminal:
                 await tmux_mgr.kill_session(self._tmux_session)
             ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
             if ok:
+                # Verify Claude actually started (not just a shell fallback).
+                # Give it a moment to initialise then check pane_current_command.
+                await asyncio.sleep(1.0)
+                still_alive = await tmux_mgr.session_exists(self._tmux_session)
+                if not still_alive:
+                    logger.warning(
+                        "Ad-hoc tmux session %s disappeared immediately — Claude may have crashed",
+                        self._tmux_session,
+                    )
+                    raise RuntimeError(
+                        f"Claude exited immediately in ad-hoc session {self._tmux_session}"
+                    )
+
+                is_shell = await tmux_mgr.is_shell_fallback(self._tmux_session)
+                if is_shell:
+                    logger.warning(
+                        "Ad-hoc tmux session %s is alive but running a shell "
+                        "(Claude exited or failed to start) — killing session",
+                        self._tmux_session,
+                    )
+                    await tmux_mgr.kill_session(self._tmux_session)
+                    raise RuntimeError(
+                        "Claude failed to start in ad-hoc session "
+                        f"{self._tmux_session} (fell back to shell)"
+                    )
+
                 session_pid = await tmux_mgr.get_session_pid(self._tmux_session)
                 # Create a dummy process object for compatibility (pid tracking)
                 self._tmux_pid = session_pid
@@ -1447,11 +1473,22 @@ class AdHocTerminal:
     @property
     def is_running(self) -> bool:
         if self._use_tmux:
-            return True  # Checked async via session_exists where needed
+            # Synchronous best-effort check: assume running unless explicitly stopped.
+            # The async path in terminals.py does the real session_exists check.
+            return not getattr(self, "_stopped", False)
+        return self.process is not None and self.process.returncode is None
+
+    async def async_is_running(self) -> bool:
+        """Async check that verifies the tmux session actually exists."""
+        if self._use_tmux:
+            if getattr(self, "_stopped", False):
+                return False
+            return await tmux_mgr.session_exists(self._tmux_session)
         return self.process is not None and self.process.returncode is None
 
     async def stop(self) -> None:
         """Terminate the session."""
+        self._stopped = True
         if self._use_tmux:
             await tmux_mgr.kill_session(self._tmux_session)
             for vs in list(self._viewer_sessions.values()):

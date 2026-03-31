@@ -116,6 +116,9 @@ async def create_session(session_name: str, cmd: list[str], cwd: str, rows: int 
     post_cmds = [
         ["tmux", "set-option", "-t", session_name, "status", "off"],
         ["tmux", "set-option", "-t", session_name, "window-size", "latest"],
+        # Prevent shell fallback: if the command exits, destroy the pane
+        # instead of leaving a bare shell (overrides user's tmux.conf)
+        ["tmux", "set-option", "-t", session_name, "remain-on-exit", "off"],
         # Enable mouse globally so all grouped viewer sessions inherit it
         ["tmux", "set-option", "-g", "mouse", "on"],
         # Enable CSI u / extended keys so Shift+Enter (\x1b[13;2u) reaches
@@ -176,13 +179,18 @@ async def create_grouped_session(
             logger.error("Failed to create grouped session %s: %s", viewer_session, stderr.decode())
             return False
 
-        # Enable mouse on the viewer session so scroll works in the web terminal
-        mouse_proc = await asyncio.create_subprocess_exec(
-            "tmux", "set-option", "-t", viewer_session, "mouse", "on",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await mouse_proc.communicate()
+        # Apply viewer session settings: hide status bar (web viewers don't need
+        # tmux chrome) and enable mouse for scroll support
+        for post_cmd in [
+            ["tmux", "set-option", "-t", viewer_session, "status", "off"],
+            ["tmux", "set-option", "-t", viewer_session, "mouse", "on"],
+        ]:
+            post_proc = await asyncio.create_subprocess_exec(
+                *post_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await post_proc.communicate()
 
         logger.info("Created grouped session: %s -> %s", viewer_session, target_session)
         return True
@@ -393,6 +401,34 @@ async def get_pane_command(session_name: str) -> str | None:
     except (OSError, FileNotFoundError):
         pass
     return None
+
+
+async def is_shell_fallback(session_name: str) -> bool:
+    """Detect if a tmux session has fallen back to a bare shell.
+
+    Returns True when the pane's current command is a known shell (zsh, bash,
+    sh, fish, etc.), meaning the original command (e.g. Claude Code) has exited.
+
+    Note: ``pane_current_command`` for Claude Code returns a version string
+    like ``2.1.81`` rather than ``claude``, so we use a negative check
+    (is it a shell?) instead of a positive check (is it claude?).
+    """
+    _SHELLS = {"zsh", "bash", "sh", "fish", "dash", "csh", "tcsh", "ksh", "login"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "list-panes", "-t", session_name, "-F", "#{pane_current_command}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0 and stdout.strip():
+            current_cmd = stdout.decode().strip().splitlines()[0].strip()
+            # Also handle paths like /bin/zsh → extract basename
+            cmd_name = current_cmd.rsplit("/", 1)[-1] if "/" in current_cmd else current_cmd
+            return cmd_name in _SHELLS
+    except (OSError, FileNotFoundError):
+        pass
+    return False
 
 
 async def get_session_pid(session_name: str) -> int | None:
