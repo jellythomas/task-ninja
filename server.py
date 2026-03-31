@@ -227,6 +227,12 @@ def create_app() -> FastAPI:
         app.state.run_scheduler = _run_scheduler
         app.state.config = app_config.raw
 
+        # Clean up orphaned tmux sessions from previous server runs
+        from engine.tmux import cleanup_orphans as _tmux_cleanup
+        cleaned = await _tmux_cleanup()
+        if cleaned:
+            logger.info("Cleaned up %d orphaned tmux sessions from previous run", cleaned)
+
         # Restore orchestrator state from DB on startup
         _runs = await _state.list_runs()
         for run in _runs:
