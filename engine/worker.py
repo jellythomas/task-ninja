@@ -23,7 +23,7 @@ import termios
 import time
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -122,6 +122,7 @@ class Worker:
         self._output_buffer = bytearray()  # Scrollback for late-joining viewers (raw PTY fallback)
         self._max_buffer = 256 * 1024  # 256KB
         self._line_buffer = ""  # Partial line accumulator for parsing
+        self._max_log_file_bytes = 10 * 1024 * 1024  # 10MB cap for raw log files
 
         # tmux multi-viewer support
         self._use_tmux: bool = _TMUX_AVAILABLE
@@ -264,7 +265,10 @@ class Worker:
             # Determine which phases to skip (resume from last completed)
             ticket = await self.state.get_ticket(self.ticket_id)
             last_completed = ticket.last_completed_phase if ticket else None
-            phase_order = [p["phase"] for p in self.phases_config]
+            phase_order = [p.get("phase") for p in self.phases_config if p.get("phase")]
+            if not phase_order:
+                logger.error("No valid phases in phases_config — skipping pipeline")
+                return False
             skip_until_after = None
             if last_completed and last_completed in phase_order:
                 skip_until_after = last_completed
@@ -328,11 +332,17 @@ class Worker:
                 # and the worker gets stuck waiting forever.
                 if marker:
                     full_prompt += f"\n\nWhen you are completely done, print exactly: {marker}"
+
+                # Send prompt once. _send_to_pty already retries on tmux
+                # send-keys failure.  Do NOT verify by re-checking the idle
+                # prompt — Claude Code echoes submitted input with a ">"
+                # prefix, which _is_claude_at_prompt mistakes for idle state,
+                # causing spurious retries that queue duplicate prompts.
                 await self._send_to_pty(full_prompt + "\r")
 
                 # Mark phase as STARTED (prompt injected)
                 started_col = f"{phase_name}_started_at"
-                await self.state.update_ticket(self.ticket_id, **{started_col: datetime.utcnow().isoformat()})
+                await self.state.update_ticket(self.ticket_id, **{started_col: datetime.now(tz=timezone.utc).isoformat()})
                 logger.info("Phase %s started for ticket %s", phase_name, self.ticket_id)
 
                 # Transition state AFTER prompt is sent — not before.
@@ -355,7 +365,7 @@ class Worker:
                     await self.state.update_ticket(
                         self.ticket_id,
                         last_completed_phase=phase_name,
-                        **{completed_col: datetime.utcnow().isoformat()},
+                        **{completed_col: datetime.now(tz=timezone.utc).isoformat()},
                     )
                     logger.info("Phase %s completed for ticket %s", phase_name, self.ticket_id)
                 elif self._process_has_exited():
@@ -449,6 +459,9 @@ class Worker:
             # Kill process / tmux session
             if self._use_tmux:
                 await tmux_mgr.kill_session(self._tmux_session)
+                # Kill monitor session (created for log parsing / phase detection)
+                with contextlib.suppress(Exception):
+                    await tmux_mgr.kill_session(f"{self._tmux_session}-monitor")
                 # Close all viewer sessions
                 for vs in list(self._viewer_sessions.values()):
                     if vs.read_task:
@@ -475,8 +488,13 @@ class Worker:
     async def kill(self) -> None:
         """Kill the worker process (or tmux session)."""
         self._cancelled = True
+        # Cancel PTY read loop task
+        if hasattr(self, "_pty_task") and self._pty_task and not self._pty_task.done():
+            self._pty_task.cancel()
         if self._use_tmux:
             await tmux_mgr.kill_session(self._tmux_session)
+            with contextlib.suppress(Exception):
+                await tmux_mgr.kill_session(f"{self._tmux_session}-monitor")
             for vs in list(self._viewer_sessions.values()):
                 if vs.read_task:
                     vs.read_task.cancel()
@@ -557,10 +575,11 @@ class Worker:
                 with contextlib.suppress(RuntimeError, OSError):
                     await self._send_to_viewers(data)  # Never let viewer errors kill the read loop
 
-                # Write to log file
+                # Write to log file (capped at _max_log_file_bytes)
                 if hasattr(self, "_log_fh") and self._log_fh:
-                    self._log_fh.write(data.decode("utf-8", errors="replace"))
-                    self._log_fh.flush()
+                    if self._log_fh.tell() < self._max_log_file_bytes:
+                        self._log_fh.write(data.decode("utf-8", errors="replace"))
+                        self._log_fh.flush()
 
                 # Parse for state transitions, PR URLs, and log broadcasting
                 text = data.decode("utf-8", errors="replace")
@@ -592,8 +611,9 @@ class Worker:
                 with contextlib.suppress(RuntimeError, OSError):
                     await self._send_to_viewers(data)
                 if hasattr(self, "_log_fh") and self._log_fh:
-                    self._log_fh.write(data.decode("utf-8", errors="replace"))
-                    self._log_fh.flush()
+                    if self._log_fh.tell() < self._max_log_file_bytes:
+                        self._log_fh.write(data.decode("utf-8", errors="replace"))
+                        self._log_fh.flush()
                 text = data.decode("utf-8", errors="replace")
                 await self._process_output(text)
         except OSError:
@@ -903,19 +923,25 @@ class Worker:
         """
         self._marker_detected.clear()
         self._last_output_time = time.time()
-        _capture_interval = 10.0  # seconds between fallback capture-pane checks
+        _capture_interval = 2.0  # seconds between capture-pane marker checks
         _last_capture_check = time.time()  # delay first check by _capture_interval
 
-        # Count stale marker occurrences already in the pane (from resumed
-        # sessions or previous runs).  Only a NEW occurrence should count.
+        # Count standalone marker lines already in the pane (stale from prior
+        # runs or resumed sessions).  We only count lines where the marker is
+        # the ENTIRE line — input echo always embeds the marker inside a longer
+        # sentence ("...print exactly: MARKER"), so it never matches here.
+        # Only Claude's real output ("MARKER" alone on its own line) counts.
+        def _count_standalone(text: str) -> int:
+            return sum(1 for line in text.splitlines() if line.strip() == marker)
+
         _initial_marker_count = 0
         if marker and self._use_tmux:
             initial_pane = await tmux_mgr.capture_pane(self._tmux_session)
             if initial_pane:
-                _initial_marker_count = initial_pane.count(marker)
+                _initial_marker_count = _count_standalone(initial_pane)
                 if _initial_marker_count:
                     logger.info(
-                        "Marker %s already in pane %d time(s) (stale) — will only match new occurrences",
+                        "Marker %s already standalone in pane %d time(s) (stale) — will only match new occurrences",
                         marker, _initial_marker_count,
                     )
 
@@ -927,22 +953,17 @@ class Worker:
             elif self.process and self.process.returncode is not None:
                 return False
 
-            # Marker detected (primary path — via PTY read loop)
-            if marker and self._marker_detected.is_set():
-                return True
-
-            # Fallback: periodically use capture-pane to detect marker.
-            # The PTY read loop can miss markers due to ANSI noise, chunk
-            # splitting, or other terminal quirks — so always check as a
-            # safety net, not only when the PTY task is dead.
+            # Periodically scan capture-pane for a standalone marker line.
+            # Input echo embeds the marker inside a sentence; Claude's real
+            # output prints it alone — _count_standalone only matches the latter.
             if marker and self._use_tmux:
                 now = time.time()
                 if (now - _last_capture_check) >= _capture_interval:
                     _last_capture_check = now
                     pane_text = await tmux_mgr.capture_pane(self._tmux_session)
-                    if pane_text and pane_text.count(marker) > _initial_marker_count:
+                    if pane_text and _count_standalone(pane_text) > _initial_marker_count:
                         logger.info(
-                            "Marker %s detected via capture-pane fallback (new occurrence)",
+                            "Marker %s detected as standalone output line (not input echo)",
                             marker,
                         )
                         # Reconnect monitor PTY if it died
@@ -989,6 +1010,12 @@ class Worker:
 
         # Claude Code shows ">" or "❯" at the start of the input line when idle.
         # Check the last few lines (prompt may be followed by status bar text).
+        #
+        # IMPORTANT: Claude Code also echoes submitted prompts as "> /command..."
+        # A bare idle prompt is just ">" or "> " (≤2 chars after the prompt
+        # character).  Lines with substantial text after ">" are submitted
+        # message echoes and must NOT be treated as idle.
+        # Known UI elements (e.g. "❯❯ bypass permissions") ARE idle indicators.
         for line in reversed(lines[-5:]):
             stripped = line.strip()
             # Active work indicators — Claude is still busy
@@ -996,9 +1023,37 @@ class Worker:
                 return False
             # Prompt indicators — Claude is waiting for input
             if stripped.startswith(">") or stripped.startswith("❯"):
-                logger.debug("Claude prompt detected: %s", stripped[:40])
-                return True
+                # Known TUI status elements that appear when idle
+                if "bypass permissions" in stripped.lower() or "auto-accept" in stripped.lower():
+                    logger.debug("Claude prompt detected (status line): %s", stripped[:40])
+                    return True
+                # Bare prompt: just >/❯ with minimal trailing text (cursor chars, spaces)
+                rest = stripped.lstrip(">❯").strip()
+                if len(rest) <= 2:
+                    logger.debug("Claude prompt detected (bare): %s", stripped[:40])
+                    return True
+                # Has substantial text → likely an echoed submitted message, skip
+                continue
 
+        return False
+
+    async def _verify_prompt_submitted(self, timeout: float = 8.0) -> bool:
+        """Verify Claude left the idle state after prompt injection.
+
+        Returns True if Claude transitioned away from the ``>`` prompt
+        (proof it received and submitted the input).  Returns False if
+        Claude is still showing the idle prompt after *timeout* seconds,
+        meaning the prompt was silently dropped by the TUI.
+        """
+        if not self._use_tmux:
+            return True  # Can't verify without tmux — assume OK
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            await asyncio.sleep(0.5)
+            if not await self._is_claude_at_prompt():
+                logger.info("Prompt accepted — Claude left idle state")
+                return True
+        logger.warning("Claude still at prompt after %.0fs — prompt was not accepted", timeout)
         return False
 
     async def _reconnect_monitor_pty(self) -> None:
@@ -1062,15 +1117,17 @@ class Worker:
         )
 
     async def _wait_for_idle(self, min_quiet: float = 10, timeout: float = 600) -> None:
-        """Wait until PTY output has been quiet for *min_quiet* seconds.
+        """Wait until Claude is idle at the input prompt.
 
         After a phase marker is emitted, a Claude Code Stop hook may cause the
         agent to continue processing (e.g. running /code-review).  If we inject
         the next phase's prompt while Claude is still busy, the TUI discards it.
 
         This method watches ``_last_output_time`` (updated by the PTY read loop
-        on every chunk) and returns once no new output has arrived for
-        *min_quiet* seconds — meaning Claude is back at the ``>`` prompt.
+        on every chunk) and then **verifies** Claude is at the ``>`` prompt via
+        ``capture-pane``.  The PTY read loop can die during long phases, leaving
+        ``_last_output_time`` stale — without the prompt check, the idle gate
+        would pass instantly and the prompt would be sent before Claude is ready.
 
         Falls back to *timeout* to avoid blocking forever.
         """
@@ -1081,10 +1138,25 @@ class Worker:
         while not self._cancelled and time.time() < deadline:
             idle = time.time() - self._last_output_time
             if idle >= min_quiet:
-                logger.info(
-                    "Claude idle for %.1fs — injecting next phase prompt", idle
-                )
-                return
+                # Output is quiet — verify Claude is actually at the prompt.
+                # If the PTY read loop died, _last_output_time is stale and
+                # this check would pass instantly without the prompt guard.
+                if self._use_tmux:
+                    at_prompt = await self._is_claude_at_prompt()
+                    if at_prompt:
+                        logger.info(
+                            "Claude idle for %.1fs and at prompt — ready for next phase", idle
+                        )
+                        return
+                    # Not at prompt yet — keep waiting
+                    logger.debug(
+                        "Output quiet for %.1fs but Claude not at prompt — waiting", idle
+                    )
+                else:
+                    logger.info(
+                        "Claude idle for %.1fs — injecting next phase prompt", idle
+                    )
+                    return
             await asyncio.sleep(1)
 
         if self._cancelled:
@@ -1124,15 +1196,18 @@ class Worker:
                 await self.state.append_log(self.ticket_id, parsed)
                 await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, parsed)
 
-            # Check for phase marker
-            if self._phase_marker and self._phase_marker in clean:
-                self._marker_detected.set()
-
             # PR URL detection
             pr_url = self._extract_pr_url(parsed)
             if pr_url:
-                await self.state.update_ticket(self.ticket_id, pr_url=pr_url)
-                await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, None, pr_url=pr_url)
+                # Extract PR number from the URL (last numeric segment)
+                pr_number = None
+                num_match = re.search(r"/(\d+)/?$", pr_url)
+                if num_match:
+                    pr_number = int(num_match.group(1))
+                await self.state.update_ticket(self.ticket_id, pr_url=pr_url, pr_number=pr_number)
+                await self.broadcaster.broadcast_ticket_update(
+                    self.run_id, self.ticket_id, None, pr_url=pr_url, pr_number=pr_number
+                )
 
     def _parse_stream_line(self, raw: str) -> str | None:
         """Parse a line from claude --output-format stream-json. Falls back to raw text."""
