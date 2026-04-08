@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shlex
 
 from datetime import datetime, timezone
 
@@ -32,6 +33,7 @@ class Orchestrator:
         self.config = config
         self._workers: dict[str, Worker] = {}  # ticket_id -> Worker
         self._tasks: dict[str, asyncio.Task] = {}  # ticket_id -> Task
+        self._spawning: set[str] = set()  # ticket_ids currently being spawned (prevents race)
         self._adhoc_terminals: dict = {}  # ticket_id -> AdHocTerminal
         self._running = False
         self._run_id: str | None = None
@@ -259,16 +261,9 @@ class Orchestrator:
                 self.watchdog.on_ticket_completed(tid)
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, tid)
-                # Cleanup worktree for completed tickets (if setting enabled)
-                cleanup_enabled = self.config.get("git", {}).get("cleanup_worktrees", True)
-                if cleanup_enabled and ticket.worktree_path:
-                    try:
-                        run = await self.state.get_run(self._run_id)
-                        git = GitManager(run.project_path, self.config.get("git", {}).get("worktree_dir", ".worktrees"))
-                        await git.cleanup_worktree(ticket.worktree_path)
-                        logger.info("Cleaned up worktree for completed ticket %s", tid)
-                    except (RuntimeError, OSError) as e:
-                        logger.warning("Failed to cleanup worktree for ticket %s: %s", tid, e)
+                # Only cleanup worktree when truly DONE (not REVIEW — user may need it for PR iteration)
+                if ticket.state == TicketState.DONE:
+                    await self._cleanup_worktree(ticket)
 
         # Recover orphaned tickets: in active state but no live worker
         for st in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW):
@@ -309,11 +304,13 @@ class Orchestrator:
         queued = await self.state.get_tickets_by_state(self._run_id, TicketState.QUEUED)
         prioritized = await self._prioritize_queue(queued)
         for ticket in prioritized[:available_slots]:
-            # Skip tickets that already have a running worker task.
+            # Skip tickets that already have a running worker task or are mid-spawn.
             # The worker transitions state from QUEUED → PLANNING only after
             # startup readiness, so multiple ticks can see the same ticket
             # as QUEUED and spawn duplicate workers into the same tmux session.
             if ticket.id in self._tasks and not self._tasks[ticket.id].done():
+                continue
+            if ticket.id in self._spawning:
                 continue
             await self._spawn_worker(ticket.id, ticket.jira_key, run)
             spawned_any = True
@@ -403,14 +400,15 @@ class Orchestrator:
         return result
 
     async def _check_pr_statuses(self) -> None:
-        """Poll Bitbucket PR status for all REVIEW tickets. Rate-limited to once per 60 seconds."""
+        """Poll Bitbucket PR status for all REVIEW tickets. Rate-limited to once per 30 minutes."""
         if not self._run_id:
             return
 
+        pr_poll_interval = self.config.get("git", {}).get("pr_poll_interval_seconds", 1800)
         now = datetime.now(tz=timezone.utc)
         if self._last_pr_check is not None:
             elapsed = (now - self._last_pr_check).total_seconds()
-            if elapsed < 60:
+            if elapsed < pr_poll_interval:
                 return
 
         if not await self.bitbucket_client.is_configured():
@@ -446,7 +444,7 @@ class Orchestrator:
             state = pr_info.get("state", "")
             new_approvals = pr_info.get("approvals")
             new_comment_count = pr_info.get("comment_count") or 0
-            checked_at = datetime.utcnow().isoformat()
+            checked_at = datetime.now(tz=timezone.utc).isoformat()
 
             # Always update pr_status, approvals, comment_count and pr_last_checked_at
             await self.state.update_ticket(
@@ -480,17 +478,7 @@ class Orchestrator:
                     except Exception as e:
                         logger.warning("Failed to transition Jira issue %s: %s", ticket.jira_key, e)
                 # Cleanup worktree
-                cleanup_enabled = self.config.get("git", {}).get("cleanup_worktrees", True)
-                if cleanup_enabled and ticket.worktree_path:
-                    try:
-                        run = await self.state.get_run(self._run_id)
-                        git = GitManager(
-                            run.project_path,
-                            self.config.get("git", {}).get("worktree_dir", ".worktrees"),
-                        )
-                        await git.cleanup_worktree(ticket.worktree_path)
-                    except (RuntimeError, OSError) as e:
-                        logger.warning("Failed to cleanup worktree for %s: %s", ticket.id, e)
+                await self._cleanup_worktree(ticket)
                 # Notify
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, ticket.id)
@@ -502,6 +490,22 @@ class Orchestrator:
                 await self.broadcaster.broadcast_ticket_update(
                     self._run_id, ticket.id, TicketState.FAILED, error="PR was declined"
                 )
+                # Cleanup worktree — no longer needed after decline
+                await self._cleanup_worktree(ticket)
+
+    async def _cleanup_worktree(self, ticket: Ticket) -> None:
+        """Remove worktree directory and clear path from DB."""
+        cleanup_enabled = self.config.get("git", {}).get("cleanup_worktrees", True)
+        if not cleanup_enabled or not ticket.worktree_path:
+            return
+        try:
+            run = await self.state.get_run(self._run_id)
+            git = GitManager(run.project_path, self.config.get("git", {}).get("worktree_dir", ".worktrees"))
+            await git.cleanup_worktree(ticket.worktree_path)
+            await self.state.update_ticket(ticket.id, worktree_path=None)
+            logger.info("Cleaned up worktree for ticket %s", ticket.id)
+        except (RuntimeError, OSError) as e:
+            logger.warning("Failed to cleanup worktree for %s: %s", ticket.id, e)
 
     async def _is_blocked(self, ticket: Ticket) -> bool:
         """Return True if any of the ticket's blockers are not yet DONE in this run."""
@@ -531,6 +535,7 @@ class Orchestrator:
 
     async def _spawn_worker(self, ticket_id: str, jira_key: str, run: object) -> None:
         """Spawn a CLI worker for a ticket."""
+        self._spawning.add(ticket_id)
         claude_cfg = self.config.get("claude", {})
         git_cfg = self.config.get("git", {})
 
@@ -546,6 +551,7 @@ class Orchestrator:
             project_path = repo.path
 
         if not project_path:
+            self._spawning.discard(ticket_id)
             await self._fail_ticket(
                 ticket_id, "No project path configured. Assign a repository or set project_path on the run."
             )
@@ -571,6 +577,7 @@ class Orchestrator:
         try:
             result = await git.create_worktree(jira_key, parent_branch)
         except RuntimeError as e:
+            self._spawning.discard(ticket_id)
             await self._fail_ticket(ticket_id, f"Failed to create worktree: {e}")
             return
 
@@ -604,6 +611,7 @@ class Orchestrator:
                 result.expected_parent,
                 result.current_parent,
             )
+            self._spawning.discard(ticket_id)
             return
 
         worktree_path = result.path
@@ -636,8 +644,6 @@ class Orchestrator:
             if ticket and ticket.summary:
                 args_str = args_str.replace("{JIRA_SUMMARY}", ticket.summary)
             # Split args respecting quoted strings
-            import shlex
-
             worker_flags = shlex.split(args_str)
         else:
             # Fallback when no agent profile exists (DB always seeds one, but just in case)
@@ -672,6 +678,7 @@ class Orchestrator:
 
         self._workers[ticket_id] = worker
         self._tasks[ticket_id] = asyncio.create_task(worker.run())
+        self._spawning.discard(ticket_id)
         self.watchdog.on_ticket_active(ticket_id)
         logger.info("Spawned worker for %s in %s", jira_key, worktree_path)
 
@@ -757,6 +764,9 @@ class Orchestrator:
         if self._running:
             return  # _tick will pick it up
         # If run is completed/idle, restart the loop
+        # Guard against creating duplicate loop tasks
+        if hasattr(self, "_loop_task") and not self._loop_task.done():
+            return
         run = await self.state.get_run(run_id)
         if run and run.status != RunStatus.RUNNING:
             await self.start(run_id)
