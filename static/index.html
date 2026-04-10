@@ -2573,7 +2573,7 @@
         _scheduleTerminalRedraw(entry, delay = 150) {
           setTimeout(() => {
             if (entry?.ws && entry.ws.readyState === WebSocket.OPEN) {
-              entry.ws.send(new TextEncoder().encode('\x0c'));
+              entry.ws.send(JSON.stringify({ type: 'redraw' }));
             }
           }, delay);
         },
@@ -2603,8 +2603,11 @@
           if (entry.ws && entry.ws.readyState !== WebSocket.CLOSED) return;
 
           const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const ticket = this.tickets.find(t => t.id === entry.ticketId);
           const token = this._authToken || localStorage.getItem('tn_auth_token') || '';
-          const ws = new WebSocket(`${proto}//${location.host}/ws/terminal/${entry.ticketId}?token=${encodeURIComponent(token)}&allow_adhoc=0`);
+          const allowAdhoc = this.isTicketActive(ticket) ? '0' : '1';
+          const params = new URLSearchParams({ token, allow_adhoc: allowAdhoc });
+          const ws = new WebSocket(`${proto}//${location.host}/ws/terminal/${entry.ticketId}?${params.toString()}`);
           ws.binaryType = 'arraybuffer';
           entry.ws = ws;
 
@@ -2612,6 +2615,7 @@
           const term = entry.xterm;
           const fitAddon = entry.fitAddon;
           const isMobile = window.innerWidth < 640;
+          entry.startupErrorShown = false;
 
           ws.onopen = () => {
             if (entry.ws !== ws || !term || !fitAddon) return;
@@ -2631,6 +2635,11 @@
               try {
                 const msg = JSON.parse(evt.data);
                 if (msg.type === 'pong') return;
+                if (msg.type === 'startup_error') {
+                  entry.startupErrorShown = true;
+                  term.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`);
+                  return;
+                }
                 if (msg.type === 'process_exit') {
                   term.write(`\r\n\x1b[33m[Process exited with code ${msg.code}]\x1b[0m\r\n`);
                   return;
@@ -2652,6 +2661,8 @@
               term.write('\r\n\x1b[33m⏳ Terminal stream ended. Reconnecting…\x1b[0m\r\n');
             } else if (shouldReconnect) {
               term.write('\r\n\x1b[33m⏳ Connection lost (' + evt.code + '). Reconnecting…\x1b[0m\r\n');
+            } else if (evt.code === 4005 && entry.startupErrorShown) {
+              // Backend already rendered the startup failure in-terminal.
             } else if (!wsConnected) {
               term.write('\r\n\x1b[33m⏸ Could not connect (code ' + evt.code + ').\x1b[0m\r\n');
             } else if (evt.code !== 1000) {
@@ -2696,7 +2707,7 @@
             ticketId, ticketKey: ticket.jira_key,
             cwd: ticket.worktree_path || '',
             xterm: null, fitAddon: null, ws: null, resizeHandler: null,
-            manualClose: false, reconnectTimer: null, reconnectAttempts: 0,
+            manualClose: false, reconnectTimer: null, reconnectAttempts: 0, startupErrorShown: false,
           });
           this.activeTerminalId = ticketId;
 
@@ -2857,7 +2868,7 @@
                 if (oldCols !== newCols || oldRows !== newRows) {
                   setTimeout(() => {
                     if (active.ws && active.ws.readyState === WebSocket.OPEN) {
-                      active.ws.send(new TextEncoder().encode('\x0c'));
+                      active.ws.send(JSON.stringify({ type: 'redraw' }));
                     }
                   }, 150);
                 }
@@ -2912,9 +2923,9 @@
         scrollTerminalToBottom() {
           const entry = this.openTerminals.find(t => t.ticketId === this.activeTerminalId);
           if (!entry) return;
-          // Send 'q' to exit tmux copy-mode (scroll-up puts tmux in copy mode)
+          // Tell the backend to exit tmux copy-mode without typing into the CLI.
           if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
-            entry.ws.send(new TextEncoder().encode('q'));
+            entry.ws.send(JSON.stringify({ type: 'scroll_bottom' }));
           }
           if (entry.xterm) entry.xterm.scrollToBottom();
         },

@@ -37,6 +37,30 @@ def test_normalize_prompt_for_submit_flattens_multiline_prompt():
     )
 
 
+def test_build_phase_prompt_keeps_slash_command_without_appended_marker_instruction():
+    worker = make_worker()
+
+    assert (
+        worker._build_phase_prompt(
+            ["/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"],
+            "[PLANNING_COMPLETE]",
+        )
+        == "/planning-task MC-1 parent:master"
+    )
+
+
+def test_build_phase_prompt_appends_marker_for_direct_prompts():
+    worker = make_worker()
+
+    assert (
+        worker._build_phase_prompt(
+            ["Analyze ticket {JIRA_KEY}"],
+            "[PLANNING_COMPLETE]",
+        )
+        == "Analyze ticket MC-1\n\nWhen you are completely done, print exactly: [PLANNING_COMPLETE]"
+    )
+
+
 def test_submission_echo_prefix_uses_visible_command_head_for_long_prompt():
     worker = make_worker()
 
@@ -57,20 +81,27 @@ def test_submission_echo_prefix_uses_bounded_visible_prefix_for_non_slash_prompt
 
 def test_wait_for_prompt_echo_matches_visible_prefix_line_for_long_prompt():
     worker = make_worker()
-    long_prompt = "/planning-task MC-9384 parent:master When you are completely done, print exactly: [PLANNING_COMPLETE]"
+    long_prompt = (
+        "/planning-task MC-9384 parent:master When you are completely done, print exactly: [PLANNING_COMPLETE]"
+    )
     visible_prefix = worker._submission_echo_prefix(long_prompt)
     baseline = "Type @ to mention\n> "
 
     worker._capture_submission_state = AsyncMock(return_value=f"Type @ to mention\n\u276f {visible_prefix}")
 
-    assert asyncio.get_event_loop().run_until_complete(
-        worker._wait_for_prompt_echo(long_prompt, baseline, echo_text=visible_prefix, timeout=0.2)
-    ) == f"\u276f {visible_prefix}"
+    assert (
+        asyncio.get_event_loop().run_until_complete(
+            worker._wait_for_prompt_echo(long_prompt, baseline, echo_text=visible_prefix, timeout=0.2)
+        )
+        == f"\u276f {visible_prefix}"
+    )
 
 
 def test_submit_phase_prompt_accepts_visible_prefix_when_full_prompt_is_not_visible():
     worker = make_worker()
-    long_prompt = "/planning-task MC-9384 parent:master When you are completely done, print exactly: [PLANNING_COMPLETE]"
+    long_prompt = (
+        "/planning-task MC-9384 parent:master When you are completely done, print exactly: [PLANNING_COMPLETE]"
+    )
     visible_prefix = worker._submission_echo_prefix(long_prompt)
     baseline = "Type @ to mention\n> "
     composed_line = f"\u276f {visible_prefix}"
@@ -79,7 +110,9 @@ def test_submit_phase_prompt_accepts_visible_prefix_when_full_prompt_is_not_visi
     worker._capture_submission_state = AsyncMock(return_value=baseline)
     worker._verify_prompt_submitted = AsyncMock(return_value=True)
 
-    async def wait_for_prompt_echo(prompt_text: str, baseline_text: str, *, echo_text: str | None = None, timeout: float = 2.0) -> str:
+    async def wait_for_prompt_echo(
+        prompt_text: str, baseline_text: str, *, echo_text: str | None = None, timeout: float = 2.0
+    ) -> str:
         assert prompt_text == long_prompt
         assert baseline_text == baseline
         assert echo_text == visible_prefix
@@ -152,14 +185,17 @@ def test_verify_prompt_submission_accepts_prompt_when_footer_phrases_persist():
 
     worker._capture_submission_state = AsyncMock(side_effect=[typed, after_enter])
 
-    assert asyncio.get_event_loop().run_until_complete(
-        worker._verify_prompt_submitted(
-            "/planning-task MC-1",
-            composed_line="> /planning-task MC-1",
-            baseline=before,
-            timeout=0.2,
+    assert (
+        asyncio.get_event_loop().run_until_complete(
+            worker._verify_prompt_submitted(
+                "/planning-task MC-1",
+                composed_line="> /planning-task MC-1",
+                baseline=before,
+                timeout=0.2,
+            )
         )
-    ) is True
+        is True
+    )
 
 
 def test_verify_prompt_submission_fails_when_composed_input_line_never_changes():
@@ -168,14 +204,17 @@ def test_verify_prompt_submission_fails_when_composed_input_line_never_changes()
     stuck = "Type @ to mention\n> /planning-task MC-1"
     worker._capture_submission_state = AsyncMock(side_effect=[stuck, stuck, stuck])
 
-    assert asyncio.get_event_loop().run_until_complete(
-        worker._verify_prompt_submitted(
-            "/planning-task MC-1",
-            composed_line="> /planning-task MC-1",
-            baseline="Type @ to mention\n> ",
-            timeout=0.2,
+    assert (
+        asyncio.get_event_loop().run_until_complete(
+            worker._verify_prompt_submitted(
+                "/planning-task MC-1",
+                composed_line="> /planning-task MC-1",
+                baseline="Type @ to mention\n> ",
+                timeout=0.2,
+            )
         )
-    ) is False
+        is False
+    )
 
 
 def test_verify_prompt_submitted_rejects_idle_redraw_after_prefix_disappears():
@@ -223,6 +262,30 @@ def test_verify_prompt_submitted_rejects_static_status_bullets_without_progress(
     assert result is False
 
 
+def test_verify_prompt_submitted_rejects_copilot_pending_status_without_progress():
+    worker = make_worker()
+    baseline = "Type @ to mention\n> "
+    pending_only = "\n".join(
+        [
+            "Type @ to mention files, # for issues/PRs, / for commands, or ? for shortcuts",
+            "shift+tab switch mode",
+            "└ [pending]",
+        ]
+    )
+    worker._capture_submission_state = AsyncMock(side_effect=[pending_only, pending_only, pending_only])
+
+    result = asyncio.get_event_loop().run_until_complete(
+        worker._verify_prompt_submitted(
+            "/planning-task MC-9384 parent:master",
+            composed_line="❯ /planning-task MC-9384 parent:master",
+            baseline=baseline,
+            timeout=0.2,
+        )
+    )
+
+    assert result is False
+
+
 def test_verify_prompt_submitted_accepts_real_busy_transition():
     worker = make_worker()
     baseline = "Type @ to mention\n> "
@@ -239,3 +302,18 @@ def test_verify_prompt_submitted_accepts_real_busy_transition():
     )
 
     assert result is True
+
+
+def test_pane_shows_prompt_processed_ignores_pending_status_after_echo():
+    worker = make_worker()
+    worker._last_phase_prompt = "/planning-task MC-9384 parent:master"
+    pending_after_echo = "\n".join(
+        [
+            "❯ /planning-task MC-9384 parent:master",
+            "└ [pending]",
+            "Type @ to mention files, # for issues/PRs, / for commands, or ? for shortcuts",
+            "shift+tab switch mode",
+        ]
+    )
+
+    assert worker._pane_shows_prompt_processed(pending_after_echo) is False

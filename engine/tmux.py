@@ -102,13 +102,17 @@ def auto_install() -> bool:
 async def create_session(session_name: str, cmd: list[str], cwd: str, rows: int = 24, cols: int = 80) -> bool:
     """Create a new detached tmux session running the given command."""
     tmux_cmd = [
-        "tmux", "new-session",
-        "-d",                    # Detached
-        "-s", session_name,      # Session name
-        "-x", str(cols),         # Initial width
-        "-y", str(rows),         # Initial height
-        "--",                    # Separator
-        *cmd,                    # Command to run
+        "tmux",
+        "new-session",
+        "-d",  # Detached
+        "-s",
+        session_name,  # Session name
+        "-x",
+        str(cols),  # Initial width
+        "-y",
+        str(rows),  # Initial height
+        "--",  # Separator
+        *cmd,  # Command to run
     ]
 
     # Configure session: hide status bar (viewers are web-based, not terminal clients)
@@ -155,17 +159,20 @@ async def create_session(session_name: str, cmd: list[str], cwd: str, rows: int 
         return False
 
 
-async def create_grouped_session(
-    target_session: str, viewer_session: str, rows: int = 24, cols: int = 80
-) -> bool:
+async def create_grouped_session(target_session: str, viewer_session: str, rows: int = 24, cols: int = 80) -> bool:
     """Create a grouped session that shares windows with the target but has independent sizing."""
     tmux_cmd = [
-        "tmux", "new-session",
-        "-d",                       # Detached
-        "-t", target_session,       # Target session to group with
-        "-s", viewer_session,       # New session name
-        "-x", str(cols),            # Initial width (viewer's actual size)
-        "-y", str(rows),            # Initial height (viewer's actual size)
+        "tmux",
+        "new-session",
+        "-d",  # Detached
+        "-t",
+        target_session,  # Target session to group with
+        "-s",
+        viewer_session,  # New session name
+        "-x",
+        str(cols),  # Initial width (viewer's actual size)
+        "-y",
+        str(rows),  # Initial height (viewer's actual size)
     ]
 
     try:
@@ -218,7 +225,10 @@ async def attach_pty(session_name: str, rows: int = 24, cols: int = 80) -> tuple
         fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "attach-session", "-t", session_name,
+            "tmux",
+            "attach-session",
+            "-t",
+            session_name,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
@@ -247,7 +257,10 @@ async def kill_session(session_name: str) -> None:
     """Kill a tmux session (also kills all grouped sessions)."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "kill-session", "-t", session_name,
+            "tmux",
+            "kill-session",
+            "-t",
+            session_name,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -267,7 +280,10 @@ async def session_exists(session_name: str) -> bool:
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "list-sessions", "-F", "#{session_name}",
+            "tmux",
+            "list-sessions",
+            "-F",
+            "#{session_name}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -284,7 +300,10 @@ async def list_sessions(prefix: str = SESSION_PREFIX) -> list[str]:
     """List all tmux sessions matching the prefix."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "list-sessions", "-F", "#{session_name}",
+            "tmux",
+            "list-sessions",
+            "-F",
+            "#{session_name}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -312,8 +331,13 @@ async def capture_pane(session_name: str, history_lines: int = 200) -> str | Non
     """Capture visible pane content plus recent scrollback. Returns text or None on failure."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "capture-pane", "-t", session_name, "-p",
-            "-S", str(-history_lines),  # scrollback lines to capture
+            "tmux",
+            "capture-pane",
+            "-t",
+            session_name,
+            "-p",
+            "-S",
+            str(-history_lines),  # scrollback lines to capture
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -354,7 +378,12 @@ async def get_primary_pane_id(session_name: str) -> str | None:
     """Return the first pane id for a tmux session."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "list-panes", "-t", session_name, "-F", "#{pane_id}",
+            "tmux",
+            "list-panes",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_id}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -370,7 +399,12 @@ async def send_literal_text(target: str, text: str) -> bool:
     """Send literal text to an exact tmux target."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "send-keys", "-l", "-t", target, text,
+            "tmux",
+            "send-keys",
+            "-l",
+            "-t",
+            target,
+            text,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -384,7 +418,11 @@ async def send_key(target: str, key: str) -> bool:
     """Send a single key to an exact tmux target."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "send-keys", "-t", target, key,
+            "tmux",
+            "send-keys",
+            "-t",
+            target,
+            key,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -400,7 +438,12 @@ async def _send_keys_csi_u(session_name: str, keys: str) -> bool:
     for i, line in enumerate(lines):
         if line:
             proc = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-l", "-t", session_name, line,
+                "tmux",
+                "send-keys",
+                "-l",
+                "-t",
+                session_name,
+                line,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -412,8 +455,18 @@ async def _send_keys_csi_u(session_name: str, keys: str) -> bool:
         if i < len(lines) - 1:
             await asyncio.sleep(0.05)
             proc = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-H", "-t", session_name,
-                "1b", "5b", "31", "33", "3b", "32", "75",
+                "tmux",
+                "send-keys",
+                "-H",
+                "-t",
+                session_name,
+                "1b",
+                "5b",
+                "31",
+                "33",
+                "3b",
+                "32",
+                "75",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -452,9 +505,76 @@ async def _send_keys_literal(session_name: str, keys: str) -> bool:
     return await send_key(session_name, "Enter")
 
 
+async def refresh_client(session_name: str) -> bool:
+    """Refresh a tmux client's display without sending input to the pane process.
+
+    This is the safe alternative to sending \\x0c (Ctrl-L) — it redraws the
+    viewer's terminal without any bytes reaching the running CLI.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "refresh-client",
+            "-t",
+            session_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        return proc.returncode == 0
+    except (OSError, FileNotFoundError):
+        return False
+
+
 async def send_keys_raw(session_name: str, key: str) -> bool:
     """Send a single key to a tmux session (Enter, Escape, etc.)."""
     return await send_key(session_name, key)
+
+
+async def pane_in_mode(target: str) -> bool | None:
+    """Return whether the target pane is currently in a tmux mode (for example copy-mode)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "display-message",
+            "-p",
+            "-t",
+            target,
+            "#{pane_in_mode}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            return stdout.decode().strip() == "1"
+    except (OSError, FileNotFoundError):
+        pass
+    return None
+
+
+async def cancel_copy_mode(target: str) -> bool:
+    """Exit tmux copy-mode for the given target without sending text to the CLI.
+
+    Always attempts the cancel — ``pane_in_mode`` is a pane-level attribute
+    that doesn't reliably reflect per-client copy-mode state in grouped
+    sessions.  ``send-keys -X cancel`` is harmless when not in copy-mode.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "send-keys",
+            "-X",
+            "-t",
+            target,
+            "cancel",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        # returncode != 0 just means we weren't in copy-mode — that's fine
+        return True
+    except (OSError, FileNotFoundError):
+        return False
 
 
 async def get_cursor_position(session_name: str) -> tuple[int, int] | None:
@@ -466,7 +586,11 @@ async def get_cursor_position(session_name: str) -> tuple[int, int] | None:
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "display-message", "-p", "-t", session_name,
+            "tmux",
+            "display-message",
+            "-p",
+            "-t",
+            session_name,
             "#{cursor_x},#{cursor_y}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -493,7 +617,12 @@ async def get_pane_command(session_name: str) -> str | None:
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "list-panes", "-t", session_name, "-F", "#{pane_start_command}",
+            "tmux",
+            "list-panes",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_start_command}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -518,7 +647,12 @@ async def is_shell_fallback(session_name: str) -> bool:
     shells = {"zsh", "bash", "sh", "fish", "dash", "csh", "tcsh", "ksh", "login"}
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "list-panes", "-t", session_name, "-F", "#{pane_current_command}",
+            "tmux",
+            "list-panes",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_current_command}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -537,7 +671,12 @@ async def get_session_pid(session_name: str) -> int | None:
     """Get the PID of the process running in a tmux session."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "tmux", "list-panes", "-t", session_name, "-F", "#{pane_pid}",
+            "tmux",
+            "list-panes",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_pid}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

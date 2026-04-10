@@ -13,15 +13,28 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
 from api.dependencies import get_orchestrator, get_state
-from models.ticket import TicketState
 from engine.auth import verify_ws_token
 from engine.broadcaster import Broadcaster
 from engine.orchestrator import Orchestrator
 from engine.state import StateManager
+from models.ticket import TicketState
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["terminals"])
+
+
+async def _accept_websocket_once(websocket: WebSocket, accepted: bool) -> bool:
+    if accepted:
+        return True
+    await websocket.accept()
+    return True
+
+
+async def _send_terminal_startup_failure(websocket: WebSocket, message: str) -> None:
+    detail = message.strip() or "Terminal startup failed"
+    await websocket.send_text(_json.dumps({"type": "startup_error", "message": detail}))
+    await websocket.close(code=4005, reason="Terminal startup failed")
 
 
 @router.websocket("/ws/terminal/{ticket_id}")
@@ -63,6 +76,7 @@ async def terminal_ws(
 
     # If still no live worker, try to respawn or attach ad-hoc.
     adhoc = None
+    websocket_accepted = False
     if not worker or not worker.is_running:
         existing_adhoc = orchestrator._adhoc_terminals.get(ticket_id)
         existing_alive = False
@@ -78,20 +92,20 @@ async def terminal_ws(
             if existing_adhoc:
                 orchestrator._adhoc_terminals.pop(ticket_id, None)
             ticket = await state.get_ticket(ticket_id)
+            terminal_states = (TicketState.REVIEW, TicketState.DONE, TicketState.FAILED)
+            allow_terminal_adhoc = bool(ticket and ticket.state in terminal_states)
 
             # For non-terminal tickets with no worker, respawn directly.
             # This handles: requeued tickets, failed prompt submissions,
             # and any state where the worker died unexpectedly.
-            if (
-                ticket
-                and ticket.state not in (TicketState.DONE, TicketState.REVIEW, TicketState.TODO)
-                and orchestrator._run_id
-            ):
+            if ticket and ticket.state not in (*terminal_states, TicketState.TODO) and orchestrator._run_id:
                 run = await state.get_run(orchestrator._run_id)
                 if run:
                     # Reset to QUEUED with fresh retry budget
                     await state.update_ticket(
-                        ticket_id, error=None, prompt_submit_requeues=0,
+                        ticket_id,
+                        error=None,
+                        prompt_submit_requeues=0,
                     )
                     await state.update_ticket_state(ticket_id, TicketState.QUEUED)
                     # Kill any stale worker/task references
@@ -108,48 +122,51 @@ async def terminal_ws(
                         if worker and worker.is_running:
                             break
 
-            # Ad-hoc terminal for terminal-state tickets
-            if (not worker or not worker.is_running) and ticket:
-                if (
-                    allow_adhoc
-                    and ticket.worktree_path
-                    and Path(ticket.worktree_path).is_dir()
-                    and ticket.state in ("review", "done", "failed")
-                ):
-                    from engine.worker import AdHocTerminal
+            if ticket and ticket.state in terminal_states:
+                websocket_accepted = await _accept_websocket_once(websocket, websocket_accepted)
 
-                    try:
-                        adhoc_command = "claude"
-                        if ticket.profile_id:
-                            profile = await state.get_agent_profile(ticket.profile_id)
-                            if profile and profile.command:
-                                adhoc_command = profile.command
-                        adhoc = AdHocTerminal(worktree_path=ticket.worktree_path, claude_command=adhoc_command)
-                        await adhoc.start()
-                        orchestrator._adhoc_terminals[ticket_id] = adhoc
-                        worker = adhoc
-                        adhoc_pid = getattr(adhoc, "_tmux_pid", None) or (adhoc.process.pid if adhoc.process else None)
-                        if adhoc_pid:
-                            await state.update_ticket(ticket_id, worker_pid=adhoc_pid)
-                            await broadcaster.broadcast_ticket_update(
-                                orchestrator._run_id,
-                                ticket_id,
-                                ticket.state,
-                                worker_pid=adhoc_pid,
-                            )
-                    except (OSError, RuntimeError) as e:
-                        logger.error("Failed to spawn ad-hoc terminal for %s: %s", ticket_id, e)
-                        await websocket.accept()
-                        reason = str(e)[:120]
-                        await websocket.close(code=4005, reason=f"Spawn failed: {reason}")
-                        return
+            # Ad-hoc terminal for terminal-state tickets
+            if (
+                (not worker or not worker.is_running)
+                and ticket
+                and (allow_adhoc or allow_terminal_adhoc)
+                and ticket.worktree_path
+                and Path(ticket.worktree_path).is_dir()
+                and ticket.state in terminal_states
+            ):
+                from engine.worker import AdHocTerminal
+
+                try:
+                    adhoc_command = "claude"
+                    if ticket.profile_id:
+                        profile = await state.get_agent_profile(ticket.profile_id)
+                        if profile and profile.command:
+                            adhoc_command = profile.command
+                    adhoc = AdHocTerminal(worktree_path=ticket.worktree_path, claude_command=adhoc_command)
+                    await adhoc.start()
+                    orchestrator._adhoc_terminals[ticket_id] = adhoc
+                    worker = adhoc
+                    adhoc_pid = getattr(adhoc, "_tmux_pid", None) or (adhoc.process.pid if adhoc.process else None)
+                    if adhoc_pid:
+                        await state.update_ticket(ticket_id, worker_pid=adhoc_pid)
+                        await broadcaster.broadcast_ticket_update(
+                            orchestrator._run_id,
+                            ticket_id,
+                            ticket.state,
+                            worker_pid=adhoc_pid,
+                        )
+                except Exception as e:
+                    logger.error("Failed to spawn ad-hoc terminal for %s: %s", ticket_id, e)
+                    websocket_accepted = await _accept_websocket_once(websocket, websocket_accepted)
+                    await _send_terminal_startup_failure(websocket, str(e))
+                    return
 
             if not worker or not worker.is_running:
-                await websocket.accept()
+                websocket_accepted = await _accept_websocket_once(websocket, websocket_accepted)
                 await websocket.close(code=4004, reason="No running process for this ticket")
                 return
 
-    await websocket.accept()
+    websocket_accepted = await _accept_websocket_once(websocket, websocket_accepted)
 
     # In tmux mode, wait for the first resize message before attaching.
     # This ensures the grouped session is created at the viewer's actual
@@ -193,6 +210,12 @@ async def terminal_ws(
                                 worker.resize_viewer_pty(websocket, ctrl.get("rows", 24), ctrl.get("cols", 80))
                             else:
                                 worker.resize_pty(ctrl.get("rows", 24), ctrl.get("cols", 80))
+                        elif ctrl.get("type") == "scroll_bottom":
+                            if hasattr(worker, "scroll_viewer_to_bottom"):
+                                await worker.scroll_viewer_to_bottom(websocket)
+                        elif ctrl.get("type") == "redraw":
+                            if hasattr(worker, "refresh_viewer"):
+                                await worker.refresh_viewer(websocket)
                         elif ctrl.get("type") == "ping":
                             await websocket.send_text(_json.dumps({"type": "pong"}))
                     except (_json.JSONDecodeError, KeyError):
