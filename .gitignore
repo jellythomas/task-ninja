@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
+*.db-shm
+*.db-wal
 .env
 *.png
 !docs/screenshots/*.png
