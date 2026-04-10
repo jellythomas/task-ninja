@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import ClassVar
 
 from fastapi import WebSocket
 
@@ -42,6 +43,15 @@ _CURSOR_FWD_RE = re.compile(r"\x1b\[(\d+)C")
 _CURSOR_FWD_1_RE = re.compile(r"\x1b\[C")
 # Strip remaining ANSI escape codes for log parsing
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b\[\?[0-9;]*[hl]|\r")
+_COPILOT_PENDING_STATUS_RE = re.compile(r"^[\s│├└╰╭╮╯]*\[pending\]\s*$", re.IGNORECASE)
+
+DETERMINISTIC_PROMPT_SUBMISSION_ERROR_PREFIX = "Interactive prompt submission failed:"
+VIEWER_TERMINAL_ENDED_CLOSE_CODE = 4101
+VIEWER_TERMINAL_ENDED_CLOSE_REASON = "viewer terminal ended"
+
+
+class DeterministicPromptSubmissionError(RuntimeError):
+    """Prompt submission failed deterministically after the inline handshake retry."""
 
 
 def _clean_ansi(text: str) -> str:
@@ -127,7 +137,11 @@ class Worker:
         # tmux multi-viewer support
         self._use_tmux: bool = _TMUX_AVAILABLE
         self._tmux_session: str = f"tn-{ticket_id}"
+        self._tmux_target: str | None = None
         self._viewer_sessions: dict[WebSocket, ViewerSession] = {}
+        self._phase_submit_in_progress = False
+        self._last_phase_prompt: str | None = None
+        self._phase_resubmitted = False
 
     async def run(self) -> bool:
         """Execute the ticket using interactive mode with phase pipeline."""
@@ -158,12 +172,16 @@ class Worker:
                     # Verify the AI CLI is actually running, not a stale shell
                     pane_cmd = await tmux_mgr.get_pane_command(self._tmux_session)
                     if pane_cmd and self.claude_command in pane_cmd:
-                        logger.info("Reusing existing tmux session %s (resume, running %s)", self._tmux_session, pane_cmd)
+                        logger.info(
+                            "Reusing existing tmux session %s (resume, running %s)", self._tmux_session, pane_cmd
+                        )
                         self._resumed_session = True
                     else:
                         logger.warning(
                             "Stale tmux session %s found (running %s, expected %s) — recreating",
-                            self._tmux_session, pane_cmd, self.claude_command,
+                            self._tmux_session,
+                            pane_cmd,
+                            self.claude_command,
                         )
                         await tmux_mgr.kill_session(self._tmux_session)
                         ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
@@ -184,7 +202,8 @@ class Worker:
                 if pane_cmd and expected_bin not in pane_cmd:
                     logger.warning(
                         "Session %s: CLI failed to start (pane=%s) — recreating once",
-                        self._tmux_session, pane_cmd,
+                        self._tmux_session,
+                        pane_cmd,
                     )
                     await tmux_mgr.kill_session(self._tmux_session)
                     ok = await tmux_mgr.create_session(self._tmux_session, cmd, self.worktree_path)
@@ -202,6 +221,7 @@ class Worker:
                 # Get PID of the process inside tmux
                 session_pid = await tmux_mgr.get_session_pid(self._tmux_session)
                 self._tmux_pid = session_pid
+                self._tmux_target = await tmux_mgr.get_primary_pane_id(self._tmux_session) or self._tmux_session
 
                 # Create (or recreate) a monitoring PTY for log parsing / phase detection
                 monitor_session = f"{self._tmux_session}-monitor"
@@ -243,16 +263,14 @@ class Worker:
                 worker_pid=worker_pid,
                 log_file=str(self._log_file_path),
             )
-            await self.broadcaster.broadcast_ticket_update(
-                self.run_id, self.ticket_id, None, worker_pid=worker_pid
-            )
+            await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, None, worker_pid=worker_pid)
 
             # Start PTY read loop in background (task ref prevents GC)
             self._pty_task = asyncio.create_task(self._pty_read_loop())
 
-            # Wait for Claude Code to fully initialize (MCP servers, CLAUDE.md, etc.)
-            # before injecting the first prompt.  A fixed sleep is not enough —
-            # startup time varies with the number of MCP servers configured.
+            # Wait for the CLI to fully initialize (MCP servers, configs, etc.)
+            # Uses cursor position stability — output-based detection is
+            # unreliable for CLIs with animations (e.g. Copilot's blinking logo).
             await self._wait_for_startup_ready()
 
             # Execute phase pipeline
@@ -322,27 +340,20 @@ class Worker:
                 if phase_name != phase_order[0]:
                     await self._wait_for_idle(min_quiet=10, timeout=600)
 
-                # Send all prompts for this phase as a single block
-                full_prompt = "\n".join(
-                    p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch)
-                    for p in prompts
-                )
-                # Tell Claude to print the marker when the phase is done.
-                # Without this, Claude has no idea it needs to emit the marker
-                # and the worker gets stuck waiting forever.
-                if marker:
-                    full_prompt += f"\n\nWhen you are completely done, print exactly: {marker}"
+                full_prompt = self._build_phase_prompt(prompts, marker)
 
-                # Send prompt once. _send_to_pty already retries on tmux
-                # send-keys failure.  Do NOT verify by re-checking the idle
-                # prompt — Claude Code echoes submitted input with a ">"
-                # prefix, which _is_claude_at_prompt mistakes for idle state,
-                # causing spurious retries that queue duplicate prompts.
-                await self._send_to_pty(full_prompt + "\r")
+                self._last_phase_prompt = full_prompt
+                self._phase_resubmitted = False  # Reset per phase
+                try:
+                    await self._submit_phase_prompt(full_prompt)
+                except DeterministicPromptSubmissionError as exc:
+                    return await self._handle_prompt_submission_failure(phase_name, exc)
 
                 # Mark phase as STARTED (prompt injected)
                 started_col = f"{phase_name}_started_at"
-                await self.state.update_ticket(self.ticket_id, **{started_col: datetime.now(tz=timezone.utc).isoformat()})
+                await self.state.update_ticket(
+                    self.ticket_id, **{started_col: datetime.now(tz=timezone.utc).isoformat()}
+                )
                 logger.info("Phase %s started for ticket %s", phase_name, self.ticket_id)
 
                 # Transition state AFTER prompt is sent — not before.
@@ -376,7 +387,9 @@ class Worker:
                     last_done = ticket.last_completed_phase if ticket else None
 
                     if current_state == TicketState.DONE:
-                        logger.info("Process exited (code=%s) during %s, ticket DONE — keeping state", exit_code, phase_name)
+                        logger.info(
+                            "Process exited (code=%s) during %s, ticket DONE — keeping state", exit_code, phase_name
+                        )
                         await self._notify_viewers_exit(exit_code)
                         return True
 
@@ -385,8 +398,13 @@ class Worker:
                     # 2. {phase}_completed_at timestamp is set (marker detected)
                     # 3. pr_url is set for review phase (PR created, marker may have been missed)
                     phase_done = self._is_phase_completed(ticket, current_state)
-                    if current_state in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW) and phase_done:
-                        logger.info("Process exited (code=%s) during %s, phase completed — keeping state", exit_code, phase_name)
+                    if (
+                        current_state in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW)
+                        and phase_done
+                    ):
+                        logger.info(
+                            "Process exited (code=%s) during %s, phase completed — keeping state", exit_code, phase_name
+                        )
                         await self._notify_viewers_exit(exit_code)
                         return True
 
@@ -394,7 +412,9 @@ class Worker:
                         # Review started but never completed — re-queue for retry
                         logger.warning(
                             "Process exited (code=%s) during %s, review NOT completed (last_completed=%s) — re-queuing",
-                            exit_code, phase_name, last_done,
+                            exit_code,
+                            phase_name,
+                            last_done,
                         )
                         await self.state.update_ticket_state(self.ticket_id, TicketState.QUEUED)
                         await self.broadcaster.broadcast_ticket_update(self.run_id, self.ticket_id, TicketState.QUEUED)
@@ -525,17 +545,23 @@ class Worker:
         frame_interval = 0.033  # ~30fps
         loop = asyncio.get_event_loop()
 
-        def _read_batch():
+        def _read_batch(fd: int):
             """Blocking I/O — runs in thread executor to keep event loop free."""
             batch = bytearray()
             while True:
-                ready, _, _ = select.select([self._master_fd], [], [], 0)
+                if self._master_fd != fd:
+                    return None
+                ready, _, _ = select.select([fd], [], [], 0)
+                if self._master_fd != fd:
+                    return None
                 if not ready:
                     break
                 try:
-                    chunk = os.read(self._master_fd, 65536)
+                    chunk = os.read(fd, 65536)
                 except OSError:
                     chunk = b""
+                if self._master_fd != fd:
+                    return None
                 if not chunk:
                     break
                 batch.extend(chunk)
@@ -554,15 +580,20 @@ class Worker:
 
             try:
                 # Non-blocking wait for data, then read batch in executor
-                ready = await loop.run_in_executor(
-                    None, lambda: select.select([self._master_fd], [], [], frame_interval)[0]
-                )
+                fd = self._master_fd
+                if fd is None:
+                    break
+                ready = await loop.run_in_executor(None, lambda fd=fd: select.select([fd], [], [], frame_interval)[0])
+                if self._master_fd != fd:
+                    break
                 if not ready:
                     if not self._use_tmux and self.process and self.process.returncode is not None:
                         break
                     continue
 
-                data = await loop.run_in_executor(None, _read_batch)
+                data = await loop.run_in_executor(None, lambda fd=fd: _read_batch(fd))
+                if self._master_fd != fd:
+                    break
                 if not data:
                     continue
 
@@ -649,10 +680,12 @@ class Worker:
 
     def _close_pty(self) -> None:
         """Close the PTY master fd."""
-        if self._master_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(self._master_fd)
-            self._master_fd = None
+        fd = self._master_fd
+        if fd is None:
+            return
+        self._master_fd = None
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
     # --- Viewer management (attach/detach) ---
 
@@ -710,9 +743,45 @@ class Worker:
         else:
             self._viewers.discard(ws)
 
+    async def scroll_viewer_to_bottom(self, ws: WebSocket) -> None:
+        """Exit tmux copy-mode and refresh the viewer to show live content."""
+        if not self._use_tmux:
+            return
+        vs = self._viewer_sessions.get(ws)
+        if not vs:
+            return
+        await tmux_mgr.cancel_copy_mode(vs.session_name)
+        # Force the client to redraw with live pane content after exiting
+        # copy-mode — without this, the viewer may still show stale output.
+        await tmux_mgr.refresh_client(vs.session_name)
+
+    async def refresh_viewer(self, ws: WebSocket) -> None:
+        """Redraw a viewer's tmux client without sending input to the CLI process.
+
+        Safe alternative to Ctrl-L (\\x0c) which passes through tmux to the
+        running process — Copilot CLI interprets \\x0c as an interrupt.
+        """
+        if not self._use_tmux:
+            return
+        vs = self._viewer_sessions.get(ws)
+        if not vs:
+            return
+        await tmux_mgr.refresh_client(vs.session_name)
+
+    async def _close_viewer_session(self, vs: ViewerSession, code: int, reason: str) -> None:
+        """Close a grouped viewer session and its WebSocket exactly once."""
+        if self._viewer_sessions.get(vs.ws) is vs:
+            self._viewer_sessions.pop(vs.ws, None)
+        with contextlib.suppress(OSError):
+            os.close(vs.master_fd)
+        with contextlib.suppress(Exception):
+            await tmux_mgr.kill_session(vs.session_name)
+        with contextlib.suppress(Exception):
+            await vs.ws.close(code=code, reason=reason)
+
     def write_input(self, data: bytes) -> None:
         """Write user input to the PTY (from a terminal viewer)."""
-        if self._cancelled:
+        if self._cancelled or self._should_ignore_viewer_input(data):
             return
         self._user_active = True
 
@@ -734,7 +803,7 @@ class Worker:
         Each viewer has their own PTY attached to a grouped session that shares
         the same tmux window — writing to any of them reaches the process.
         """
-        if self._cancelled:
+        if self._cancelled or self._should_ignore_viewer_input(data):
             return
         self._user_active = True
 
@@ -782,6 +851,7 @@ class Worker:
         """Read from a viewer's tmux grouped session PTY and forward to their WebSocket."""
         frame_interval = 0.016  # ~60fps for smooth scrolling
         loop = asyncio.get_event_loop()
+        close_viewer_session = False
 
         def _read_batch():
             batch = bytearray()
@@ -806,6 +876,7 @@ class Worker:
                 if (time.time() - _last_session_check) > _session_check_interval:
                     _last_session_check = time.time()
                     if not await tmux_mgr.session_exists(vs.session_name):
+                        close_viewer_session = True
                         break
                 try:
                     ready = await loop.run_in_executor(
@@ -815,16 +886,24 @@ class Worker:
                         continue
                     data = await loop.run_in_executor(None, _read_batch)
                     if not data:
-                        continue
+                        close_viewer_session = True
+                        break
                     await vs.ws.send_bytes(data)
                 except (OSError, ValueError):
+                    close_viewer_session = True
                     break
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
+                    close_viewer_session = True
                     break
         finally:
-            # Notify viewer that session ended
-            with contextlib.suppress(Exception):
-                await vs.ws.send_text(json.dumps({"type": "process_exit", "code": 0}))
+            if close_viewer_session:
+                await self._close_viewer_session(
+                    vs,
+                    code=VIEWER_TERMINAL_ENDED_CLOSE_CODE,
+                    reason=VIEWER_TERMINAL_ENDED_CLOSE_REASON,
+                )
 
     @property
     def is_running(self) -> bool:
@@ -887,24 +966,410 @@ class Worker:
 
     # --- PTY send helper ---
 
+    @property
+    def _use_csi_u(self) -> bool:
+        """Use CSI u Shift+Enter for multiline input (proven for Claude Code).
+
+        Falls back to literal single-line for other CLIs (Copilot, Cursor, etc.).
+        """
+        return self.claude_command in ("claude", "claude-code")
+
+    def _normalize_prompt_for_submit(self, prompt: str) -> str:
+        """Collapse multiline prompts into a single-line submission string."""
+        return " ".join(prompt.split())
+
+    def _build_phase_prompt(self, prompts: list[str], marker: str | None) -> str:
+        """Build the prompt block sent for a phase.
+
+        Slash commands are sent as-is. Their command files are expected to
+        print the configured marker themselves, which matches the documented
+        recommended setup and avoids leaving Copilot slash commands stuck in
+        a pending state with extra inline instructions appended.
+        """
+        rendered_prompts = [
+            p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts
+        ]
+        full_prompt = "\n".join(rendered_prompts)
+        if marker and self._should_append_marker_instruction(rendered_prompts):
+            full_prompt += f"\n\nWhen you are completely done, print exactly: {marker}"
+        return full_prompt
+
+    def _should_append_marker_instruction(self, prompts: list[str]) -> bool:
+        """Return whether Task Ninja should append a runtime marker instruction."""
+        non_empty_prompts = [prompt.strip() for prompt in prompts if prompt.strip()]
+        if not non_empty_prompts:
+            return False
+        return not non_empty_prompts[0].startswith("/")
+
+    def _submission_echo_prefix(self, prompt_text: str) -> str:
+        """Derive a short visible prefix for pre-submit composer echo checks.
+
+        Must be short enough to fit on ONE pane line.  With an 80-column pane
+        and a CLI prompt prefix (e.g. Copilot's ``> ``), only ~76 chars of
+        user text fit on the first line.  Using 40 chars gives ample margin
+        for any CLI prefix and avoids false negatives from line-wrapping.
+        """
+        if prompt_text.startswith("/"):
+            parts = prompt_text.split()
+            return " ".join(parts[:3]) if len(parts) >= 3 else prompt_text
+        return prompt_text[:40].strip()
+
+    async def _capture_submission_state(self) -> str:
+        """Capture the current visible pane state for prompt submission checks."""
+        if not self._use_tmux:
+            return ""
+        tmux_target = self._tmux_target or self._tmux_session
+        return await tmux_mgr.capture_pane(tmux_target, history_lines=0) or ""
+
+    def _find_composed_input_line(
+        self,
+        pane_text: str,
+        prompt_text: str,
+        *,
+        echo_text: str | None = None,
+    ) -> str | None:
+        """Return the most recent visible line containing the composed prompt echo."""
+        probe_text = (echo_text or prompt_text).strip()
+        if not probe_text:
+            return None
+        for line in reversed(pane_text.splitlines()):
+            stripped = line.strip()
+            if probe_text in stripped:
+                return stripped
+        return None
+
+    async def _wait_for_prompt_echo(
+        self,
+        prompt_text: str,
+        baseline: str,
+        *,
+        echo_text: str | None = None,
+        timeout: float = 2.0,
+    ) -> str | None:
+        """Wait for the injected prompt echo to appear in the pane composer."""
+        deadline = time.time() + timeout
+        baseline_line = self._find_composed_input_line(baseline, prompt_text, echo_text=echo_text)
+        while time.time() < deadline:
+            pane_text = await self._capture_submission_state()
+            composed_line = self._find_composed_input_line(pane_text, prompt_text, echo_text=echo_text)
+            if composed_line and (composed_line != baseline_line or pane_text != baseline):
+                return composed_line
+            await asyncio.sleep(0.1)
+        return None
+
+    def _pane_tail_lines(self, pane_text: str, limit: int = 6) -> list[str]:
+        """Return the last visible non-empty pane lines for prompt-state checks."""
+        return [line.strip() for line in pane_text.splitlines() if line.strip()][-limit:]
+
+    def _line_looks_like_idle_prompt(self, line: str) -> bool:
+        """Check whether a pane line belongs to the CLI's idle prompt chrome."""
+        stripped = line.strip()
+        if not stripped:
+            return False
+        lowered = stripped.lower()
+        if any(phrase in lowered for phrase in self._KNOWN_IDLE_PHRASES):
+            return True
+
+        prompt_chars = (">", "\u276f", "$", "%")
+        if any(stripped.startswith(pc) for pc in prompt_chars):
+            rest = stripped.lstrip(">\u276f$%").strip()
+            return len(rest) <= 2
+        return False
+
+    def _line_looks_like_non_progress_status(self, line: str) -> bool:
+        """Ignore static status chrome that should not count as submit progress."""
+        lowered = line.strip().lower()
+        return (
+            lowered.startswith("!")
+            or lowered.startswith("● environment loaded")
+            or lowered.startswith("● mcp servers reloaded")
+            or _COPILOT_PENDING_STATUS_RE.match(line) is not None
+        )
+
+    def _pane_has_fresh_submission_output(
+        self, pane_text: str, baseline: str, prompt_text: str, composed_line: str
+    ) -> bool:
+        """Check whether the pane produced new non-composer output after Enter."""
+        baseline_lines = {line.strip() for line in baseline.splitlines() if line.strip()}
+        for line in pane_text.splitlines():
+            stripped = line.strip()
+            if (
+                not stripped
+                or stripped in baseline_lines
+                or stripped == composed_line
+                or prompt_text in stripped
+                or self._line_looks_like_idle_prompt(stripped)
+                or self._line_looks_like_non_progress_status(stripped)
+            ):
+                continue
+            return True
+        return False
+
+    # Phrases that appear on-screen ONLY when a CLI is actively running a
+    # tool / command.  Checked BEFORE idle phrases to prevent false positives
+    # (e.g. Copilot shows "Type @ to mention" at the bottom while running).
+    _KNOWN_BUSY_PHRASES: ClassVar[tuple[str, ...]] = (
+        "esc to cancel",
+        "esc to interrupt",
+        "running agent",
+        "running tool",
+        "running command",
+    )
+
+    def _pane_looks_idle(self, pane_text: str) -> bool:
+        """Check whether the visible pane tail still matches an idle CLI prompt."""
+        lines = [ln for ln in pane_text.splitlines() if ln.strip()]
+        if not lines:
+            return False
+
+        # Use a wider window for busy PHRASE detection — Copilot renders
+        # busy status (e.g. "Esc to cancel") above the always-visible
+        # prompt chrome.  Single-char spinners stay in the narrow window
+        # because Copilot reuses ● for completed items throughout output.
+        wide_tail = lines[-10:]
+        wide_lower = "\n".join(ln.strip() for ln in wide_tail).lower()
+
+        # 1. Check busy phrases FIRST (wide window) — these override idle
+        #    phrases because Copilot always renders idle-looking prompt
+        #    chrome at the bottom even while actively running operations.
+        for phrase in self._KNOWN_BUSY_PHRASES:
+            if phrase in wide_lower:
+                logger.debug("CLI busy detected (known phrase '%s') — NOT idle", phrase)
+                return False
+
+        tail = lines[-5:]
+
+        # 2. Check spinner indicators in narrow window (last 2 lines only).
+        #    Must stay narrow: Copilot uses ● for completed items throughout
+        #    its output, so a wide check would never detect idle.
+        for line in tail[-2:]:
+            stripped = line.strip()
+            if any(ind in stripped for ind in self._BUSY_INDICATORS):
+                return False
+
+        # 3. Now check idle phrases
+        tail_lower = "\n".join(ln.strip() for ln in tail).lower()
+        for phrase in self._KNOWN_IDLE_PHRASES:
+            if phrase in tail_lower:
+                logger.debug("CLI prompt detected (known phrase '%s')", phrase)
+                return True
+
+        prompt_chars = (">", "\u276f", "$", "%")
+        for line in reversed(tail):
+            stripped = line.strip()
+            if any(stripped.startswith(pc) for pc in prompt_chars):
+                rest = stripped.lstrip(">\u276f$%").strip()
+                if len(rest) <= 2:
+                    logger.debug("CLI prompt detected (bare): %s", stripped[:40])
+                    return True
+
+        return False
+
+    def _pane_has_positive_submit_signal(
+        self,
+        pane_text: str,
+        baseline_text: str,
+        prompt_text: str,
+        composed_line: str | None,
+    ) -> bool:
+        """Require positive post-Enter progress before counting submission as accepted."""
+        tail = self._pane_tail_lines(pane_text)
+        if any(any(indicator in line for indicator in self._BUSY_INDICATORS) for line in tail[-2:]):
+            return True
+
+        return self._pane_has_fresh_submission_output(
+            pane_text,
+            baseline_text,
+            prompt_text,
+            composed_line or "",
+        )
+
+    def _pane_shows_prompt_processed(self, pane_text: str) -> bool:
+        """Check if the pane shows our submitted prompt was printed and processed.
+
+        Looks for the prompt echo in the pane and checks for work output
+        after it (tool calls, thinking text, skill invocations).  If found,
+        the CLI received and processed our prompt — it is NOT idle, just
+        showing idle chrome (e.g. Copilot always shows "type @ to mention").
+
+        Returns False if the prompt echo isn't found or there's no work
+        output after it (likely discarded by MCP reload).
+        """
+        prompt = self._last_phase_prompt
+        if not prompt:
+            return False
+
+        # Use the first 40 chars of the prompt as an echo fingerprint
+        # (full prompt may wrap across pane lines)
+        echo_prefix = prompt[:40]
+        lines = pane_text.splitlines()
+
+        echo_idx = None
+        for i, line in enumerate(lines):
+            if echo_prefix in line:
+                echo_idx = i
+                break
+
+        if echo_idx is None:
+            return False  # Prompt not in pane — may have been discarded
+
+        # Check for work output after the echo line
+        for line in lines[echo_idx + 1 :]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if self._line_looks_like_idle_prompt(stripped):
+                continue
+            if self._line_looks_like_non_progress_status(stripped):
+                continue
+            # Found substantive content after prompt echo — CLI is working
+            logger.debug(
+                "Prompt processed — work output found after echo: %s",
+                stripped[:60],
+            )
+            return True
+
+        return False
+
+    def _should_ignore_viewer_input(self, data: bytes) -> bool:
+        """Ignore viewer-side redraw controls while worker-owned submit startup runs."""
+        return self._phase_submit_in_progress and data == b"\x0c"
+
+    async def _submit_phase_prompt(self, prompt: str) -> None:
+        """Submit one phase prompt with tmux verification and a single retry."""
+        normalized = self._normalize_prompt_for_submit(prompt)
+        self._phase_submit_in_progress = True
+        try:
+            if not self._use_tmux:
+                await self._send_to_pty(normalized + "\r")
+                return
+
+            tmux_target = self._tmux_target or self._tmux_session
+            last_error = "Interactive prompt submission was not accepted by CLI"
+
+            for attempt in (1, 2):
+                used_csi_u_fallback = False
+                baseline = await self._capture_submission_state()
+                sent = await tmux_mgr.send_literal_text(tmux_target, normalized)
+                if not sent and self._use_csi_u:
+                    sent = await tmux_mgr.send_keys(tmux_target, normalized, use_csi_u=True)
+                    used_csi_u_fallback = sent
+                if not sent:
+                    last_error = "Interactive prompt submission transport failed"
+                else:
+                    echo_text = self._submission_echo_prefix(normalized)
+                    composed_line = (
+                        None
+                        if used_csi_u_fallback
+                        else await self._wait_for_prompt_echo(
+                            normalized,
+                            baseline,
+                            echo_text=echo_text,
+                        )
+                    )
+                    submitted = bool(used_csi_u_fallback)
+                    if composed_line or not used_csi_u_fallback:
+                        # Dismiss autocomplete/suggestion dropdowns before
+                        # submitting.  Copilot shows slash-command suggestions
+                        # that intercept Enter — End moves the cursor to end
+                        # of composed text, which implicitly closes dropdowns.
+                        #
+                        # When echo detection fails (composed_line is None),
+                        # the text may still be in the input — long prompts
+                        # wrap across pane lines, defeating line-by-line echo
+                        # matching.  Send End+Enter as best-effort anyway;
+                        # _verify_prompt_submitted will confirm acceptance.
+                        if not composed_line:
+                            logger.debug(
+                                "Echo prefix not found (likely line-wrap) — sending End+Enter as best-effort submit"
+                            )
+                        await asyncio.sleep(0.15)
+                        await tmux_mgr.send_key(tmux_target, "End")
+                        await asyncio.sleep(0.1)
+                        submitted = await tmux_mgr.send_key(tmux_target, "Enter")
+                    if submitted and await self._verify_prompt_submitted(
+                        normalized,
+                        composed_line=composed_line,
+                        baseline=baseline,
+                    ):
+                        return
+                    if not submitted:
+                        last_error = "Interactive prompt submission was not accepted by CLI"
+
+                if attempt == 1:
+                    await self._wait_for_startup_ready(min_delay=1, stability_secs=1, timeout=10)
+
+            raise DeterministicPromptSubmissionError(last_error)
+        finally:
+            self._phase_submit_in_progress = False
+
+    async def _handle_prompt_submission_failure(self, phase_name: str, exc: Exception) -> bool:
+        """Requeue once for deterministic prompt submission failures, then fail."""
+        ticket = await self.state.get_ticket(self.ticket_id)
+        count = ticket.prompt_submit_requeues if ticket else 0
+        error = f"{DETERMINISTIC_PROMPT_SUBMISSION_ERROR_PREFIX} {exc}"
+
+        logger.warning(
+            "Prompt submission failed for ticket %s during %s (requeues=%d): %s",
+            self.ticket_id,
+            phase_name,
+            count,
+            exc,
+        )
+
+        _MAX_PROMPT_SUBMIT_REQUEUES = 2  # 3 total attempts (initial + 2 retries)
+        if count < _MAX_PROMPT_SUBMIT_REQUEUES:
+            await self.state.update_ticket_state(self.ticket_id, TicketState.QUEUED)
+            await self.state.update_ticket(
+                self.ticket_id,
+                prompt_submit_requeues=count + 1,
+                error=error,
+            )
+            await self.broadcaster.broadcast_ticket_update(
+                self.run_id,
+                self.ticket_id,
+                TicketState.QUEUED,
+                error=error,
+            )
+            return False
+
+        await self.state.update_ticket(self.ticket_id, error=error)
+        await self.state.update_ticket_state(self.ticket_id, TicketState.FAILED)
+        await self.broadcaster.broadcast_ticket_update(
+            self.run_id,
+            self.ticket_id,
+            TicketState.FAILED,
+            error=error,
+        )
+        return False
+
     async def _send_to_pty(self, text: str) -> None:
         """Write a command/prompt to the PTY (or tmux session)."""
         if self._cancelled:
             return
         if self._use_tmux:
-            # Send via tmux send-keys to the main session
             # Strip trailing \r — tmux send-keys adds Enter
             clean = text.rstrip("\r\n")
+            tmux_target = self._tmux_target or self._tmux_session
             if clean:
-                ok = await tmux_mgr.send_keys(self._tmux_session, clean)
+                ok = await tmux_mgr.send_keys(
+                    tmux_target,
+                    clean,
+                    use_csi_u=self._use_csi_u,
+                )
                 if not ok:
-                    logger.error("send_keys failed for session %s, retrying...", self._tmux_session)
+                    logger.error("send_keys failed for target %s, retrying...", tmux_target)
                     await asyncio.sleep(2)
-                    ok = await tmux_mgr.send_keys(self._tmux_session, clean)
+                    ok = await tmux_mgr.send_keys(
+                        tmux_target,
+                        clean,
+                        use_csi_u=self._use_csi_u,
+                    )
                     if not ok:
-                        logger.error("send_keys retry also failed for session %s", self._tmux_session)
+                        logger.error("send_keys retry also failed for target %s", tmux_target)
                 else:
-                    logger.info("send_keys OK: %s → %s", self._tmux_session, clean[:80])
+                    method = "CSI-u" if self._use_csi_u else "literal"
+                    logger.info("send_keys OK (%s): %s → %s", method, tmux_target, clean[:80])
         elif self._master_fd is not None:
             with contextlib.suppress(OSError):
                 os.write(self._master_fd, text.encode())
@@ -925,26 +1390,32 @@ class Worker:
         self._last_output_time = time.time()
         _capture_interval = 2.0  # seconds between capture-pane marker checks
         _last_capture_check = time.time()  # delay first check by _capture_interval
+        _idle_streak = 0  # consecutive idle-at-prompt checks (for abort recovery)
+        _IDLE_RESUBMIT_STREAK = 5  # ~10s at 2s intervals before re-submitting
 
-        # Count standalone marker lines already in the pane (stale from prior
-        # runs or resumed sessions).  We only count lines where the marker is
-        # the ENTIRE line — input echo always embeds the marker inside a longer
-        # sentence ("...print exactly: MARKER"), so it never matches here.
-        # Only Claude's real output ("MARKER" alone on its own line) counts.
-        def _count_standalone(text: str) -> int:
-            return sum(1 for line in text.splitlines() if line.strip() == marker)
+        # Count lines containing the marker.  Uses substring match (not strict
+        # equality) because CLIs prefix output differently — Copilot uses
+        # status bullets (● ○ ◉), Claude prints bare text, etc.
+        #
+        # Safe against false positives from the input echo ("...print exactly:
+        # MARKER") because we capture _initial_marker_count at phase start
+        # (which includes the echo) and only trigger when the count INCREASES.
+        def _count_marker_lines(text: str) -> int:
+            return sum(1 for line in text.splitlines() if marker in line)
 
         _initial_marker_count = 0
         if marker and self._use_tmux:
             initial_pane = await tmux_mgr.capture_pane(self._tmux_session)
             if initial_pane:
-                _initial_marker_count = _count_standalone(initial_pane)
+                _initial_marker_count = _count_marker_lines(initial_pane)
                 if _initial_marker_count:
                     logger.info(
-                        "Marker %s already standalone in pane %d time(s) (stale) — will only match new occurrences",
-                        marker, _initial_marker_count,
+                        "Marker %s already in pane %d time(s) (stale) — will only match new occurrences",
+                        marker,
+                        _initial_marker_count,
                     )
 
+        pane_text = None  # Shared across marker check + idle recovery
         while not self._cancelled:
             # Process died — check via tmux or subprocess
             if self._use_tmux:
@@ -953,17 +1424,17 @@ class Worker:
             elif self.process and self.process.returncode is not None:
                 return False
 
-            # Periodically scan capture-pane for a standalone marker line.
+            # Periodically scan capture-pane for the marker.
             # Input echo embeds the marker inside a sentence; Claude's real
-            # output prints it alone — _count_standalone only matches the latter.
+            # output prints it alone — _count_marker_lines only matches the latter.
             if marker and self._use_tmux:
                 now = time.time()
                 if (now - _last_capture_check) >= _capture_interval:
                     _last_capture_check = now
                     pane_text = await tmux_mgr.capture_pane(self._tmux_session)
-                    if pane_text and _count_standalone(pane_text) > _initial_marker_count:
+                    if pane_text and _count_marker_lines(pane_text) > _initial_marker_count:
                         logger.info(
-                            "Marker %s detected as standalone output line (not input echo)",
+                            "Marker %s detected (new occurrence in pane output)",
                             marker,
                         )
                         # Reconnect monitor PTY if it died
@@ -982,6 +1453,64 @@ class Worker:
                 if idle_duration >= self.idle_timeout:
                     return True
 
+            # Recovery: if the CLI unexpectedly returns to idle during a
+            # MARKER phase (e.g. Copilot aborted after MCP server reload),
+            # re-submit the prompt ONCE.
+            #
+            # Strategy: piggyback on the existing 2s capture-pane cycle.
+            # When the pane looks idle, increment a consecutive counter.
+            # After _IDLE_RESUBMIT_STREAK consecutive idle checks (~10s),
+            # re-submit.  This is reactive (no flat wait) yet resistant
+            # to momentary prompt flashes.
+            #
+            # IMPORTANT: Copilot always shows idle phrases ("type @ to
+            # mention") even while actively working.  To avoid false
+            # resubmits, we also check whether the pane already contains
+            # output from our submitted prompt.  If the prompt echo is
+            # visible with work output after it, Copilot processed our
+            # prompt and is working — skip the resubmit.
+            #
+            # Skip for Claude Code whose ">" prompt appears even while busy.
+            # Guarded by _phase_resubmitted to prevent duplicate submissions.
+            if (
+                marker
+                and self._use_tmux
+                and not self._use_csi_u
+                and not self._user_active
+                and not self._phase_resubmitted
+            ):
+                # Reuse pane_text from marker check above (same loop iteration).
+                # Falls back to a fresh capture if marker check didn't run this tick.
+                idle_pane = pane_text
+                if idle_pane is None:
+                    idle_pane = await tmux_mgr.capture_pane(self._tmux_session, history_lines=0)
+                if idle_pane and self._pane_looks_idle(idle_pane):
+                    # Before counting idle, check if our prompt was already
+                    # printed/processed — if yes, Copilot is working, not idle.
+                    if self._pane_shows_prompt_processed(idle_pane):
+                        _idle_streak = 0
+                    else:
+                        _idle_streak += 1
+                else:
+                    _idle_streak = 0
+
+                if _idle_streak >= _IDLE_RESUBMIT_STREAK:
+                    self._phase_resubmitted = True
+                    logger.warning(
+                        "CLI idle at prompt for %d consecutive checks during "
+                        "marker phase — re-submitting prompt (likely MCP reload / abort)",
+                        _idle_streak,
+                    )
+                    try:
+                        prompt = self._last_phase_prompt or ""
+                        if prompt:
+                            await self._submit_phase_prompt(prompt)
+                            self._last_output_time = time.time()
+                            _idle_streak = 0
+                    except DeterministicPromptSubmissionError as exc:
+                        logger.error("Re-submission also failed: %s", exc)
+                        return False
+
             # Reset user_active flag after checking
             self._user_active = False
 
@@ -989,13 +1518,55 @@ class Worker:
 
         return False
 
-    async def _is_claude_at_prompt(self) -> bool:
-        """Check if Claude Code is idle at the input prompt via tmux.
+    # Well-known phrases that appear on-screen ONLY when a CLI is idle at
+    # its input prompt.  Checked case-insensitively against the last few
+    # visible lines.  Adding new CLIs here is the cheapest way to support
+    # them — no config, no migration.
+    _KNOWN_IDLE_PHRASES: ClassVar[tuple[str, ...]] = (
+        # Claude Code
+        "bypass permissions",
+        "auto-accept",
+        # Copilot CLI
+        "type @ to mention",
+        "shift+tab switch mode",
+        "remaining reqs",
+        # Cursor / Windsurf / generic
+        "press enter to send",
+        "type a message",
+        "type your message",
+    )
 
-        Captures the current pane content and inspects the last non-empty
-        lines for the ``>`` prompt character that Claude Code shows when
-        waiting for user input.  Returns False if not using tmux or if
-        Claude appears to still be working (spinners, tool output, etc.).
+    _BUSY_INDICATORS: ClassVar[tuple[str, ...]] = (
+        "●",
+        "◐",
+        "◑",
+        "◒",
+        "◓",
+        "⠋",
+        "⠙",
+        "⠹",
+        "⠸",
+        "⠼",
+        "⠴",
+        "⠦",
+        "⠧",
+        "⠇",
+        "⠏",
+    )
+
+    async def _is_cli_at_prompt(self) -> bool:
+        """Check if the CLI is idle at the input prompt via tmux.
+
+        Uses a two-layer detection strategy that works across CLI tools:
+
+        1. **Known idle phrases** — well-known strings that only appear when
+           a CLI is waiting for input (e.g. "Type @ to mention" for Copilot,
+           "bypass permissions" for Claude Code).
+        2. **Bare prompt characters** — ``>``, angle prompt, ``$``, ``%`` with
+           minimal trailing text.
+
+        Returns False if busy indicators (spinners) are detected or if
+        the screen doesn't match any known idle pattern.
         """
         if not self._use_tmux:
             return False
@@ -1003,57 +1574,41 @@ class Worker:
         if not pane_text:
             return False
 
-        # Get last non-empty lines from the visible pane
-        lines = [ln for ln in pane_text.splitlines() if ln.strip()]
-        if not lines:
-            return False
+        return self._pane_looks_idle(pane_text)
 
-        # Claude Code shows ">" or "❯" at the start of the input line when idle.
-        # Check the last few lines (prompt may be followed by status bar text).
-        #
-        # IMPORTANT: Claude Code also echoes submitted prompts as "> /command..."
-        # A bare idle prompt is just ">" or "> " (≤2 chars after the prompt
-        # character).  Lines with substantial text after ">" are submitted
-        # message echoes and must NOT be treated as idle.
-        # Known UI elements (e.g. "❯❯ bypass permissions") ARE idle indicators.
-        for line in reversed(lines[-5:]):
-            stripped = line.strip()
-            # Active work indicators — Claude is still busy
-            if any(ind in stripped for ind in ("●", "◐", "◑", "◒", "◓", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")):
-                return False
-            # Prompt indicators — Claude is waiting for input
-            if stripped.startswith(">") or stripped.startswith("❯"):
-                # Known TUI status elements that appear when idle
-                if "bypass permissions" in stripped.lower() or "auto-accept" in stripped.lower():
-                    logger.debug("Claude prompt detected (status line): %s", stripped[:40])
-                    return True
-                # Bare prompt: just >/❯ with minimal trailing text (cursor chars, spaces)
-                rest = stripped.lstrip(">❯").strip()
-                if len(rest) <= 2:
-                    logger.debug("Claude prompt detected (bare): %s", stripped[:40])
-                    return True
-                # Has substantial text → likely an echoed submitted message, skip
-                continue
-
-        return False
-
-    async def _verify_prompt_submitted(self, timeout: float = 8.0) -> bool:
-        """Verify Claude left the idle state after prompt injection.
-
-        Returns True if Claude transitioned away from the ``>`` prompt
-        (proof it received and submitted the input).  Returns False if
-        Claude is still showing the idle prompt after *timeout* seconds,
-        meaning the prompt was silently dropped by the TUI.
-        """
+    async def _verify_prompt_submitted(
+        self,
+        prompt_text: str,
+        *,
+        composed_line: str | None = None,
+        baseline: str | None = None,
+        timeout: float = 8.0,
+    ) -> bool:
+        """Verify prompt submission via pane-state transitions around the injected prompt."""
         if not self._use_tmux:
             return True  # Can't verify without tmux — assume OK
+        baseline_text = baseline if baseline is not None else await self._capture_submission_state()
+        current_composed_line = composed_line
         deadline = time.time() + timeout
         while time.time() < deadline:
-            await asyncio.sleep(0.5)
-            if not await self._is_claude_at_prompt():
-                logger.info("Prompt accepted — Claude left idle state")
+            pane_text = await self._capture_submission_state()
+            if self._pane_has_positive_submit_signal(
+                pane_text,
+                baseline_text,
+                prompt_text,
+                current_composed_line,
+            ):
+                logger.info("Prompt accepted — pane produced positive post-Enter progress")
                 return True
-        logger.warning("Claude still at prompt after %.0fs — prompt was not accepted", timeout)
+            if current_composed_line is None:
+                current_composed_line = self._find_composed_input_line(pane_text, prompt_text)
+            if current_composed_line and current_composed_line not in pane_text:
+                logger.debug("Prompt echo disappeared without post-Enter progress; waiting for positive signal")
+            await asyncio.sleep(0.1)
+        if current_composed_line and current_composed_line not in (baseline or ""):
+            logger.warning("CLI still shows composed input after %.1fs — prompt was not accepted", timeout)
+        else:
+            logger.warning("CLI never showed a submit transition after %.1fs", timeout)
         return False
 
     async def _reconnect_monitor_pty(self) -> None:
@@ -1067,10 +1622,7 @@ class Worker:
             return
 
         # Close old fd
-        if self._master_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(self._master_fd)
-            self._master_fd = None
+        self._close_pty()
 
         monitor_session = f"{self._tmux_session}-monitor"
 
@@ -1089,81 +1641,258 @@ class Worker:
         else:
             logger.error("Failed to reconnect monitor PTY for %s", self._tmux_session)
 
-    async def _wait_for_startup_ready(self, timeout: float = 120) -> None:
-        """Wait for Claude Code to finish initializing before first prompt.
+    async def _wait_for_startup_ready(self, min_delay: float = 5, stability_secs: int = 3, timeout: float = 60) -> None:
+        """Wait for the CLI to finish initializing before first prompt.
 
-        Claude Code startup involves loading MCP servers, reading CLAUDE.md,
-        and rendering the TUI.  We detect readiness by polling tmux for the
-        ``>`` input prompt — the definitive signal that Claude Code is ready
-        to accept submissions.
+        Uses **cursor position stability** — a universal signal that works
+        for ANY CLI without parsing terminal content.  During loading, the
+        cursor moves as status lines are rendered.  Once the CLI reaches its
+        input prompt, the cursor settles at a fixed position.
 
-        Falls back to *timeout* to avoid blocking forever.
+        Even CLIs with animations (e.g. Copilot's blinking logo) return the
+        cursor to the same resting position between frames.  Tested: cursor
+        stays at (2,44) for Copilot despite continuous animation output.
+
+        Falls back to *timeout* for raw PTY mode (no tmux).
         """
-        deadline = time.time() + timeout
+        # Minimum wait — gives CLI time to start rendering
+        await asyncio.sleep(min_delay)
 
-        # Give Claude Code a moment to start rendering before polling
-        await asyncio.sleep(2)
+        if not self._use_tmux:
+            # Raw PTY fallback — no cursor tracking available, use fixed delay
+            logger.info("Raw PTY mode — waiting additional %.0fs for startup", timeout - min_delay)
+            await asyncio.sleep(min(15, timeout - min_delay))
+            return
+
+        deadline = time.time() + (timeout - min_delay)
+        last_pos = None
+        stable_count = 0
 
         while not self._cancelled and time.time() < deadline:
-            if await self._is_claude_at_prompt():
-                logger.info("Claude Code prompt detected — ready for first prompt")
-                return
+            pos = await tmux_mgr.get_cursor_position(self._tmux_session)
+            if pos is not None and pos == last_pos:
+                stable_count += 1
+                if stable_count >= stability_secs:
+                    logger.info(
+                        "Cursor stable at %s for %ds — checking input readiness",
+                        pos,
+                        stability_secs,
+                    )
+                    # Handle trust/permission dialogs first
+                    await self._dismiss_startup_dialogs()
+                    # Verify the CLI actually accepts keyboard input.
+                    # Some CLIs (Copilot) flush stdin during terminal mode
+                    # init, silently discarding buffered keystrokes.
+                    if await self._probe_input_readiness():
+                        # Guard against late MCP reload: Copilot may reload
+                        # MCP servers AFTER the probe passes, flushing stdin
+                        # and discarding the real prompt.  Wait for the
+                        # reload to appear in the pane, then re-probe.
+                        if not self._use_csi_u and await self._wait_for_mcp_reload(timeout=10):
+                            if not await self._probe_input_readiness():
+                                logger.debug("Re-probe after MCP reload failed — CLI not ready yet")
+                                stable_count = 0
+                                continue
+                        return
+                    # Probe failed — keep waiting
+                    logger.debug("Input probe failed — CLI not ready yet")
+                    stable_count = 0
+            else:
+                if pos != last_pos:
+                    stable_count = 0
+                last_pos = pos
             await asyncio.sleep(1)
 
         if self._cancelled:
             return
-        logger.warning(
-            "Startup ready wait timed out after %.0fs — injecting prompt anyway", timeout
+        logger.warning("Startup cursor-stability wait timed out after %.0fs — injecting prompt anyway", timeout)
+
+    _PROBE_STR: ClassVar[str] = "~~PROBE~~"
+
+    async def _probe_input_readiness(self) -> bool:
+        """Send a test string and verify the CLI accepted it.
+
+        Some CLIs (Copilot) flush stdin during terminal mode initialization,
+        silently discarding buffered keystrokes even though tmux reports
+        success (rc=0).  This method sends a unique probe string, checks if
+        it appeared in the pane, then deletes it.
+
+        Skipped for Claude Code (input handler is always ready immediately).
+
+        Returns True if the CLI is accepting input, False otherwise.
+        """
+        if not self._use_tmux:
+            return True
+
+        # Claude Code doesn't need probing — input is ready immediately
+        if self._use_csi_u:
+            return True
+
+        # Capture pane BEFORE sending probe (to compare)
+        pre_pane = await tmux_mgr.capture_pane(self._tmux_session, history_lines=0) or ""
+        tmux_target = self._tmux_target or self._tmux_session
+
+        # Send a unique probe string
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "send-keys",
+            "-l",
+            "-t",
+            tmux_target,
+            self._PROBE_STR,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        await proc.communicate()
+        await asyncio.sleep(0.5)
+
+        # Check if probe appeared (compare with pre-capture to avoid false matches)
+        post_pane = await tmux_mgr.capture_pane(self._tmux_session, history_lines=0) or ""
+        if self._PROBE_STR in post_pane and self._PROBE_STR not in pre_pane:
+            # Found — delete it character by character
+            for _ in self._PROBE_STR:
+                await tmux_mgr.send_keys_raw(tmux_target, "BSpace")
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.2)
+            logger.info("Input readiness probe: CLI is accepting keystrokes")
+            return True
+
+        logger.debug("Input readiness probe: keystroke not received by CLI")
+        return False
+
+    async def _dismiss_startup_dialogs(self) -> None:
+        """Dismiss trust/permission dialogs that some CLIs show on first run.
+
+        Copilot shows "Do you trust the files in this folder?" on new
+        worktrees.  We detect this by a ONE-TIME pane content check for
+        known dialog keywords, then send the appropriate keys to dismiss.
+
+        Does NOT blindly send Enter — that can cause Copilot to exit if
+        the wrong option is selected or no dialog is present.
+        """
+        if not self._use_tmux:
+            return
+
+        pane_text = await tmux_mgr.capture_pane(self._tmux_session, history_lines=0)
+        if not pane_text:
+            return
+
+        pane_lower = pane_text.lower()
+
+        # Copilot trust dialog: "Do you trust the files in this folder?"
+        if "trust" in pane_lower and "folder" in pane_lower:
+            logger.info("Trust dialog detected — selecting 'Yes and remember'")
+            # Navigate to option 2 (Down from default) and select
+            await tmux_mgr.send_keys_raw(self._tmux_session, "Down")
+            await asyncio.sleep(0.2)
+            await tmux_mgr.send_keys_raw(self._tmux_session, "Enter")
+            # Wait for Copilot to reload after trusting
+            await asyncio.sleep(8)
+            # Re-check cursor stability
+            for _ in range(15):
+                if await self._is_cli_at_prompt():
+                    logger.info("CLI at prompt after trust dialog dismissal")
+                    return
+                await asyncio.sleep(1)
+            logger.warning("CLI not at prompt after trust dialog — proceeding anyway")
+        else:
+            logger.info("No startup dialog detected — proceeding to prompt injection")
+
+    async def _wait_for_mcp_reload(self, timeout: float = 10) -> bool:
+        """Wait for Copilot's MCP server reload to complete.
+
+        Copilot reloads MCP servers during startup, which flushes stdin and
+        discards any buffered keystrokes.  This method waits for the
+        "MCP Servers reloaded" message to appear in the pane.
+
+        Returns True if MCP reload was detected, False if timeout elapsed
+        (the CLI may not have MCP servers or already reloaded before we
+        started watching).
+        """
+        if not self._use_tmux:
+            return False
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pane = await tmux_mgr.capture_pane(self._tmux_session, history_lines=0)
+            if pane and "mcp servers reloaded" in pane.lower():
+                logger.info("MCP reload detected — re-probing input readiness")
+                # Brief settle time after reload
+                await asyncio.sleep(2)
+                return True
+            await asyncio.sleep(0.5)
+
+        logger.debug("No MCP reload detected within %.0fs — proceeding", timeout)
+        return False
 
     async def _wait_for_idle(self, min_quiet: float = 10, timeout: float = 600) -> None:
-        """Wait until Claude is idle at the input prompt.
+        """Wait until the CLI is idle at the input prompt.
 
-        After a phase marker is emitted, a Claude Code Stop hook may cause the
-        agent to continue processing (e.g. running /code-review).  If we inject
-        the next phase's prompt while Claude is still busy, the TUI discards it.
+        After a phase marker is emitted, a Stop hook may cause the agent to
+        continue processing (e.g. running /code-review).  If we inject the
+        next phase's prompt while the CLI is still busy, the TUI discards it.
 
-        This method watches ``_last_output_time`` (updated by the PTY read loop
-        on every chunk) and then **verifies** Claude is at the ``>`` prompt via
-        ``capture-pane``.  The PTY read loop can die during long phases, leaving
-        ``_last_output_time`` stale — without the prompt check, the idle gate
-        would pass instantly and the prompt would be sent before Claude is ready.
+        Uses a two-stage check:
+        1. **Output quiescence**: no new output for *min_quiet* seconds.
+        2. **Prompt verification** (best-effort): checks for known prompt
+           indicators via tmux capture-pane.  If the PTY read loop died,
+           ``_last_output_time`` is stale — the prompt check prevents a
+           false-positive idle signal.  If prompt detection fails (unknown
+           CLI), quiescence alone is accepted after a longer quiet period.
+
+        Fallback for TUI-heavy CLIs (e.g. Copilot): some CLIs continuously
+        redraw their status bar / prompt area even when idle, keeping
+        ``_last_output_time`` perpetually fresh.  A consecutive prompt-streak
+        counter detects this: if the pane shows a known idle prompt for
+        ``_PROMPT_READY_STREAK`` consecutive checks, the CLI is considered
+        ready regardless of PTY output noise.
 
         Falls back to *timeout* to avoid blocking forever.
         """
+        _PROMPT_READY_STREAK = 5  # consecutive 1s checks ≈ 5s of stable prompt
+        _prompt_streak = 0
+
         deadline = time.time() + timeout
-        # Give Claude at least a brief moment to start any Stop-hook continuation
+        # Give the CLI at least a brief moment to start any Stop-hook continuation
         await asyncio.sleep(3)
 
         while not self._cancelled and time.time() < deadline:
             idle = time.time() - self._last_output_time
             if idle >= min_quiet:
-                # Output is quiet — verify Claude is actually at the prompt.
-                # If the PTY read loop died, _last_output_time is stale and
-                # this check would pass instantly without the prompt guard.
                 if self._use_tmux:
-                    at_prompt = await self._is_claude_at_prompt()
+                    at_prompt = await self._is_cli_at_prompt()
                     if at_prompt:
+                        logger.info("CLI idle for %.1fs and at prompt — ready for next phase", idle)
+                        return
+                    # NOT using quiescence-only fallback here — during
+                    # "thinking" states CLIs produce no output but are NOT
+                    # ready for input.  Only timeout is safe for unknown CLIs.
+                    logger.debug("Output quiet for %.1fs but CLI not at prompt — waiting", idle)
+                else:
+                    logger.info("CLI idle for %.1fs — injecting next phase prompt", idle)
+                    return
+            elif self._use_tmux:
+                # Fallback: TUI redraws (status bar, cursor blink, counters)
+                # keep _last_output_time fresh even when the CLI is truly idle.
+                # Use consecutive prompt detections as a secondary readiness signal.
+                at_prompt = await self._is_cli_at_prompt()
+                if at_prompt:
+                    _prompt_streak += 1
+                    if _prompt_streak >= _PROMPT_READY_STREAK:
                         logger.info(
-                            "Claude idle for %.1fs and at prompt — ready for next phase", idle
+                            "CLI at prompt for %d consecutive checks "
+                            "(output still arriving — likely TUI redraws) "
+                            "— ready for next phase",
+                            _prompt_streak,
                         )
                         return
-                    # Not at prompt yet — keep waiting
-                    logger.debug(
-                        "Output quiet for %.1fs but Claude not at prompt — waiting", idle
-                    )
                 else:
-                    logger.info(
-                        "Claude idle for %.1fs — injecting next phase prompt", idle
-                    )
-                    return
+                    _prompt_streak = 0
             await asyncio.sleep(1)
 
         if self._cancelled:
             return
-        logger.warning(
-            "Idle wait timed out after %.0fs — injecting prompt anyway", timeout
-        )
+        logger.warning("Idle wait timed out after %.0fs — injecting prompt anyway", timeout)
 
     # --- Output parsing ---
 
@@ -1242,9 +1971,15 @@ class Worker:
                 return f"[tool] Grep: {pattern}"
             return f"[tool] {tool}"
 
-        # Tool result
+        # Tool result — don't log (verbose), but extract PR URLs before discarding
         if msg_type == "tool_result":
-            return None  # Skip verbose tool results
+            content = data.get("content", data.get("output", ""))
+            if isinstance(content, list):
+                content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+            pr_url = self._extract_pr_url(str(content))
+            if pr_url:
+                return f"[pr] {pr_url}"
+            return None
 
         # System/status messages
         if msg_type == "system":
@@ -1342,9 +2077,7 @@ class AdHocTerminal:
                         "Ad-hoc tmux session %s disappeared immediately — Claude may have crashed",
                         self._tmux_session,
                     )
-                    raise RuntimeError(
-                        f"Claude exited immediately in ad-hoc session {self._tmux_session}"
-                    )
+                    raise RuntimeError(f"Claude exited immediately in ad-hoc session {self._tmux_session}")
 
                 is_shell = await tmux_mgr.is_shell_fallback(self._tmux_session)
                 if is_shell:
@@ -1355,14 +2088,15 @@ class AdHocTerminal:
                     )
                     await tmux_mgr.kill_session(self._tmux_session)
                     raise RuntimeError(
-                        "Claude failed to start in ad-hoc session "
-                        f"{self._tmux_session} (fell back to shell)"
+                        f"Claude failed to start in ad-hoc session {self._tmux_session} (fell back to shell)"
                     )
 
                 session_pid = await tmux_mgr.get_session_pid(self._tmux_session)
                 # Create a dummy process object for compatibility (pid tracking)
                 self._tmux_pid = session_pid
-                logger.info("Spawned tmux ad-hoc session %s in %s (pid=%s)", self._tmux_session, self.worktree_path, session_pid)
+                logger.info(
+                    "Spawned tmux ad-hoc session %s in %s (pid=%s)", self._tmux_session, self.worktree_path, session_pid
+                )
                 return
             logger.warning("tmux ad-hoc session failed, falling back to raw PTY")
             self._use_tmux = False
@@ -1517,6 +2251,25 @@ class AdHocTerminal:
             asyncio.create_task(tmux_mgr.kill_session(vs.session_name))  # noqa: RUF006 — fire-and-forget cleanup from sync method
         else:
             self._viewers.discard(ws)
+
+    async def scroll_viewer_to_bottom(self, ws: WebSocket) -> None:
+        """Exit tmux copy-mode and refresh the viewer to show live content."""
+        if not self._use_tmux:
+            return
+        vs = self._viewer_sessions.get(ws)
+        if not vs:
+            return
+        await tmux_mgr.cancel_copy_mode(vs.session_name)
+        await tmux_mgr.refresh_client(vs.session_name)
+
+    async def refresh_viewer(self, ws) -> None:
+        """Redraw a viewer's tmux client without sending input to the CLI process."""
+        if not self._use_tmux:
+            return
+        vs = self._viewer_sessions.get(ws)
+        if not vs:
+            return
+        await tmux_mgr.refresh_client(vs.session_name)
 
     def write_input(self, data: bytes) -> None:
         if self._master_fd is not None:

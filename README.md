@@ -155,7 +155,7 @@ Configure which AI CLI agent executes tickets:
 | Claude Code (print) | `claude` | `--print "/execute-jira-task {JIRA_KEY}"` | Single-shot, no interaction |
 | Custom | `your-cli` | `--task {JIRA_KEY} --cwd {WORKTREE_PATH}` | Depends on CLI |
 
-**Interactive mode** (recommended): Uses the phase pipeline — each phase sends a slash command to Claude and waits for a completion marker. You can interact with the AI via the Live Terminal.
+**Interactive mode** (recommended): Uses the phase pipeline — each phase sends a slash command through one universal literal submission handshake, verifies the CLI accepted it, and waits for a completion marker. If a deterministic submission drops, Task Ninja re-queues the ticket once automatically; a repeat deterministic submission failure becomes `FAILED`.
 
 **Print mode**: Runs a single command and exits. Simpler but no live interaction.
 
@@ -259,6 +259,7 @@ To create an app password: [BitBucket App Passwords](https://bitbucket.org/accou
 - **Drag-and-drop** cards between columns to change status
 - **Pause** — kills the worker process and closes the PTY session. The ticket is marked as paused and won't be picked up again until resumed. Use this to free up a worker slot or stop a ticket that's going in the wrong direction.
 - **Resume** — re-queues the paused ticket. The orchestrator spawns a fresh worker, resuming from the last completed phase (e.g., if planning was done, it skips straight to developing).
+- **Retry** — re-queues a failed ticket manually and clears the prompt-submission requeue counter for a fresh retry cycle.
 - **Live Terminal** — click any active ticket to view real-time worker output
 - **Delete** — remove any ticket from the board
 
@@ -317,6 +318,8 @@ WORKING_HOURS_END=18:00
 WORKING_HOURS_DAYS=mon,tue,wed,thu,fri
 ```
 
+Deterministic interactive prompt-submission failures are excluded from watchdog auto-retry. They get one worker-managed requeue, then fail hard on repeat until you use the manual **Retry** action.
+
 **Schedules:** Create recurring (cron) or one-time schedules from the Scheduler tab. Schedules re-run tickets already on the board — they don't create new tickets.
 
 ---
@@ -327,7 +330,7 @@ WORKING_HOURS_DAYS=mon,tue,wed,thu,fri
 
 Each ticket goes through: **Todo → Queued → Planning → Developing → Review → Done**
 
-The orchestrator picks queued tickets, creates a git worktree for each, spawns an AI agent worker, and streams output to the dashboard in real-time. On completion, it opens a draft PR and moves the ticket to Review. On failure, the watchdog can auto-retry.
+The orchestrator picks queued tickets, creates a git worktree for each, spawns an AI agent worker, and streams output to the dashboard in real-time. On completion, it opens a draft PR and moves the ticket to Review. On failure, the watchdog can auto-retry unless the failure was a deterministic prompt-submission drop, which gets one automatic requeue and then stops retrying.
 
 ### Phase Pipeline
 

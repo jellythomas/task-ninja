@@ -18,6 +18,8 @@ from models.ticket import TicketState
 
 logger = logging.getLogger(__name__)
 
+_DETERMINISTIC_PROMPT_SUBMISSION_ERROR_PREFIX = "Interactive prompt submission failed:"
+
 
 class TicketWatchdog:
     """Manages per-ticket timers for retry and staleness detection."""
@@ -53,7 +55,7 @@ class TicketWatchdog:
         self._cancel_timer(ticket_id)
         self._retry_counts.pop(ticket_id, None)
 
-    def on_ticket_failed(self, ticket_id: str):
+    def on_ticket_failed(self, ticket_id: str, error: str | None = None):
         """Called when a ticket fails."""
         self._cancel_timer(ticket_id)
 
@@ -119,7 +121,7 @@ class TicketWatchdog:
         await self.broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.FAILED, error=error)
 
         # Auto-retry will be triggered by on_ticket_failed if enabled
-        self.on_ticket_failed(ticket_id)
+        self.on_ticket_failed(ticket_id, error)
 
     async def _on_retry(self, ticket_id: str):
         """Retry a failed ticket by re-queuing it."""
@@ -138,7 +140,8 @@ class TicketWatchdog:
         count = self._retry_counts.get(ticket_id, 0)
         logger.info("%s: retrying (attempt %d)", ticket_id, count)
 
-        await self.state.update_ticket(ticket_id, state=TicketState.QUEUED, error=None)
+        # Reset prompt_submit_requeues so the fresh worker gets a full retry budget
+        await self.state.update_ticket(ticket_id, state=TicketState.QUEUED, error=None, prompt_submit_requeues=0)
         await self.broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.QUEUED)
 
         if self._requeue_callback:
@@ -164,6 +167,9 @@ class TicketWatchdog:
 
     def _is_auto_retry_enabled(self) -> bool:
         return get_env("AUTO_RETRY_ENABLED", "false").lower() == "true"
+
+    def _is_deterministic_prompt_submission_failure(self, error: str | None) -> bool:
+        return (error or "").startswith(_DETERMINISTIC_PROMPT_SUBMISSION_ERROR_PREFIX)
 
     def _get_retry_delay(self) -> int:
         """Get retry delay in seconds."""
