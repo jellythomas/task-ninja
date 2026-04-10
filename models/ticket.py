@@ -37,6 +37,7 @@ class Ticket(BaseModel):
     jira_key: str
     summary: str | None = None
     state: TicketState = TicketState.TODO
+    prompt_submit_requeues: int = 0
     rank: int = 0
     branch_name: str | None = None
     worktree_path: str | None = None

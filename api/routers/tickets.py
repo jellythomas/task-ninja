@@ -405,7 +405,7 @@ async def retry_ticket(
             )
             await git._remove_worktree(Path(ticket.worktree_path))
 
-    await state.update_ticket(ticket_id, error=None, worker_pid=None, paused=False)
+    await state.update_ticket(ticket_id, error=None, worker_pid=None, paused=False, prompt_submit_requeues=0)
     await state.update_ticket_state(ticket_id, TicketState.QUEUED)
     await broadcaster.broadcast_ticket_update(ticket.run_id, ticket_id, TicketState.QUEUED)
 

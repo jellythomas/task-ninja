@@ -104,10 +104,7 @@ class Orchestrator:
             return True
 
         # Signal 3: pr_url is set (only relevant for review phase)
-        if phase_state == TicketState.REVIEW and ticket.pr_url:
-            return True
-
-        return False
+        return bool(phase_state == TicketState.REVIEW and ticket.pr_url)
 
     async def _recover_stale_tickets(self, run_id: str) -> None:
         """Move orphaned planning/developing/review tickets back to queued.
@@ -254,7 +251,7 @@ class Orchestrator:
             self._workers.pop(tid, None)
             ticket = await self.state.get_ticket(tid)
             if ticket and ticket.state == TicketState.FAILED:
-                self.watchdog.on_ticket_failed(tid)
+                self.watchdog.on_ticket_failed(tid, ticket.error)
                 if self.notifier:
                     await self.notifier.notify_ticket_failed(ticket.jira_key, tid, ticket.error or "")
             elif ticket and ticket.state in (TicketState.DONE, TicketState.REVIEW):
@@ -371,14 +368,12 @@ class Orchestrator:
         for tid in self._workers:
             t = await self.state.get_ticket(tid)
             if t and t.predicted_files:
-                try:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
                     active_files.update(json.loads(t.predicted_files))
-                except (json.JSONDecodeError, TypeError):
-                    pass
 
         # Filter: skip candidates whose predicted files overlap with active workers
         result = []
-        for score, ticket in scored:
+        for _score, ticket in scored:
             if ticket.predicted_files:
                 try:
                     candidate_files = set(json.loads(ticket.predicted_files))
@@ -529,7 +524,7 @@ class Orchestrator:
             await self.broadcaster.broadcast_ticket_update(
                 self._run_id, ticket_id, TicketState.FAILED, error=error
             )  # DB state is already FAILED — broadcast is best-effort
-        self.watchdog.on_ticket_failed(ticket_id)
+        self.watchdog.on_ticket_failed(ticket_id, error)
         if self.notifier:
             await self.notifier.notify_ticket_failed(jira_key=None, ticket_id=ticket_id, error=error)
 

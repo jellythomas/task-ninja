@@ -1991,7 +1991,7 @@
         mismatchModal: { show: false, ticketId: null, jiraKey: '', currentParent: '', expectedParent: '', resolving: false },
         editRepoModal: { show: false, id: null, data: {} },
         editProfileModal: { show: false, id: null, data: {}, showPhases: false, phases: [] },
-        openTerminals: [],  // Array of { ticketId, ticketKey, cwd, xterm, fitAddon, ws, resizeHandler }
+        openTerminals: [],  // Array of { ticketId, ticketKey, cwd, xterm, fitAddon, ws, resizeHandler, manualClose, reconnectTimer, reconnectAttempts }
         terminalMinimized: false,  // true = overlay hidden, floating pill shown
         activeTerminalId: null,  // ticketId of active tab in fullscreen terminal
         terminalHeight: parseInt(localStorage.getItem('tn_terminalHeight') || '224'),
@@ -2001,6 +2001,7 @@
         terminalLogs: {},
         terminalFetched: {},
         closedInlineTabs: new Set(),  // ticket IDs manually closed by user
+        closedInteractiveTerminals: new Set(),  // ticket IDs manually dismissed by user while active
         settings: {
           workerTimeout: 30,
           cleanupWorktrees: true,
@@ -2557,14 +2558,128 @@
           return ticket && ['planning', 'developing'].includes(ticket.state);
         },
 
+        _clearTerminalReconnect(entry) {
+          if (entry?.reconnectTimer) {
+            clearTimeout(entry.reconnectTimer);
+            entry.reconnectTimer = null;
+          }
+        },
+
+        _sendTerminalResize(entry) {
+          if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN || !entry.xterm) return;
+          entry.ws.send(JSON.stringify({ type: 'resize', rows: entry.xterm.rows, cols: entry.xterm.cols }));
+        },
+
+        _scheduleTerminalRedraw(entry, delay = 150) {
+          setTimeout(() => {
+            if (entry?.ws && entry.ws.readyState === WebSocket.OPEN) {
+              entry.ws.send(new TextEncoder().encode('\x0c'));
+            }
+          }, delay);
+        },
+
+        _shouldReconnectTerminal(entry, evt) {
+          if (!entry || entry.manualClose || !this.openTerminals.includes(entry)) return false;
+          if (this.closedInteractiveTerminals.has(entry.ticketId)) return false;
+          const ticket = this.tickets.find(t => t.id === entry.ticketId);
+          if (!this.isTicketActive(ticket)) return false;
+          if (entry.reconnectTimer) return false;
+          return evt.code === 4101 || ![1000, 4001, 4004, 4005].includes(evt.code);
+        },
+
+        _scheduleTerminalReconnect(entry) {
+          if (!entry || entry.manualClose || !this.openTerminals.includes(entry) || entry.reconnectTimer) return;
+          entry.reconnectAttempts = (entry.reconnectAttempts || 0) + 1;
+          const delay = Math.min(3000, Math.max(500, entry.reconnectAttempts * 500));
+          entry.reconnectTimer = setTimeout(() => {
+            entry.reconnectTimer = null;
+            if (!this._shouldReconnectTerminal(entry, { code: 4101 })) return;
+            this._connectInteractiveTerminal(entry);
+          }, delay);
+        },
+
+        _connectInteractiveTerminal(entry) {
+          if (!entry || entry.manualClose || !this.openTerminals.includes(entry)) return;
+          if (entry.ws && entry.ws.readyState !== WebSocket.CLOSED) return;
+
+          const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const token = this._authToken || localStorage.getItem('tn_auth_token') || '';
+          const ws = new WebSocket(`${proto}//${location.host}/ws/terminal/${entry.ticketId}?token=${encodeURIComponent(token)}&allow_adhoc=0`);
+          ws.binaryType = 'arraybuffer';
+          entry.ws = ws;
+
+          let wsConnected = false;
+          const term = entry.xterm;
+          const fitAddon = entry.fitAddon;
+          const isMobile = window.innerWidth < 640;
+
+          ws.onopen = () => {
+            if (entry.ws !== ws || !term || !fitAddon) return;
+            wsConnected = true;
+            entry.reconnectAttempts = 0;
+            this._clearTerminalReconnect(entry);
+            fitAddon.fit();
+            this._sendTerminalResize(entry);
+            this._scheduleTerminalRedraw(entry, isMobile ? 600 : 400);
+          };
+
+          ws.onmessage = (evt) => {
+            if (entry.ws !== ws || !term) return;
+            if (evt.data instanceof ArrayBuffer) {
+              term.write(new Uint8Array(evt.data));
+            } else if (typeof evt.data === 'string') {
+              try {
+                const msg = JSON.parse(evt.data);
+                if (msg.type === 'pong') return;
+                if (msg.type === 'process_exit') {
+                  term.write(`\r\n\x1b[33m[Process exited with code ${msg.code}]\x1b[0m\r\n`);
+                  return;
+                }
+              } catch {}
+              term.write(evt.data);
+            }
+          };
+
+          ws.onclose = (evt) => {
+            if (entry.ws && entry.ws !== ws) return;
+            if (entry.ws === ws) entry.ws = null;
+            if (!term || entry.manualClose || !this.openTerminals.includes(entry)) return;
+
+            const shouldReconnect = this._shouldReconnectTerminal(entry, evt);
+            if (evt.code === 4004) {
+              term.write('\r\n\x1b[33m⏸ No running process. Worker may have finished.\x1b[0m\r\n');
+            } else if (shouldReconnect && evt.code === 4101) {
+              term.write('\r\n\x1b[33m⏳ Terminal stream ended. Reconnecting…\x1b[0m\r\n');
+            } else if (shouldReconnect) {
+              term.write('\r\n\x1b[33m⏳ Connection lost (' + evt.code + '). Reconnecting…\x1b[0m\r\n');
+            } else if (!wsConnected) {
+              term.write('\r\n\x1b[33m⏸ Could not connect (code ' + evt.code + ').\x1b[0m\r\n');
+            } else if (evt.code !== 1000) {
+              term.write('\r\n\x1b[31m[Connection closed: ' + evt.code + ']\x1b[0m\r\n');
+            }
+
+            if (shouldReconnect) {
+              this._scheduleTerminalReconnect(entry);
+            }
+          };
+
+          ws.onerror = () => {};
+        },
+
         async openInteractiveTerminal(ticketId) {
           const ticket = this.tickets.find(t => t.id === ticketId);
           if (!ticket) return;
+          this.closedInteractiveTerminals.delete(ticketId);
 
           // If already open, switch to its tab and restore from minimized
-          if (this.openTerminals.find(t => t.ticketId === ticketId)) {
+          const existingEntry = this.openTerminals.find(t => t.ticketId === ticketId);
+          if (existingEntry) {
             this.activeTerminalId = ticketId;
             this.terminalMinimized = false;
+            this._clearTerminalReconnect(existingEntry);
+            if (!existingEntry.ws || existingEntry.ws.readyState === WebSocket.CLOSED) {
+              this._connectInteractiveTerminal(existingEntry);
+            }
             this.$nextTick(() => this._refitAllTerminals());
             return;
           }
@@ -2573,7 +2688,7 @@
 
           // Max 4 terminals
           if (this.openTerminals.length >= 4) {
-            this.closeTerminal(this.openTerminals[0].ticketId);
+            this.closeTerminal(this.openTerminals[0].ticketId, { manual: false });
           }
 
           // Add entry (xterm created after DOM renders)
@@ -2581,6 +2696,7 @@
             ticketId, ticketKey: ticket.jira_key,
             cwd: ticket.worktree_path || '',
             xterm: null, fitAddon: null, ws: null, resizeHandler: null,
+            manualClose: false, reconnectTimer: null, reconnectAttempts: 0,
           });
           this.activeTerminalId = ticketId;
 
@@ -2625,23 +2741,11 @@
               fitAddon.fit();
               // Send corrected size to PTY if ws is already open
               if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
-                entry.ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
-                setTimeout(() => {
-                  if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
-                    entry.ws.send(new TextEncoder().encode('\x0c'));
-                  }
-                }, 150);
+                this._sendTerminalResize(entry);
+                this._scheduleTerminalRedraw(entry);
               }
             }, 350);
           }
-
-          // WebSocket
-          const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-          const token = this._authToken || localStorage.getItem('tn_auth_token') || '';
-          const ws = new WebSocket(`${proto}//${location.host}/ws/terminal/${ticketId}?token=${encodeURIComponent(token)}`);
-          ws.binaryType = 'arraybuffer';
-          entry.ws = ws;
-          let wsConnected = false;
 
           // --- Mobile touch-scroll fix (backport of xterm.js v6.0.0 approach) ---
           // In xterm.js 5.5.0, when mouse mode is active (tmux `mouse on`), the
@@ -2690,8 +2794,8 @@
                   const seq = `\x1b[<${btn};1;1M`;
                   let payload = '';
                   for (let i = 0; i < abs; i++) payload += seq;
-                  if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(new TextEncoder().encode(payload));
+                  if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                    entry.ws.send(new TextEncoder().encode(payload));
                   }
                 } else {
                   // No mouse mode: scroll the viewport directly
@@ -2707,53 +2811,12 @@
             }
           }
 
-          ws.onopen = () => {
-            wsConnected = true;
-            // Re-fit once more to ensure correct dimensions before sending to PTY
-            fitAddon.fit();
-            ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
-            // After scrollback replay settles, force CLI to redraw at correct size.
-            // attach_viewer sends old-width scrollback before this resize takes effect.
-            setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(new TextEncoder().encode('\x0c'));  // Ctrl+L = full redraw
-              }
-            }, isMobile ? 600 : 400);
-          };
-          // --- WebSocket → xterm rendering ---
-          // Let xterm.js handle all scroll behaviour natively.
-          ws.onmessage = (evt) => {
-            if (evt.data instanceof ArrayBuffer) {
-              term.write(new Uint8Array(evt.data));
-            } else if (typeof evt.data === 'string') {
-              try {
-                const msg = JSON.parse(evt.data);
-                if (msg.type === 'pong') return;
-                if (msg.type === 'process_exit') {
-                  term.write(`\r\n\x1b[33m[Process exited with code ${msg.code}]\x1b[0m\r\n`);
-                  return;
-                }
-              } catch {}
-              term.write(evt.data);
-            }
-          };
-          ws.onclose = (evt) => {
-            if (evt.code === 4004) {
-              term.write('\r\n\x1b[33m⏸ No running process. Worker may have finished.\x1b[0m\r\n');
-            } else if (!wsConnected) {
-              term.write('\r\n\x1b[33m⏸ Could not connect (code ' + evt.code + ').\x1b[0m\r\n');
-            } else if (evt.code !== 1000) {
-              term.write('\r\n\x1b[31m[Connection closed: ' + evt.code + ']\x1b[0m\r\n');
-            }
-          };
-          ws.onerror = () => {};
-
           // Handle Shift+Enter → send newline escape sequence for Claude Code
           term.attachCustomKeyEventHandler((evt) => {
             if (evt.key === 'Enter' && evt.shiftKey) {
-              if (evt.type === 'keydown' && ws.readyState === WebSocket.OPEN) {
+              if (evt.type === 'keydown' && entry.ws && entry.ws.readyState === WebSocket.OPEN) {
                 // Send Shift+Enter as CSI u sequence (kitty keyboard protocol)
-                ws.send(new TextEncoder().encode('\x1b[13;2u'));
+                entry.ws.send(new TextEncoder().encode('\x1b[13;2u'));
               }
               return false; // Block both keydown and keypress to prevent \r
             }
@@ -2761,12 +2824,16 @@
           });
 
           term.onData((data) => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+              entry.ws.send(new TextEncoder().encode(data));
+            }
           });
 
           // Resize handler — delegates to _refitAllTerminals (includes dynamic font sizing)
           entry.resizeHandler = () => this._refitAllTerminals();
           window.addEventListener('resize', entry.resizeHandler);
+
+          this._connectInteractiveTerminal(entry);
 
           // Re-fit all terminals since grid layout changed (existing terminals get new container sizes)
           this._refitAllTerminals();
@@ -2807,12 +2874,21 @@
           await this.api('POST', `/api/tickets/${ticketId}/interrupt`);
         },
 
-        closeTerminal(ticketId) {
+        closeTerminal(ticketId, { manual = true } = {}) {
           const idx = this.openTerminals.findIndex(t => t.ticketId === ticketId);
           if (idx === -1) return;
           const entry = this.openTerminals[idx];
+          entry.manualClose = manual;
+          if (manual) this.closedInteractiveTerminals.add(ticketId);
+          this._clearTerminalReconnect(entry);
           if (entry.resizeHandler) window.removeEventListener('resize', entry.resizeHandler);
-          if (entry.ws) entry.ws.close();
+          if (entry.ws) {
+            const ws = entry.ws;
+            entry.ws = null;
+            if (ws.readyState < WebSocket.CLOSING) {
+              ws.close(1000, 'Terminal closed');
+            }
+          }
           if (entry.xterm) entry.xterm.dispose();
           this.openTerminals.splice(idx, 1);
           // If we closed the active tab, switch to an adjacent one
@@ -3394,16 +3470,20 @@
                 // Auto-open inline log tab (only when actively running, not paused)
                 this.openInlineTerminal(data.ticket_id);
                 // Auto-spawn fullscreen xterm if not already open
-                if (!this.openTerminals.find(t => t.ticketId === data.ticket_id)) {
+                if (
+                  !this.closedInteractiveTerminals.has(data.ticket_id)
+                  && !this.openTerminals.find(t => t.ticketId === data.ticket_id)
+                ) {
                   this.openInteractiveTerminal(data.ticket_id);
                 }
               }
               // Auto-close xterm when state transitions TO review/done/failed (not on PID-only updates)
               if (data.state && ['review', 'done', 'failed'].includes(data.state)) {
+                this.closedInteractiveTerminals.delete(data.ticket_id);
                 const prevState = idx >= 0 ? (this.tickets[idx]._prevState || '') : '';
                 if (prevState && !['review', 'done', 'failed'].includes(prevState)) {
                   if (this.openTerminals.find(t => t.ticketId === data.ticket_id)) {
-                    this.closeTerminal(data.ticket_id);
+                    this.closeTerminal(data.ticket_id, { manual: false });
                   }
                 }
               }
