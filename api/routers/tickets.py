@@ -529,3 +529,48 @@ async def delete_schedule(
     run_scheduler.remove_schedule(schedule_id)
     await state.delete_schedule(schedule_id)
     return {"status": "deleted"}
+
+
+# --- PR & Review Comment Triage ---
+
+
+@router.post("/api/tickets/{ticket_id}/create-pr")
+async def create_pr_for_ticket(
+    ticket_id: str,
+    orchestrator: Orchestrator = Depends(get_orchestrator),
+    state: StateManager = Depends(get_state),
+):
+    """Manually trigger PR creation via Bitbucket API for a ticket."""
+    ticket = await state.get_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(404, "Ticket not found")
+    if ticket.pr_url:
+        return {"status": "exists", "pr_url": ticket.pr_url, "pr_number": ticket.pr_number}
+
+    # Refresh ticket after PR creation to get updated pr_url
+    ticket = await state.get_ticket(ticket_id)
+    if ticket and not ticket.pr_url:
+        await orchestrator._create_pr_for_ticket(ticket)
+
+    ticket = await state.get_ticket(ticket_id)
+    if not ticket or not ticket.pr_url:
+        raise HTTPException(400, "PR creation failed")
+
+    return {
+        "status": "created",
+        "pr_url": ticket.pr_url,
+        "pr_number": ticket.pr_number,
+    }
+
+
+@router.post("/api/tickets/{ticket_id}/address-comments")
+async def address_review_comments(
+    ticket_id: str,
+    orchestrator: Orchestrator = Depends(get_orchestrator),
+):
+    """Trigger review comment triage — fetch PR comments and queue revision."""
+    try:
+        result = await orchestrator.address_review_comments(ticket_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e

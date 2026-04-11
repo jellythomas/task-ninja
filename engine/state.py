@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 
 from datetime import datetime
@@ -59,7 +60,21 @@ class StateManager:
 
     async def _setup_db(self, db: aiosqlite.Connection) -> None:
         db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
+        try:
+            await db.execute("PRAGMA journal_mode=WAL")
+        except Exception as e:
+            logger.warning("WAL pragma failed (%s), removing stale WAL/SHM files and retrying", e)
+            # Close and remove corrupted WAL/SHM files
+            wal_path = self.db_path + "-wal"
+            shm_path = self.db_path + "-shm"
+            for path in (wal_path, shm_path):
+                try:
+                    os.remove(path)
+                    logger.info("Removed %s", path)
+                except FileNotFoundError:
+                    pass
+            # Retry — if this also fails, let it propagate
+            await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA foreign_keys=ON")
 
     # --- Runs ---

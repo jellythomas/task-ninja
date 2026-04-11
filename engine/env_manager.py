@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 ENV_PATH = Path(__file__).parent.parent / ".env"
 
 # Keys that are considered secrets (masked in API responses)
-SECRET_KEYS = {"JIRA_API_TOKEN", "BITBUCKET_APP_PASSWORD", "TASK_NINJA_SECRET_HASH"}
+SECRET_KEYS = {"JIRA_API_TOKEN", "BITBUCKET_APP_PASSWORD", "BITBUCKET_API_TOKEN", "TASK_NINJA_SECRET_HASH"}
 
 # All recognized .env keys with defaults
 ENV_DEFAULTS = {
@@ -28,6 +28,7 @@ ENV_DEFAULTS = {
     "JIRA_API_TOKEN": "",
     "BITBUCKET_WORKSPACE": "",
     "BITBUCKET_USERNAME": "",
+    "BITBUCKET_API_TOKEN": "",
     "BITBUCKET_APP_PASSWORD": "",
     "NOTIFICATIONS_ENABLED": "false",
     "VAPID_PUBLIC_KEY": "",
@@ -75,7 +76,7 @@ def _write_env_file(path: Path, values: dict[str, str]) -> None:
             "TASK_NINJA_REMOTE_ACCESS",
         ],
         "Jira": ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"],
-        "Bitbucket": ["BITBUCKET_WORKSPACE", "BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD"],
+        "Bitbucket": ["BITBUCKET_WORKSPACE", "BITBUCKET_USERNAME", "BITBUCKET_API_TOKEN", "BITBUCKET_APP_PASSWORD"],
         "Notifications": ["NOTIFICATIONS_ENABLED", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_EMAIL"],
         "Scheduler": [
             "AUTO_RETRY_ENABLED",

@@ -41,7 +41,7 @@ async def update_repository(
     req: UpdateRepositoryRequest,
     state: StateManager = Depends(get_state),
 ):
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates = req.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(400, "No fields to update")
     repo = await state.update_repository(repo_id, **updates)

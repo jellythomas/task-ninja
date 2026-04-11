@@ -1398,8 +1398,20 @@
                         <span class="text-gray-300 font-mono ml-1" x-text="ticket.worker_pid"></span>
                       </div>
                     </template>
-                    <!-- Terminal buttons (only for active tickets) -->
-                    <div class="flex gap-2 mt-1.5 pt-1.5 border-t border-gray-700/50">
+                    <!-- Action buttons -->
+                    <div class="flex gap-2 mt-1.5 pt-1.5 border-t border-gray-700/50 flex-wrap">
+                      <template x-if="ticket.state === 'review' && !ticket.pr_url">
+                        <button @click.stop="createPrForTicket(ticket.id)" class="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition font-medium">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                          Create PR
+                        </button>
+                      </template>
+                      <template x-if="ticket.state === 'review' && ticket.pr_url">
+                        <button @click.stop="addressReviewComments(ticket.id)" class="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition font-medium">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+                          Address Comments
+                        </button>
+                      </template>
                       <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="flex items-center gap-1 text-[10px] text-cyan-400 hover:text-cyan-300 transition">
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         Live Terminal
@@ -1458,6 +1470,12 @@
                   </template>
                   <template x-if="ticket.pr_url">
                     <a :href="ticket.pr_url" target="_blank" @click.stop class="text-[10px] text-purple-400 hover:text-purple-300">View PR</a>
+                  </template>
+                  <template x-if="ticket.state === 'review' && !ticket.pr_url">
+                    <button @click.stop="createPrForTicket(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-400 hover:bg-purple-500/25 transition">Create PR</button>
+                  </template>
+                  <template x-if="ticket.state === 'review' && ticket.pr_url">
+                    <button @click.stop="addressReviewComments(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition">Address Comments</button>
                   </template>
                   <button x-show="isTicketActive(ticket)" @click.stop="openInteractiveTerminal(ticket.id)" class="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition flex items-center gap-1">
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
@@ -1788,11 +1806,11 @@
 
   <!-- Edit Repo Modal -->
   <div x-show="editRepoModal.show" x-transition class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="editRepoModal.show = false">
-    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md mx-4">
-      <div class="px-5 py-4 border-b border-gray-800">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md mx-4 max-h-[90vh] flex flex-col">
+      <div class="px-5 py-4 border-b border-gray-800 flex-shrink-0">
         <h3 class="text-base font-semibold text-white">Edit Repository</h3>
       </div>
-      <div class="px-5 py-4 space-y-3">
+      <div class="px-5 py-4 space-y-3 overflow-y-auto">
         <div>
           <label class="text-xs text-gray-400 block mb-1">Name</label>
           <input x-model="editRepoModal.data.name" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
@@ -1819,6 +1837,44 @@
               <option :value="p.id" x-text="p.name"></option>
             </template>
           </select>
+        </div>
+
+        <!-- GChat & PR Config -->
+        <div class="border-t border-gray-800 pt-3 mt-3">
+          <h4 class="text-xs font-semibold text-gray-300 uppercase tracking-wide mb-2">Google Chat Notifications</h4>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">GChat Webhook URL</label>
+            <input x-model="editRepoModal.data.gchat_webhook_url" type="text" placeholder="https://chat.googleapis.com/v1/spaces/..." class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+          <div class="mt-2">
+            <label class="text-xs text-gray-400 block mb-1">Space Name (display only)</label>
+            <input x-model="editRepoModal.data.gchat_space_name" type="text" placeholder="[Dev] Flex" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+        </div>
+
+        <div class="border-t border-gray-800 pt-3 mt-3">
+          <h4 class="text-xs font-semibold text-gray-300 uppercase tracking-wide mb-2">PR Creation</h4>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">PR Title Format</label>
+            <input x-model="editRepoModal.data.pr_title_format" type="text" placeholder="${type}(${ticket}): ${summary} [FULL_COPILOT]" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+          <div class="mt-2">
+            <label class="text-xs text-gray-400 block mb-1">Default Reviewers (comma-separated emails)</label>
+            <input x-model="editRepoModal.data.default_reviewers_text" type="text" placeholder="alice@mekari.com, bob@mekari.com" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
+          <div class="mt-2">
+            <label class="text-xs text-gray-400 block mb-1">PR Description Template</label>
+            <textarea x-model="editRepoModal.data.pr_template" rows="4" placeholder="## Summary&#10;${commit_bullets}&#10;&#10;## Changes&#10;${diff_stat}" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full font-mono"></textarea>
+            <p class="text-[10px] text-gray-500 mt-1">Variables: <code>${commit_bullets}</code> <code>${diff_stat}</code> <code>${file_count}</code> <code>${additions}</code> <code>${deletions}</code> <code>${jira_key}</code> <code>${summary}</code> <code>${branch_name}</code> <code>${jira_url}</code></p>
+          </div>
+        </div>
+
+        <div class="border-t border-gray-800 pt-3 mt-3">
+          <h4 class="text-xs font-semibold text-gray-300 uppercase tracking-wide mb-2">Review Triage</h4>
+          <div>
+            <label class="text-xs text-gray-400 block mb-1">Bot Filter (comma-separated usernames to ignore)</label>
+            <input x-model="editRepoModal.data.review_bot_filter_text" type="text" placeholder="jenkins, ci-bot, bitbucket-pipelines" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-full">
+          </div>
         </div>
       </div>
       <div class="px-5 py-3 border-t border-gray-800 flex justify-end gap-2">
@@ -1864,19 +1920,17 @@
             <svg class="w-3.5 h-3.5 text-gray-500 transition-transform" :class="editProfileModal.showPhases && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
           </button>
           <div x-show="editProfileModal.showPhases" x-transition class="px-3 py-3 space-y-3 border-t border-gray-700/50">
-            <p class="text-[10px] text-gray-500">Configure prompts per phase. Use <code class="text-blue-400">{JIRA_KEY}</code> as placeholder. One prompt per line.</p>
-            <template x-for="(phase, idx) in editProfileModal.phases" :key="phase.phase">
+            <p class="text-[10px] text-gray-500">Configure prompts per phase. Use <code class="text-blue-400">{JIRA_KEY}</code> and <code class="text-blue-400">{PARENT_BRANCH}</code> as placeholders. One prompt per line.</p>
+            <p class="text-[10px] text-gray-500">Completion markers are auto-injected by the system. PR creation is handled by task-ninja after developing completes.</p>
+            <template x-for="(phase, idx) in editProfileModal.phases.filter(p => p.phase !== 'review')" :key="phase.phase">
               <div class="space-y-1.5">
                 <div class="flex items-center gap-2">
-                  <span class="text-xs font-medium capitalize" :class="phase.phase === 'planning' ? 'text-yellow-400' : phase.phase === 'developing' ? 'text-blue-400' : 'text-emerald-400'" x-text="phase.phase"></span>
+                  <span class="text-xs font-medium capitalize" :class="phase.phase === 'planning' ? 'text-yellow-400' : 'text-blue-400'" x-text="phase.phase"></span>
+                  <span class="text-[9px] text-gray-600 font-mono" x-text="phase.phase === 'planning' ? '[PLANNING_COMPLETE]' : '[DEVELOPING_COMPLETE]'"></span>
                 </div>
                 <div>
                   <label class="text-[10px] text-gray-500 block mb-0.5">Prompts <span class="text-gray-600">(one per line)</span></label>
-                  <textarea x-model="phase.promptsText" rows="2" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs w-full font-mono focus:border-blue-500 focus:outline-none resize-y" :placeholder="phase.phase === 'planning' ? '/planning-task {JIRA_KEY}' : phase.phase === 'developing' ? '/developing-task {JIRA_KEY}' : '/open-pr --draft'"></textarea>
-                </div>
-                <div>
-                  <label class="text-[10px] text-gray-500 block mb-0.5">Completion Marker <span class="text-gray-600">(optional)</span></label>
-                  <input x-model="phase.marker" type="text" class="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs w-full font-mono focus:border-blue-500 focus:outline-none" :placeholder="phase.phase === 'planning' ? '[PLANNING_COMPLETE]' : phase.phase === 'developing' ? '[DEVELOPING_COMPLETE]' : '[PR_COMPLETE]'">
+                  <textarea x-model="phase.promptsText" rows="2" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs w-full font-mono focus:border-blue-500 focus:outline-none resize-y" :placeholder="phase.phase === 'planning' ? '/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}' : '/developing-task {JIRA_KEY} parent:{PARENT_BRANCH}'"></textarea>
                 </div>
               </div>
             </template>
@@ -2438,15 +2492,48 @@
         },
 
         editRepo(repo) {
+          // Parse JSON arrays back to comma-separated text for editing
+          let reviewersText = '';
+          try { reviewersText = JSON.parse(repo.default_reviewers || '[]').join(', '); } catch {}
+          let botFilterText = '';
+          try { botFilterText = JSON.parse(repo.review_bot_filter || '["jenkins","ci-bot","bitbucket-pipelines"]').join(', '); } catch {}
+
           this.editRepoModal = {
             show: true, id: repo.id,
-            data: { name: repo.name, path: repo.path, default_branch: repo.default_branch, jira_label: repo.jira_label || '', default_profile_id: repo.default_profile_id || '' },
+            data: {
+              name: repo.name, path: repo.path, default_branch: repo.default_branch,
+              jira_label: repo.jira_label || '', default_profile_id: repo.default_profile_id || '',
+              gchat_webhook_url: repo.gchat_webhook_url || '',
+              gchat_space_name: repo.gchat_space_name || '',
+              pr_title_format: repo.pr_title_format || '${type}(${ticket}): ${summary} [FULL_COPILOT]',
+              pr_template: repo.pr_template || '',
+              default_reviewers_text: reviewersText,
+              review_bot_filter_text: botFilterText,
+            },
           };
         },
 
         async saveRepoEdit() {
           const updates = { ...this.editRepoModal.data };
           if (updates.default_profile_id === '') updates.default_profile_id = null;
+
+          // Convert comma-separated text to JSON arrays
+          if (updates.default_reviewers_text !== undefined) {
+            const emails = updates.default_reviewers_text.split(',').map(e => e.trim()).filter(Boolean);
+            updates.default_reviewers = emails.length ? JSON.stringify(emails) : null;
+            delete updates.default_reviewers_text;
+          }
+          if (updates.review_bot_filter_text !== undefined) {
+            const bots = updates.review_bot_filter_text.split(',').map(b => b.trim()).filter(Boolean);
+            updates.review_bot_filter = bots.length ? JSON.stringify(bots) : null;
+            delete updates.review_bot_filter_text;
+          }
+
+          // Clean empty strings to null
+          if (!updates.gchat_webhook_url) updates.gchat_webhook_url = null;
+          if (!updates.gchat_space_name) updates.gchat_space_name = null;
+          if (!updates.pr_template) updates.pr_template = null;
+
           const repo = await this.api('PUT', `/api/repositories/${this.editRepoModal.id}`, updates);
           if (repo) {
             const idx = this.repositories.findIndex(r => r.id === this.editRepoModal.id);
@@ -2472,19 +2559,19 @@
             data: { name: '', command: '', args_template: '', log_format: 'plain-text' },
             showPhases: false,
             phases: [
-              { phase: 'planning', promptsText: '', marker: '' },
-              { phase: 'developing', promptsText: '', marker: '' },
-              { phase: 'review', promptsText: '', marker: '' },
+              { phase: 'planning', promptsText: '' },
+              { phase: 'developing', promptsText: '' },
             ],
           };
         },
 
         _serializePhasesConfig() {
-          const phases = this.editProfileModal.phases.map(p => ({
-            phase: p.phase,
-            prompts: p.promptsText.split('\n').map(s => s.trim()).filter(Boolean),
-            marker: p.marker.trim(),
-          }));
+          const phases = this.editProfileModal.phases
+            .filter(p => p.phase !== 'review')  // review handled by engine
+            .map(p => ({
+              phase: p.phase,
+              prompts: p.promptsText.split('\n').map(s => s.trim()).filter(Boolean),
+            }));
           const hasAnyPrompt = phases.some(p => p.prompts.length > 0);
           return hasAnyPrompt ? JSON.stringify(phases) : null;
         },
@@ -2510,18 +2597,17 @@
 
         editProfile(profile) {
           const defaultPhases = [
-            { phase: 'planning', prompts: [], marker: '' },
-            { phase: 'developing', prompts: [], marker: '' },
-            { phase: 'review', prompts: [], marker: '' },
+            { phase: 'planning', prompts: [] },
+            { phase: 'developing', prompts: [] },
           ];
           let phases = defaultPhases;
           try {
             const parsed = profile.phases_config ? JSON.parse(profile.phases_config) : null;
             if (Array.isArray(parsed) && parsed.length > 0) {
-              phases = parsed.map(p => ({
+              // Filter out review phase (handled by engine now)
+              phases = parsed.filter(p => p.phase !== 'review').map(p => ({
                 phase: p.phase || '',
                 prompts: Array.isArray(p.prompts) ? p.prompts : [],
-                marker: p.marker || '',
               }));
             }
           } catch (e) { /* use defaults */ }
@@ -3378,6 +3464,30 @@
         async resumeTicket(ticketId) {
           await this.api('POST', `/api/tickets/${ticketId}/resume`);
           await this.loadRunTickets();
+        },
+
+        async createPrForTicket(ticketId) {
+          const result = await this.api('POST', `/api/tickets/${ticketId}/create-pr`);
+          if (result) {
+            if (result.pr_url) {
+              this.showToast(`PR created: ${result.pr_url}`, 'success');
+            } else if (result.status === 'exists') {
+              this.showToast(`PR already exists: ${result.pr_url}`, 'info');
+            }
+            await this.loadRunTickets();
+          }
+        },
+
+        async addressReviewComments(ticketId) {
+          const result = await this.api('POST', `/api/tickets/${ticketId}/address-comments`);
+          if (result) {
+            if (result.status === 'queued') {
+              this.showToast(`Queued revision: ${result.comment_count} comment(s) to address`, 'success');
+            } else if (result.status === 'no_comments') {
+              this.showToast(result.message || 'No actionable review comments found', 'info');
+            }
+            await this.loadRunTickets();
+          }
         },
 
         deleteTicket(ticketId) {

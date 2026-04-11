@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 
 from engine.bitbucket_client import BitbucketClient
 from engine.broadcaster import Broadcaster
+from engine.gchat_notifier import GChatNotifier
 from engine.git_manager import GitManager
 from engine.jira_client import JiraClient
+from engine.pr_manager import PrManager
 from engine.state import StateManager
 from engine.ticket_watchdog import TicketWatchdog
 from engine.worker import Worker
@@ -39,6 +41,8 @@ class Orchestrator:
         self._run_id: str | None = None
         self.jira_client = JiraClient()
         self.bitbucket_client = BitbucketClient()
+        self.pr_manager = PrManager(state, self.bitbucket_client)
+        self.gchat_notifier = GChatNotifier(state)
         self.notifier = None  # Set by server.py after construction
         self.watchdog = TicketWatchdog(state, broadcaster)
         self.watchdog.set_callbacks(requeue_cb=self._watchdog_requeue)
@@ -225,12 +229,18 @@ class Orchestrator:
     async def _loop(self) -> None:
         """Main orchestration loop."""
         poll_interval = self.config.get("orchestrator", {}).get("poll_interval", 5)
+        consecutive_errors = 0
 
         while self._running:
             try:
                 await self._tick()
+                consecutive_errors = 0
             except Exception as e:
-                logger.exception("Error in tick: %s", e)
+                consecutive_errors += 1
+                backoff = min(poll_interval * (2 ** consecutive_errors), 60)
+                logger.exception("Error in tick (attempt %d, next retry in %ds): %s", consecutive_errors, backoff, e)
+                await asyncio.sleep(backoff)
+                continue
 
             await asyncio.sleep(poll_interval)
 
@@ -254,10 +264,32 @@ class Orchestrator:
                 self.watchdog.on_ticket_failed(tid, ticket.error)
                 if self.notifier:
                     await self.notifier.notify_ticket_failed(ticket.jira_key, tid, ticket.error or "")
+                await self.gchat_notifier.notify_ticket_failed(
+                    repository_id=ticket.repository_id,
+                    jira_key=ticket.jira_key,
+                    ticket_id=tid,
+                    error=ticket.error or "",
+                )
+            elif ticket and ticket.state == TicketState.DEVELOPING and ticket.last_completed_phase == "developing":
+                # All phases done (no review phase) — create PR and move to REVIEW
+                logger.info("Developing complete for %s — creating PR via engine", ticket.jira_key)
+                await self.state.update_ticket_state(tid, TicketState.REVIEW)
+                await self.broadcaster.broadcast_ticket_update(self._run_id, tid, TicketState.REVIEW)
+                ticket = await self.state.get_ticket(tid)  # Refresh
+                await self._create_pr_for_ticket(ticket)
+                self.watchdog.on_ticket_completed(tid)
+                if self.notifier:
+                    await self.notifier.notify_ticket_completed(ticket.jira_key, tid)
+
             elif ticket and ticket.state in (TicketState.DONE, TicketState.REVIEW):
                 self.watchdog.on_ticket_completed(tid)
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, tid)
+
+                # Post-developing hook: create PR via API if not already created
+                if ticket.state == TicketState.REVIEW and not ticket.pr_url:
+                    await self._create_pr_for_ticket(ticket)
+
                 # Only cleanup worktree when truly DONE (not REVIEW — user may need it for PR iteration)
                 if ticket.state == TicketState.DONE:
                     await self._cleanup_worktree(ticket)
@@ -284,6 +316,26 @@ class Orchestrator:
                 )
                 await self.state.update_ticket_state(ticket.id, TicketState.QUEUED)
                 await self.broadcaster.broadcast_ticket_update(self._run_id, ticket.id, TicketState.QUEUED)
+
+        # Post-developing sweep: catch tickets that completed all phases but PR was never
+        # created (e.g. server restarted after developing completed — finished-task callback
+        # at line 273 only fires for tasks that completed in this session).
+        developing_done = await self.state.get_tickets_by_state(self._run_id, TicketState.DEVELOPING)
+        for ticket in developing_done:
+            if ticket.id in self._workers or ticket.id in self._tasks:
+                continue  # Worker still active
+            if ticket.last_completed_phase == "developing" and not ticket.pr_url:
+                logger.info(
+                    "Post-restart sweep: developing complete for %s — creating PR via engine",
+                    ticket.jira_key,
+                )
+                await self.state.update_ticket_state(ticket.id, TicketState.REVIEW)
+                await self.broadcaster.broadcast_ticket_update(self._run_id, ticket.id, TicketState.REVIEW)
+                ticket = await self.state.get_ticket(ticket.id)
+                await self._create_pr_for_ticket(ticket)
+                self.watchdog.on_ticket_completed(ticket.id)
+                if self.notifier:
+                    await self.notifier.notify_ticket_completed(ticket.jira_key, ticket.id)
 
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
@@ -474,9 +526,15 @@ class Orchestrator:
                         logger.warning("Failed to transition Jira issue %s: %s", ticket.jira_key, e)
                 # Cleanup worktree
                 await self._cleanup_worktree(ticket)
-                # Notify
+                # Notify (web push + GChat)
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, ticket.id)
+                await self.gchat_notifier.notify_pr_merged(
+                    repository_id=ticket.repository_id,
+                    jira_key=ticket.jira_key,
+                    pr_number=ticket.pr_number,
+                    pr_url=ticket.pr_url,
+                )
 
             elif state == "declined":
                 logger.info("PR declined for ticket %s — moving to FAILED", ticket.jira_key)
@@ -654,6 +712,25 @@ class Orchestrator:
             except (json.JSONDecodeError, TypeError):
                 phases_config = None
 
+        # Override phases for review_revision: single phase with the review prompt
+        if ticket and ticket.input_type == "review_revision" and ticket.input_data:
+            try:
+                revision_data = json.loads(ticket.input_data)
+                revision_prompt = revision_data.get("prompt", "")
+                if revision_prompt:
+                    phases_config = [
+                        {
+                            "phase": "developing",
+                            "prompts": [revision_prompt],
+                            "marker": "[DEVELOPING_COMPLETE]",
+                        },
+                    ]
+                    # Clear the input fields so it doesn't loop
+                    await self.state.update_ticket(ticket_id, input_type=None, input_data=None, last_completed_phase=None)
+                    logger.info("Review revision mode for %s: injecting %d comment(s) as prompt", jira_key, revision_data.get("comment_count", 0))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         mcp_cfg = self.config.get("mcp", {})
         worker = Worker(
             ticket_id=ticket_id,
@@ -753,6 +830,196 @@ class Orchestrator:
 
         logger.info("Resolved input for %s: %s — %s", ticket.jira_key, choice, result_msg)
         return {"status": "resolved", "choice": choice, "message": result_msg}
+
+    async def _create_pr_for_ticket(self, ticket: Ticket) -> None:
+        """Post-developing hook: create PR via Bitbucket API and send GChat notification.
+
+        Called when a ticket enters REVIEW state without a pr_url.
+        This replaces the AI's /open-pr skill, saving ~10-15k tokens per ticket.
+        """
+        if not await self.bitbucket_client.is_configured():
+            logger.info("Bitbucket not configured — skipping engine PR creation for %s", ticket.jira_key)
+            return
+
+        await self.state.append_log(
+            ticket.id, "[engine] Creating PR via Bitbucket API..."
+        )
+        await self.broadcaster.broadcast_log(
+            self._run_id, ticket.id, "[engine] Creating PR via Bitbucket API..."
+        )
+
+        result = await self.pr_manager.create_pr_for_ticket(ticket.id)
+
+        if result.success:
+            await self.state.append_log(
+                ticket.id, f"[engine] PR #{result.pr_number} created: {result.pr_url}"
+            )
+            await self.broadcaster.broadcast_log(
+                self._run_id, ticket.id, f"[engine] PR #{result.pr_number} created: {result.pr_url}"
+            )
+            await self.broadcaster.broadcast_ticket_update(
+                self._run_id, ticket.id, None,
+                pr_url=result.pr_url, pr_number=result.pr_number,
+            )
+
+            # Send GChat notification
+            # Gather context for the card
+            repo = None
+            if ticket.repository_id:
+                repo = await self.state.get_repository(ticket.repository_id)
+
+            git_ctx = None
+            if ticket.worktree_path and ticket.branch_name:
+                try:
+                    parent_branch = ticket.parent_branch
+                    if not parent_branch:
+                        run = await self.state.get_run(ticket.run_id)
+                        parent_branch = (run.parent_branch if run else None) or (repo.default_branch if repo else "master")
+                    git_ctx = await self.pr_manager._gather_git_context(
+                        ticket.worktree_path, ticket.branch_name, parent_branch
+                    )
+                except Exception:
+                    pass  # Non-critical — card will have zero stats
+
+            # Resolve reviewer display names for the card
+            # Prefer repo DB config, fallback to Bitbucket API defaults
+            reviewer_names = []
+            if repo and repo.default_reviewers:
+                try:
+                    emails = json.loads(repo.default_reviewers)
+                    # Convert emails to display names (strip domain, title case)
+                    reviewer_names = [
+                        e.split("@")[0].replace(".", " ").title() for e in emails
+                    ]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if not reviewer_names and repo:
+                try:
+                    repo_slug = self.pr_manager._derive_repo_slug(repo)
+                    if repo_slug:
+                        defaults = await self.bitbucket_client.get_default_reviewers(repo_slug)
+                        reviewer_names = [r["display_name"] for r in defaults if r.get("display_name")]
+                except Exception:
+                    pass
+
+            await self.gchat_notifier.notify_pr_created(
+                repository_id=ticket.repository_id,
+                jira_key=ticket.jira_key,
+                pr_url=result.pr_url,
+                pr_number=result.pr_number,
+                pr_title=result.pr_title or "",
+                repo_name=repo.name if repo else "",
+                branch_name=ticket.branch_name or "",
+                base_branch=ticket.parent_branch or (repo.default_branch if repo else "master"),
+                additions=git_ctx.additions if git_ctx else 0,
+                deletions=git_ctx.deletions if git_ctx else 0,
+                file_count=git_ctx.file_count if git_ctx else 0,
+                reviewer_names=reviewer_names,
+            )
+        else:
+            await self.state.append_log(
+                ticket.id, f"[engine] PR creation failed: {result.error}"
+            )
+            await self.broadcaster.broadcast_log(
+                self._run_id, ticket.id, f"[engine] PR creation failed: {result.error}"
+            )
+            logger.warning("Engine PR creation failed for %s: %s", ticket.jira_key, result.error)
+
+    async def address_review_comments(self, ticket_id: str) -> dict:
+        """Fetch PR review comments and spawn a worker to address them.
+
+        Triggered by manual button click on the UI.
+        Filters out bot comments, builds a structured prompt, and re-queues
+        the ticket with the prompt as input.
+        """
+        ticket = await self.state.get_ticket(ticket_id)
+        if not ticket:
+            raise ValueError("Ticket not found")
+        if not ticket.pr_url or not ticket.pr_number:
+            raise ValueError("No PR associated with this ticket")
+
+        # Resolve repo for bot filter config
+        repo = None
+        bot_filter = ["jenkins", "ci-bot", "bitbucket-pipelines"]
+        if ticket.repository_id:
+            repo = await self.state.get_repository(ticket.repository_id)
+            if repo and repo.review_bot_filter:
+                try:
+                    bot_filter = json.loads(repo.review_bot_filter)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        # Parse repo_slug from pr_url
+        repo_slug = None
+        match = re.search(r'bitbucket\.org/[^/]+/([^/]+)/pull-requests/\d+', ticket.pr_url)
+        if match:
+            repo_slug = match.group(1)
+        if not repo_slug and repo:
+            repo_slug = self.pr_manager._derive_repo_slug(repo)
+        if not repo_slug:
+            raise ValueError(f"Cannot derive repo slug from PR URL: {ticket.pr_url}")
+
+        # Fetch all comments (unfiltered) to get total count
+        all_comments = await self.bitbucket_client.get_pr_comments(
+            repo_slug, ticket.pr_number, bot_filter=[]
+        )
+        # Fetch filtered comments (human-only)
+        comments = await self.bitbucket_client.get_pr_comments(
+            repo_slug, ticket.pr_number, bot_filter=bot_filter
+        )
+
+        total = len(all_comments)
+        filtered_out = total - len(comments)
+        bot_authors = set()
+        for c in all_comments:
+            if c not in comments:
+                bot_authors.add(c["author"])
+
+        log_msg = f"[engine] PR #{ticket.pr_number}: {total} total comment(s), {filtered_out} filtered (bots: {', '.join(bot_authors) or 'none'}), {len(comments)} actionable"
+        logger.info(log_msg)
+        await self.state.append_log(ticket.id, log_msg)
+        await self.broadcaster.broadcast_log(
+            ticket.run_id, ticket.id, log_msg
+        )
+
+        if not comments:
+            msg = f"No actionable review comments — all {total} comment(s) are from bots ({', '.join(bot_authors)})"
+            return {"status": "no_comments", "message": msg, "total": total, "filtered": filtered_out}
+
+        # Build structured prompt
+        prompt_lines = [f"Address these review comments on PR #{ticket.pr_number}:\n"]
+        for c in comments:
+            if c["file"] and c["line"]:
+                prompt_lines.append(f"## {c['file']}:{c['line']}")
+            elif c["file"]:
+                prompt_lines.append(f"## {c['file']}")
+            else:
+                prompt_lines.append("## General")
+            prompt_lines.append(f"@{c['author']}: \"{c['content']}\"\n")
+
+        prompt_lines.append("Fix each issue, commit, and push to the branch.")
+        prompt = "\n".join(prompt_lines)
+
+        # Store the prompt and re-queue the ticket for a revision phase
+        await self.state.update_ticket(
+            ticket_id,
+            input_type="review_revision",
+            input_data=json.dumps({"prompt": prompt, "comment_count": len(comments)}),
+        )
+        await self.state.update_ticket_state(ticket_id, TicketState.QUEUED)
+        await self.broadcaster.broadcast_ticket_update(
+            ticket.run_id, ticket_id, TicketState.QUEUED
+        )
+
+        logger.info(
+            "Queued revision for %s: %d review comments to address",
+            ticket.jira_key, len(comments),
+        )
+        return {
+            "status": "queued",
+            "comment_count": len(comments),
+            "message": f"Queued revision with {len(comments)} review comment(s)",
+        }
 
     async def _watchdog_requeue(self, run_id: str) -> None:
         """Called by watchdog when a ticket is re-queued for retry."""

@@ -297,7 +297,9 @@ class Worker:
 
                 phase_name = phase_cfg["phase"]
                 prompts = phase_cfg.get("prompts", [])
-                marker = phase_cfg.get("marker")
+                # System-defined marker — always use the canonical marker for the phase.
+                # User-configured markers in phases_config are ignored; the engine owns this.
+                marker = self.PHASE_MARKERS.get(phase_name, phase_cfg.get("marker"))
                 ticket_state = phase_map.get(phase_name)
 
                 if not prompts:
@@ -978,28 +980,27 @@ class Worker:
         """Collapse multiline prompts into a single-line submission string."""
         return " ".join(prompt.split())
 
+    # System-defined markers per phase — not user-configurable.
+    # These are used by the engine for phase completion detection.
+    PHASE_MARKERS: ClassVar[dict[str, str]] = {
+        "planning": "[PLANNING_COMPLETE]",
+        "developing": "[DEVELOPING_COMPLETE]",
+    }
+
     def _build_phase_prompt(self, prompts: list[str], marker: str | None) -> str:
         """Build the prompt block sent for a phase.
 
-        Slash commands are sent as-is. Their command files are expected to
-        print the configured marker themselves, which matches the documented
-        recommended setup and avoids leaving Copilot slash commands stuck in
-        a pending state with extra inline instructions appended.
+        The marker instruction is ALWAYS appended by the system — this is
+        mandatory for task-ninja to track phase completion. Users don't need
+        to configure markers; they are derived from the phase name.
         """
         rendered_prompts = [
             p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts
         ]
         full_prompt = "\n".join(rendered_prompts)
-        if marker and self._should_append_marker_instruction(rendered_prompts):
-            full_prompt += f"\n\nWhen you are completely done, print exactly: {marker}"
+        if marker:
+            full_prompt += f"\n\nIMPORTANT: When you are completely done, you MUST print exactly: {marker}"
         return full_prompt
-
-    def _should_append_marker_instruction(self, prompts: list[str]) -> bool:
-        """Return whether Task Ninja should append a runtime marker instruction."""
-        non_empty_prompts = [prompt.strip() for prompt in prompts if prompt.strip()]
-        if not non_empty_prompts:
-            return False
-        return not non_empty_prompts[0].startswith("/")
 
     def _submission_echo_prefix(self, prompt_text: str) -> str:
         """Derive a short visible prefix for pre-submit composer echo checks.
