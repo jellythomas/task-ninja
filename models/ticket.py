@@ -92,6 +92,16 @@ class Repository(BaseModel):
     jira_label: str | None = None  # e.g. "MC", "CKYC" — prefix for matching tickets
     default_profile_id: int | None = None
     is_deleted: bool = False
+    # PR creation config
+    pr_template: str | None = None  # Markdown template with {variables}
+    pr_title_format: str = "${type}(${ticket}): ${summary} [FULL_COPILOT]"
+    default_reviewers: str | None = None  # JSON array of email addresses
+    # GChat notification config
+    gchat_webhook_url: str | None = None
+    gchat_space_name: str | None = None
+    gchat_events: str = '["pr_created","pr_merged","ticket_failed","run_completed","review_comments"]'
+    # Review triage config
+    review_bot_filter: str = '["jenkins","ci-bot","bitbucket-pipelines"]'
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -208,6 +218,16 @@ class UpdateRepositoryRequest(BaseModel):
     default_branch: str | None = None
     jira_label: str | None = None
     default_profile_id: int | None = None
+    # PR creation config
+    pr_template: str | None = None
+    pr_title_format: str | None = None
+    default_reviewers: str | None = None
+    # GChat notification config
+    gchat_webhook_url: str | None = None
+    gchat_space_name: str | None = None
+    gchat_events: str | None = None
+    # Review triage config
+    review_bot_filter: str | None = None
 
 
 class CreateLabelMappingRequest(BaseModel):
