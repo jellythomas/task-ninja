@@ -36,6 +36,7 @@ class Orchestrator:
         self._workers: dict[str, Worker] = {}  # ticket_id -> Worker
         self._tasks: dict[str, asyncio.Task] = {}  # ticket_id -> Task
         self._spawning: set[str] = set()  # ticket_ids currently being spawned (prevents race)
+        self._pr_in_flight: set[str] = set()  # ticket_ids with PR creation in progress (prevents double-fire)
         self._adhoc_terminals: dict = {}  # ticket_id -> AdHocTerminal
         self._running = False
         self._run_id: str | None = None
@@ -272,11 +273,15 @@ class Orchestrator:
                 )
             elif ticket and ticket.state == TicketState.DEVELOPING and ticket.last_completed_phase == "developing":
                 # All phases done (no review phase) — create PR and move to REVIEW
+                if tid in self._pr_in_flight:
+                    continue
+                self._pr_in_flight.add(tid)
                 logger.info("Developing complete for %s — creating PR via engine", ticket.jira_key)
                 await self.state.update_ticket_state(tid, TicketState.REVIEW)
                 await self.broadcaster.broadcast_ticket_update(self._run_id, tid, TicketState.REVIEW)
                 ticket = await self.state.get_ticket(tid)  # Refresh
                 await self._create_pr_for_ticket(ticket)
+                self._pr_in_flight.discard(tid)
                 self.watchdog.on_ticket_completed(tid)
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, tid)
@@ -324,7 +329,10 @@ class Orchestrator:
         for ticket in developing_done:
             if ticket.id in self._workers or ticket.id in self._tasks:
                 continue  # Worker still active
+            if ticket.id in self._pr_in_flight:
+                continue  # PR creation already in progress
             if ticket.last_completed_phase == "developing" and not ticket.pr_url:
+                self._pr_in_flight.add(ticket.id)
                 logger.info(
                     "Post-restart sweep: developing complete for %s — creating PR via engine",
                     ticket.jira_key,
@@ -333,6 +341,7 @@ class Orchestrator:
                 await self.broadcaster.broadcast_ticket_update(self._run_id, ticket.id, TicketState.REVIEW)
                 ticket = await self.state.get_ticket(ticket.id)
                 await self._create_pr_for_ticket(ticket)
+                self._pr_in_flight.discard(ticket.id)
                 self.watchdog.on_ticket_completed(ticket.id)
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, ticket.id)
