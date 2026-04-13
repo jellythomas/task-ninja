@@ -323,18 +323,19 @@ class Orchestrator:
                 await self.broadcaster.broadcast_ticket_update(self._run_id, ticket.id, TicketState.QUEUED)
 
         # Post-developing sweep: catch tickets that completed all phases but PR was never
-        # created (e.g. server restarted after developing completed — finished-task callback
-        # at line 273 only fires for tasks that completed in this session).
+        # created.  This covers two scenarios:
+        #   1. Server restarted after developing completed (no live worker)
+        #   2. Worker still alive but all phases auto-completed (e.g. developing
+        #      phase had empty prompts — worker keeps session open for interaction
+        #      but PR should still be created immediately)
         developing_done = await self.state.get_tickets_by_state(self._run_id, TicketState.DEVELOPING)
         for ticket in developing_done:
-            if ticket.id in self._workers or ticket.id in self._tasks:
-                continue  # Worker still active
             if ticket.id in self._pr_in_flight:
                 continue  # PR creation already in progress
-            if ticket.last_completed_phase == "developing" and not ticket.pr_url:
+            if ticket.last_completed_phase == "developing" and ticket.developing_completed_at and not ticket.pr_url:
                 self._pr_in_flight.add(ticket.id)
                 logger.info(
-                    "Post-restart sweep: developing complete for %s — creating PR via engine",
+                    "Post-developing sweep: all phases complete for %s — creating PR via engine",
                     ticket.jira_key,
                 )
                 await self.state.update_ticket_state(ticket.id, TicketState.REVIEW)
@@ -848,6 +849,11 @@ class Orchestrator:
         """
         if not await self.bitbucket_client.is_configured():
             logger.info("Bitbucket not configured — skipping engine PR creation for %s", ticket.jira_key)
+            return
+
+        # Guard: ticket may have been deleted while PR creation was queued
+        if not await self.state.get_ticket(ticket.id):
+            logger.info("Ticket %s deleted before PR creation — skipping", ticket.id)
             return
 
         await self.state.append_log(

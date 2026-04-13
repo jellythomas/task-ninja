@@ -299,10 +299,33 @@ class Worker:
                 prompts = phase_cfg.get("prompts", [])
                 # System-defined marker — always use the canonical marker for the phase.
                 # User-configured markers in phases_config are ignored; the engine owns this.
-                marker = self.PHASE_MARKERS.get(phase_name, phase_cfg.get("marker"))
+                marker = self._resolve_phase_marker(phase_name)
                 ticket_state = phase_map.get(phase_name)
 
                 if not prompts:
+                    # Auto-complete blank phases — the previous phase already
+                    # handled this work (e.g. /execute-jira-task covers both
+                    # planning and developing in a single prompt).
+                    auto_msg = f"[worker] === Phase: {phase_name} (auto-completed, no prompts) ==="
+                    await self.state.append_log(self.ticket_id, auto_msg)
+                    await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, auto_msg)
+
+                    if ticket_state:
+                        await self.state.update_ticket_state(self.ticket_id, ticket_state)
+                        await self.broadcaster.broadcast_ticket_update(
+                            self.run_id, self.ticket_id, ticket_state
+                        )
+                        await self._sync_jira_status(phase_name)
+
+                    completed_col = f"{phase_name}_completed_at"
+                    started_col = f"{phase_name}_started_at"
+                    now_iso = datetime.now(tz=timezone.utc).isoformat()
+                    await self.state.update_ticket(
+                        self.ticket_id,
+                        last_completed_phase=phase_name,
+                        **{started_col: now_iso, completed_col: now_iso},
+                    )
+                    logger.info("Phase %s auto-completed (no prompts) for ticket %s", phase_name, self.ticket_id)
                     continue
 
                 # Skip already-completed phases on retry
@@ -987,12 +1010,30 @@ class Worker:
         "developing": "[DEVELOPING_COMPLETE]",
     }
 
+    def _resolve_phase_marker(self, phase_name: str) -> str | None:
+        """Return the marker string for a phase, or None if marker injection is disabled.
+
+        Marker injection is only active when BOTH planning AND developing phases
+        have non-empty prompts. If only one phase has prompts (e.g. copilot one-shot
+        where a single command covers the whole pipeline), no marker is injected and
+        completion falls back to idle detection.
+        """
+        phases_with_prompts = {
+            p["phase"]
+            for p in self.phases_config
+            if p.get("prompts")
+        }
+        known_phases = {"planning", "developing"}
+        if not known_phases.issubset(phases_with_prompts):
+            return None
+        return self.PHASE_MARKERS.get(phase_name)
+
     def _build_phase_prompt(self, prompts: list[str], marker: str | None) -> str:
         """Build the prompt block sent for a phase.
 
-        The marker instruction is ALWAYS appended by the system — this is
-        mandatory for task-ninja to track phase completion. Users don't need
-        to configure markers; they are derived from the phase name.
+        If marker is provided (both phases have prompts), appends the completion
+        instruction. If marker is None (single-prompt profile), sends prompt as-is
+        and relies on idle detection for completion.
         """
         rendered_prompts = [
             p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts
@@ -1515,7 +1556,18 @@ class Worker:
             # Reset user_active flag after checking
             self._user_active = False
 
-            await asyncio.sleep(0.5)
+            # Event-aware wait: wakes instantly when PTY detects the marker
+            # (via _process_output setting _marker_detected), otherwise falls
+            # through after 0.5s to the next tmux capture-pane check cycle.
+            try:
+                await asyncio.wait_for(self._marker_detected.wait(), timeout=0.5)
+                logger.info("Phase marker detected via PTY event — completing phase")
+                # Reconnect monitor PTY if it died
+                if self._pty_task is not None and self._pty_task.done():
+                    await self._reconnect_monitor_pty()
+                return True
+            except asyncio.TimeoutError:
+                pass  # Fall through to next loop iteration (tmux check)
 
         return False
 
@@ -1913,6 +1965,11 @@ class Worker:
             if not clean:
                 continue
 
+            # Phase marker detection (real-time via PTY — sees ALL output)
+            if self._phase_marker and clean == self._phase_marker:
+                logger.info("Phase marker detected via PTY: %s", clean)
+                self._marker_detected.set()
+
             # Interactive mode: skip PTY log broadcasting entirely.
             # The live terminal (xterm.js) handles full visual output.
             # Only structured worker events (phase transitions, errors, PR URLs) are broadcast.
@@ -2060,7 +2117,7 @@ class AdHocTerminal:
         import shlex
 
         parts = shlex.split(self.claude_command) if " " in self.claude_command else [self.claude_command]
-        cmd = [*parts, "--dangerously-skip-permissions"]
+        cmd = parts
 
         if self._use_tmux:
             # Kill any stale session with the same name (e.g. from a previous server run)
