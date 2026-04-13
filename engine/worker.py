@@ -2117,7 +2117,7 @@ class AdHocTerminal:
         import shlex
 
         parts = shlex.split(self.claude_command) if " " in self.claude_command else [self.claude_command]
-        cmd = [*parts, "--dangerously-skip-permissions"]
+        cmd = parts
 
         if self._use_tmux:
             # Kill any stale session with the same name (e.g. from a previous server run)

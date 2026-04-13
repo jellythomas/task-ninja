@@ -137,11 +137,12 @@ async def terminal_ws(
                 from engine.worker import AdHocTerminal
 
                 try:
-                    adhoc_command = "claude"
+                    adhoc_command = "claude --dangerously-skip-permissions"
                     if ticket.profile_id:
                         profile = await state.get_agent_profile(ticket.profile_id)
                         if profile and profile.command:
-                            adhoc_command = profile.command
+                            args = (profile.args_template or "").strip()
+                            adhoc_command = f"{profile.command} {args}".strip()
                     adhoc = AdHocTerminal(worktree_path=ticket.worktree_path, claude_command=adhoc_command)
                     await adhoc.start()
                     orchestrator._adhoc_terminals[ticket_id] = adhoc
