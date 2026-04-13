@@ -303,6 +303,29 @@ class Worker:
                 ticket_state = phase_map.get(phase_name)
 
                 if not prompts:
+                    # Auto-complete blank phases — the previous phase already
+                    # handled this work (e.g. /execute-jira-task covers both
+                    # planning and developing in a single prompt).
+                    auto_msg = f"[worker] === Phase: {phase_name} (auto-completed, no prompts) ==="
+                    await self.state.append_log(self.ticket_id, auto_msg)
+                    await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, auto_msg)
+
+                    if ticket_state:
+                        await self.state.update_ticket_state(self.ticket_id, ticket_state)
+                        await self.broadcaster.broadcast_ticket_update(
+                            self.run_id, self.ticket_id, ticket_state
+                        )
+                        await self._sync_jira_status(phase_name)
+
+                    completed_col = f"{phase_name}_completed_at"
+                    started_col = f"{phase_name}_started_at"
+                    now_iso = datetime.now(tz=timezone.utc).isoformat()
+                    await self.state.update_ticket(
+                        self.ticket_id,
+                        last_completed_phase=phase_name,
+                        **{started_col: now_iso, completed_col: now_iso},
+                    )
+                    logger.info("Phase %s auto-completed (no prompts) for ticket %s", phase_name, self.ticket_id)
                     continue
 
                 # Skip already-completed phases on retry
@@ -1515,7 +1538,18 @@ class Worker:
             # Reset user_active flag after checking
             self._user_active = False
 
-            await asyncio.sleep(0.5)
+            # Event-aware wait: wakes instantly when PTY detects the marker
+            # (via _process_output setting _marker_detected), otherwise falls
+            # through after 0.5s to the next tmux capture-pane check cycle.
+            try:
+                await asyncio.wait_for(self._marker_detected.wait(), timeout=0.5)
+                logger.info("Phase marker detected via PTY event — completing phase")
+                # Reconnect monitor PTY if it died
+                if self._pty_task is not None and self._pty_task.done():
+                    await self._reconnect_monitor_pty()
+                return True
+            except asyncio.TimeoutError:
+                pass  # Fall through to next loop iteration (tmux check)
 
         return False
 
@@ -1912,6 +1946,11 @@ class Worker:
             clean = _clean_ansi(line)
             if not clean:
                 continue
+
+            # Phase marker detection (real-time via PTY — sees ALL output)
+            if self._phase_marker and clean == self._phase_marker:
+                logger.info("Phase marker detected via PTY: %s", clean)
+                self._marker_detected.set()
 
             # Interactive mode: skip PTY log broadcasting entirely.
             # The live terminal (xterm.js) handles full visual output.

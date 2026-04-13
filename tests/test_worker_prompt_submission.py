@@ -37,7 +37,7 @@ def test_normalize_prompt_for_submit_flattens_multiline_prompt():
     )
 
 
-def test_build_phase_prompt_keeps_slash_command_without_appended_marker_instruction():
+def test_build_phase_prompt_appends_marker_instruction_to_slash_commands():
     worker = make_worker()
 
     assert (
@@ -45,7 +45,7 @@ def test_build_phase_prompt_keeps_slash_command_without_appended_marker_instruct
             ["/planning-task {JIRA_KEY} parent:{PARENT_BRANCH}"],
             "[PLANNING_COMPLETE]",
         )
-        == "/planning-task MC-1 parent:master"
+        == "/planning-task MC-1 parent:master\n\nIMPORTANT: When you are completely done, you MUST print exactly: [PLANNING_COMPLETE]"
     )
 
 
@@ -57,7 +57,7 @@ def test_build_phase_prompt_appends_marker_for_direct_prompts():
             ["Analyze ticket {JIRA_KEY}"],
             "[PLANNING_COMPLETE]",
         )
-        == "Analyze ticket MC-1\n\nWhen you are completely done, print exactly: [PLANNING_COMPLETE]"
+        == "Analyze ticket MC-1\n\nIMPORTANT: When you are completely done, you MUST print exactly: [PLANNING_COMPLETE]"
     )
 
 

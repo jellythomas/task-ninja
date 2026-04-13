@@ -327,7 +327,7 @@ async def cleanup_orphans(prefix: str = SESSION_PREFIX) -> int:
     return count
 
 
-async def capture_pane(session_name: str, history_lines: int = 200) -> str | None:
+async def capture_pane(session_name: str, history_lines: int = 2000) -> str | None:
     """Capture visible pane content plus recent scrollback. Returns text or None on failure."""
     try:
         proc = await asyncio.create_subprocess_exec(
