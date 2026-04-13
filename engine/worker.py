@@ -299,7 +299,7 @@ class Worker:
                 prompts = phase_cfg.get("prompts", [])
                 # System-defined marker — always use the canonical marker for the phase.
                 # User-configured markers in phases_config are ignored; the engine owns this.
-                marker = self.PHASE_MARKERS.get(phase_name, phase_cfg.get("marker"))
+                marker = self._resolve_phase_marker(phase_name)
                 ticket_state = phase_map.get(phase_name)
 
                 if not prompts:
@@ -1010,12 +1010,30 @@ class Worker:
         "developing": "[DEVELOPING_COMPLETE]",
     }
 
+    def _resolve_phase_marker(self, phase_name: str) -> str | None:
+        """Return the marker string for a phase, or None if marker injection is disabled.
+
+        Marker injection is only active when BOTH planning AND developing phases
+        have non-empty prompts. If only one phase has prompts (e.g. copilot one-shot
+        where a single command covers the whole pipeline), no marker is injected and
+        completion falls back to idle detection.
+        """
+        phases_with_prompts = {
+            p["phase"]
+            for p in self.phases_config
+            if p.get("prompts")
+        }
+        known_phases = {"planning", "developing"}
+        if not known_phases.issubset(phases_with_prompts):
+            return None
+        return self.PHASE_MARKERS.get(phase_name)
+
     def _build_phase_prompt(self, prompts: list[str], marker: str | None) -> str:
         """Build the prompt block sent for a phase.
 
-        The marker instruction is ALWAYS appended by the system — this is
-        mandatory for task-ninja to track phase completion. Users don't need
-        to configure markers; they are derived from the phase name.
+        If marker is provided (both phases have prompts), appends the completion
+        instruction. If marker is None (single-prompt profile), sends prompt as-is
+        and relies on idle detection for completion.
         """
         rendered_prompts = [
             p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts
