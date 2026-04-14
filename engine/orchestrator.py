@@ -931,6 +931,17 @@ class Orchestrator:
                 file_count=git_ctx.file_count if git_ctx else 0,
                 reviewer_names=reviewer_names,
             )
+
+            # Transition Jira ticket to Code Review
+            mcp_cfg = self.config.get("mcp", {})
+            jira_mapping = mcp_cfg.get("jira_status_mapping", {})
+            review_status = jira_mapping.get(TicketState.REVIEW.value)
+            if review_status and await self.jira_client.is_configured():
+                try:
+                    await self.jira_client.transition_issue(ticket.jira_key, review_status)
+                    logger.info("Transitioned Jira %s to '%s'", ticket.jira_key, review_status)
+                except Exception as e:
+                    logger.warning("Failed to transition Jira issue %s: %s", ticket.jira_key, e)
         else:
             await self.state.append_log(
                 ticket.id, f"[engine] PR creation failed: {result.error}"

@@ -9,7 +9,7 @@ mcp:
   jira_status_mapping:
     planning: "In Progress"
     developing: "In Progress"
-    review: "In Review"
+    review: "Code Review"
     done: "Done"
 
 git:
