@@ -310,7 +310,11 @@ class Worker:
                     await self.state.append_log(self.ticket_id, auto_msg)
                     await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, auto_msg)
 
-                    if ticket_state:
+                    # Don't transition to REVIEW for auto-completed review phase.
+                    # The orchestrator handles the REVIEW transition + Jira sync
+                    # when it creates the PR — this avoids premature "In Review"
+                    # in Jira before the PR even exists.
+                    if ticket_state and phase_name != "review":
                         await self.state.update_ticket_state(self.ticket_id, ticket_state)
                         await self.broadcaster.broadcast_ticket_update(
                             self.run_id, self.ticket_id, ticket_state

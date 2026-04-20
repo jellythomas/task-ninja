@@ -271,7 +271,7 @@ class Orchestrator:
                     ticket_id=tid,
                     error=ticket.error or "",
                 )
-            elif ticket and ticket.state == TicketState.DEVELOPING and ticket.last_completed_phase == "developing":
+            elif ticket and ticket.state == TicketState.DEVELOPING and ticket.last_completed_phase in ("developing", "review"):
                 # All phases done (no review phase) — create PR and move to REVIEW
                 if tid in self._pr_in_flight:
                     continue
@@ -332,7 +332,7 @@ class Orchestrator:
         for ticket in developing_done:
             if ticket.id in self._pr_in_flight:
                 continue  # PR creation already in progress
-            if ticket.last_completed_phase == "developing" and ticket.developing_completed_at and not ticket.pr_url:
+            if ticket.last_completed_phase in ("developing", "review") and ticket.developing_completed_at and not ticket.pr_url:
                 self._pr_in_flight.add(ticket.id)
                 logger.info(
                     "Post-developing sweep: all phases complete for %s — creating PR via engine",
