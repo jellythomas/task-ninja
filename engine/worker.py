@@ -1011,29 +1011,28 @@ class Worker:
     }
 
     def _resolve_phase_marker(self, phase_name: str) -> str | None:
-        """Return the marker string for a phase, or None if marker injection is disabled.
+        """Return the marker string for a phase, or None if the phase has no prompts.
 
-        Marker injection is only active when BOTH planning AND developing phases
-        have non-empty prompts. If only one phase has prompts (e.g. copilot one-shot
-        where a single command covers the whole pipeline), no marker is injected and
-        completion falls back to idle detection.
+        Markers are injected for any phase that has non-empty prompts, so the
+        engine can detect completion reliably instead of falling back to idle
+        detection (which triggers prematurely on CLI pauses like MCP loading or
+        API calls).  Phases with empty prompts are auto-completed by the
+        pipeline loop, so they never need markers.
         """
-        phases_with_prompts = {
-            p["phase"]
-            for p in self.phases_config
-            if p.get("prompts")
-        }
-        known_phases = {"planning", "developing"}
-        if not known_phases.issubset(phases_with_prompts):
+        phase_cfg = next(
+            (p for p in self.phases_config if p.get("phase") == phase_name),
+            None,
+        )
+        if not phase_cfg or not phase_cfg.get("prompts"):
             return None
         return self.PHASE_MARKERS.get(phase_name)
 
     def _build_phase_prompt(self, prompts: list[str], marker: str | None) -> str:
         """Build the prompt block sent for a phase.
 
-        If marker is provided (both phases have prompts), appends the completion
-        instruction. If marker is None (single-prompt profile), sends prompt as-is
-        and relies on idle detection for completion.
+        If marker is provided, appends the completion instruction so the CLI
+        prints the marker when done.  If marker is None (phase has no prompts
+        and was auto-completed), sends prompt as-is.
         """
         rendered_prompts = [
             p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts

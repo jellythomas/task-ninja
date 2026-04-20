@@ -99,7 +99,7 @@ class Repository(BaseModel):
     # GChat notification config
     gchat_webhook_url: str | None = None
     gchat_space_name: str | None = None
-    gchat_events: str = '["pr_created","pr_merged","ticket_failed","run_completed","review_comments"]'
+    gchat_events: str = '["pr_created"]'
     # Review triage config
     review_bot_filter: str = '["jenkins","ci-bot","bitbucket-pipelines"]'
     created_at: datetime | None = None

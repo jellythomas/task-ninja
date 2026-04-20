@@ -40,7 +40,7 @@ def test_resolve_phase_marker_both_phases_filled_returns_developing_marker():
     assert worker._resolve_phase_marker("developing") == "[DEVELOPING_COMPLETE]"
 
 
-def test_resolve_phase_marker_only_developing_filled_returns_none():
+def test_resolve_phase_marker_only_developing_filled_returns_marker():
     worker = make_worker(
         phases_config=[
             {
@@ -53,10 +53,13 @@ def test_resolve_phase_marker_only_developing_filled_returns_none():
             },
         ]
     )
-    assert worker._resolve_phase_marker("developing") is None
+    # Phase with prompts should get a marker even if the other phase is empty
+    assert worker._resolve_phase_marker("developing") == "[DEVELOPING_COMPLETE]"
+    # Phase without prompts gets no marker (auto-completed by pipeline)
+    assert worker._resolve_phase_marker("planning") is None
 
 
-def test_resolve_phase_marker_only_planning_filled_returns_none():
+def test_resolve_phase_marker_only_planning_filled_returns_marker():
     worker = make_worker(
         phases_config=[
             {
@@ -69,10 +72,13 @@ def test_resolve_phase_marker_only_planning_filled_returns_none():
             },
         ]
     )
-    assert worker._resolve_phase_marker("planning") is None
+    # Phase with prompts should get a marker even if the other phase is empty
+    assert worker._resolve_phase_marker("planning") == "[PLANNING_COMPLETE]"
+    # Phase without prompts gets no marker (auto-completed by pipeline)
+    assert worker._resolve_phase_marker("developing") is None
 
 
-def test_resolve_phase_marker_single_phase_in_config_returns_none():
+def test_resolve_phase_marker_single_phase_in_config_returns_marker():
     worker = make_worker(
         phases_config=[
             {
@@ -81,7 +87,8 @@ def test_resolve_phase_marker_single_phase_in_config_returns_none():
             },
         ]
     )
-    assert worker._resolve_phase_marker("developing") is None
+    # Single phase with prompts should still get a marker
+    assert worker._resolve_phase_marker("developing") == "[DEVELOPING_COMPLETE]"
 
 
 # --- _build_phase_prompt tests ---
