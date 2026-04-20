@@ -95,6 +95,32 @@ async def terminal_ws(
             terminal_states = (TicketState.REVIEW, TicketState.DONE, TicketState.FAILED)
             allow_terminal_adhoc = bool(ticket and ticket.state in terminal_states)
 
+            # Recover missing worktree for terminal-state tickets.
+            # Worktree may be gone if ticket previously hit premature-DONE
+            # (which triggers cleanup), or if directory was manually removed.
+            if (
+                ticket
+                and ticket.state in terminal_states
+                and ticket.branch_name
+                and (not ticket.worktree_path or not Path(ticket.worktree_path).is_dir())
+            ):
+                try:
+                    repo = await state.get_repository(ticket.repository_id) if ticket.repository_id else None
+                    run = await state.get_run(orchestrator._run_id) if orchestrator._run_id else None
+                    project_path = (repo.path if repo else None) or (run.project_path if run else None)
+                    if project_path:
+                        from engine.git_manager import GitManager
+
+                        git_cfg = orchestrator.config.get("git", {})
+                        git = GitManager(project_path, git_cfg.get("worktree_dir", ".worktrees"))
+                        result = await git.create_worktree(ticket.jira_key)
+                        if result.path and Path(result.path).is_dir():
+                            await state.update_ticket(ticket_id, worktree_path=result.path)
+                            ticket = await state.get_ticket(ticket_id)
+                            logger.info("Recovered worktree for %s at %s", ticket.jira_key, result.path)
+                except Exception as e:
+                    logger.warning("Failed to recover worktree for %s: %s", ticket_id, e)
+
             # For non-terminal tickets with no worker, respawn directly.
             # This handles: requeued tickets, failed prompt submissions,
             # and any state where the worker died unexpectedly.
@@ -126,6 +152,13 @@ async def terminal_ws(
                 websocket_accepted = await _accept_websocket_once(websocket, websocket_accepted)
 
             # Ad-hoc terminal for terminal-state tickets
+            if ticket and ticket.state in terminal_states and (not worker or not worker.is_running):
+                wt = ticket.worktree_path
+                wt_exists = bool(wt and Path(wt).is_dir())
+                logger.info(
+                    "Ad-hoc check for %s: state=%s worktree=%s exists=%s allow_adhoc=%s",
+                    ticket_id, ticket.state.value, wt, wt_exists, allow_adhoc or allow_terminal_adhoc,
+                )
             if (
                 (not worker or not worker.is_running)
                 and ticket
