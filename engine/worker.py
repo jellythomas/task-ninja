@@ -61,23 +61,34 @@ def _clean_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
-# Characters commonly used as line prefixes by CLIs — stripped before
-# marker matching so detection works regardless of the CLI's formatting.
-# Copilot uses status bullets (● ○ ◉), others use arrows/ticks.
-_MARKER_PREFIX_CHARS = frozenset("●○◉▸▹►▻→•·⚙✓✗✘☐☑ >\t-–—")
+# Regex to find bracket-enclosed ALL-CAPS tokens like [PLANNING_COMPLETE].
+_BRACKET_TOKEN_RE = re.compile(r"\[[A-Z_]+\]")
 
 
-def _strip_marker_prefix(text: str) -> str:
-    """Strip ANSI codes and common CLI prefix chars for marker matching.
+def _line_is_marker(line: str, marker: str) -> bool:
+    """Check if *line* is a genuine marker output (not informational text).
 
-    Returns the 'core' content of the line — used to compare against
-    phase markers via exact equality rather than substring search.
+    Returns True when the line contains the marker as a standalone token
+    and the surrounding text has **no alphabetic characters** — meaning it's
+    just CLI decoration (spinners, bullets, box-drawing, emoji, dashes, etc.)
+    rather than a natural-language sentence that merely *mentions* the marker.
+
+    This is immune to:
+    - False negatives from unknown prefix characters (braille spinners ⠙⠹,
+      box-drawing │├└, Claude Code's ⎿, emoji 🤖✅, etc.)
+    - False positives from informational text like
+      "I'll print [PLANNING_COMPLETE] when done"
     """
-    clean = _clean_ansi(text).strip()
-    i = 0
-    while i < len(clean) and clean[i] in _MARKER_PREFIX_CHARS:
-        i += 1
-    return clean[i:].strip()
+    clean = _clean_ansi(line).strip()
+    if marker not in clean:
+        return False
+    idx = clean.index(marker)
+    before = clean[:idx]
+    after = clean[idx + len(marker):]
+    # If alphabetic chars appear before or after the marker, it's natural language
+    if any(c.isalpha() for c in before) or any(c.isalpha() for c in after):
+        return False
+    return True
 
 
 # Whether tmux is available (checked once at import time)
@@ -1530,15 +1541,14 @@ class Worker:
         _idle_streak = 0  # consecutive idle-at-prompt checks (for abort recovery)
         _IDLE_RESUBMIT_STREAK = 5  # ~10s at 2s intervals before re-submitting
 
-        # Count lines whose core content matches the marker exactly.
-        # Strips ANSI codes + common CLI prefix chars (bullets, arrows)
-        # before comparing.  Previous substring match caused false positives
-        # when the CLI mentioned the marker in informational text
-        # (e.g. "I'll print [PLANNING_COMPLETE] when done").
+        # Count lines that are genuine marker output (standalone token,
+        # no alphabetic surrounding text).  Immune to both false positives
+        # (informational sentences) and false negatives (unknown CLI
+        # prefixes) — immune to substring false positives from informational text.
         def _count_marker_lines(text: str) -> int:
             count = 0
             for line in text.splitlines():
-                if _strip_marker_prefix(line) == marker:
+                if _line_is_marker(line, marker):
                     count += 1
             return count
 
@@ -2063,7 +2073,7 @@ class Worker:
                 continue
 
             # Phase marker detection (real-time via PTY — sees ALL output)
-            if self._phase_marker and _strip_marker_prefix(line) == self._phase_marker:
+            if self._phase_marker and _line_is_marker(line, self._phase_marker):
                 logger.info("Phase marker detected via PTY: %s", clean)
                 self._marker_detected.set()
 
