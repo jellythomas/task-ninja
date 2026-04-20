@@ -81,6 +81,29 @@ class PrManager:
         self.state = state
         self.bitbucket = bitbucket
 
+    @staticmethod
+    def _resolve_git_cwd(worktree_path: str) -> str:
+        """Return a valid git working directory.
+
+        Prefers the worktree path itself, but falls back to ancestor
+        directories (e.g. the main repo root) if the worktree was deleted
+        while the push/PR was pending.
+        """
+        p = Path(worktree_path)
+        if p.is_dir():
+            return worktree_path
+        # Walk up to find a directory that contains a .git entry
+        for parent in p.parents:
+            if parent.is_dir() and (parent / ".git").exists():
+                logger.warning(
+                    "Worktree %s missing — falling back to repo root %s",
+                    worktree_path,
+                    parent,
+                )
+                return str(parent)
+        # Last resort: return original (will fail, but error is clear)
+        return worktree_path
+
     async def create_pr_for_ticket(self, ticket_id: str) -> PrResult:
         """Full PR creation flow for a ticket.
 
@@ -214,10 +237,12 @@ class PrManager:
         self, worktree_path: str, branch: str, parent_branch: str
     ) -> GitContext:
         """Gather commits and diff stats from git."""
-        # Get commit list
+        cwd = self._resolve_git_cwd(worktree_path)
+
+        # Get commit list (use explicit branch name so it works from any git dir)
         proc = await asyncio.create_subprocess_exec(
-            "git", "log", f"origin/{parent_branch}..HEAD", "--oneline",
-            cwd=worktree_path,
+            "git", "log", f"origin/{parent_branch}..{branch}", "--oneline",
+            cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -228,8 +253,8 @@ class PrManager:
 
         # Get diff stat
         proc = await asyncio.create_subprocess_exec(
-            "git", "diff", f"origin/{parent_branch}...HEAD", "--stat",
-            cwd=worktree_path,
+            "git", "diff", f"origin/{parent_branch}...{branch}", "--stat",
+            cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -238,8 +263,8 @@ class PrManager:
 
         # Get shortstat for numbers
         proc = await asyncio.create_subprocess_exec(
-            "git", "diff", f"origin/{parent_branch}...HEAD", "--shortstat",
-            cwd=worktree_path,
+            "git", "diff", f"origin/{parent_branch}...{branch}", "--shortstat",
+            cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -263,10 +288,10 @@ class PrManager:
         # Get full commit messages (subject + body) for description
         _SEP = "---COMMIT_SEP---"
         proc = await asyncio.create_subprocess_exec(
-            "git", "log", f"origin/{parent_branch}..HEAD",
+            "git", "log", f"origin/{parent_branch}..{branch}",
             f"--format=%B{_SEP}",
             "--reverse",
-            cwd=worktree_path,
+            cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -286,9 +311,10 @@ class PrManager:
 
     async def _git_push(self, worktree_path: str, branch: str) -> None:
         """Push branch to origin."""
+        cwd = self._resolve_git_cwd(worktree_path)
         proc = await asyncio.create_subprocess_exec(
             "git", "push", "-u", "origin", branch,
-            cwd=worktree_path,
+            cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
