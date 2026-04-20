@@ -347,6 +347,27 @@ class Orchestrator:
                 if self.notifier:
                     await self.notifier.notify_ticket_completed(ticket.jira_key, ticket.id)
 
+        # Post-review sweep: tickets that reached REVIEW state (review phase
+        # auto-completed with empty prompts) but PR hasn't been created yet.
+        # The worker keeps the session open for interaction while the engine
+        # creates the PR and sends the GChat notification.
+        review_done = await self.state.get_tickets_by_state(self._run_id, TicketState.REVIEW)
+        for ticket in review_done:
+            if ticket.id in self._pr_in_flight:
+                continue
+            if ticket.last_completed_phase == "review" and ticket.developing_completed_at and not ticket.pr_url:
+                self._pr_in_flight.add(ticket.id)
+                logger.info(
+                    "Post-review sweep: review phase complete for %s — creating PR via engine",
+                    ticket.jira_key,
+                )
+                ticket = await self.state.get_ticket(ticket.id)
+                await self._create_pr_for_ticket(ticket)
+                self._pr_in_flight.discard(ticket.id)
+                self.watchdog.on_ticket_completed(ticket.id)
+                if self.notifier:
+                    await self.notifier.notify_ticket_completed(ticket.jira_key, ticket.id)
+
         # Check available slots
         active_count = await self.state.count_active_tickets(self._run_id)
         available_slots = run.max_parallel - active_count
