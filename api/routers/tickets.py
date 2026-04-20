@@ -296,7 +296,7 @@ async def move_ticket(
         if req.state == TicketState.QUEUED and not orchestrator._running and ticket.run_id:
             await orchestrator.resume(ticket.run_id)
 
-        if req.state in {TicketState.DONE, TicketState.REVIEW} and ticket.worktree_path:
+        if req.state == TicketState.DONE and ticket.worktree_path:
             cleanup_enabled = config.get("git", {}).get("cleanup_worktrees", True)
             if cleanup_enabled:
                 try:

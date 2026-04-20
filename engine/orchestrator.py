@@ -574,8 +574,7 @@ class Orchestrator:
                 await self.broadcaster.broadcast_ticket_update(
                     self._run_id, ticket.id, TicketState.FAILED, error="PR was declined"
                 )
-                # Cleanup worktree — no longer needed after decline
-                await self._cleanup_worktree(ticket)
+                # Keep worktree — user may requeue or retry the ticket
 
     async def _cleanup_worktree(self, ticket: Ticket) -> None:
         """Remove worktree directory and clear path from DB."""
