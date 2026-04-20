@@ -61,6 +61,25 @@ def _clean_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+# Characters commonly used as line prefixes by CLIs — stripped before
+# marker matching so detection works regardless of the CLI's formatting.
+# Copilot uses status bullets (● ○ ◉), others use arrows/ticks.
+_MARKER_PREFIX_CHARS = frozenset("●○◉▸▹►▻→•·⚙✓✗✘☐☑ >\t-–—")
+
+
+def _strip_marker_prefix(text: str) -> str:
+    """Strip ANSI codes and common CLI prefix chars for marker matching.
+
+    Returns the 'core' content of the line — used to compare against
+    phase markers via exact equality rather than substring search.
+    """
+    clean = _clean_ansi(text).strip()
+    i = 0
+    while i < len(clean) and clean[i] in _MARKER_PREFIX_CHARS:
+        i += 1
+    return clean[i:].strip()
+
+
 # Whether tmux is available (checked once at import time)
 _TMUX_AVAILABLE: bool = tmux_mgr.is_available()
 
@@ -302,6 +321,30 @@ class Worker:
                 marker = self._resolve_phase_marker(phase_name)
                 ticket_state = phase_map.get(phase_name)
 
+                # Skip already-completed phases on retry (applies to ALL paths
+                # including auto-complete and marker-wait — not just prompt phases).
+                if skip_until_after:
+                    if phase_name == skip_until_after:
+                        await self.state.append_log(
+                            self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
+                        )
+                        await self.broadcaster.broadcast_log(
+                            self.run_id,
+                            self.ticket_id,
+                            f"[worker] === Phase: {phase_name} (already completed, skipping) ===",
+                        )
+                        skip_until_after = None  # Next phase will run
+                        continue
+                    await self.state.append_log(
+                        self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
+                    )
+                    await self.broadcaster.broadcast_log(
+                        self.run_id,
+                        self.ticket_id,
+                        f"[worker] === Phase: {phase_name} (already completed, skipping) ===",
+                    )
+                    continue
+
                 if not prompts and not marker:
                     # No prompts and no marker — truly auto-complete (e.g. review phase).
                     # The orchestrator handles REVIEW transition when it creates the PR.
@@ -333,6 +376,7 @@ class Worker:
                     # will print the marker (e.g. /execute-jira-task prints
                     # both PLANNING_COMPLETE and DEVELOPING_COMPLETE).
                     self._current_phase = phase_name
+                    self._marker_detected.clear()
                     self._phase_marker = marker
                     # No prompt to resubmit — disable recovery resubmission.
                     self._last_phase_prompt = None
@@ -410,30 +454,8 @@ class Worker:
                         return False
                     continue
 
-                # Skip already-completed phases on retry
-                if skip_until_after:
-                    if phase_name == skip_until_after:
-                        await self.state.append_log(
-                            self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
-                        )
-                        await self.broadcaster.broadcast_log(
-                            self.run_id,
-                            self.ticket_id,
-                            f"[worker] === Phase: {phase_name} (already completed, skipping) ===",
-                        )
-                        skip_until_after = None  # Next phase will run
-                        continue
-                    await self.state.append_log(
-                        self.ticket_id, f"[worker] === Phase: {phase_name} (already completed, skipping) ==="
-                    )
-                    await self.broadcaster.broadcast_log(
-                        self.run_id,
-                        self.ticket_id,
-                        f"[worker] === Phase: {phase_name} (already completed, skipping) ===",
-                    )
-                    continue
-
                 self._current_phase = phase_name
+                self._marker_detected.clear()
                 self._phase_marker = marker
 
                 await self.state.append_log(self.ticket_id, f"[worker] === Phase: {phase_name} ===")
@@ -1508,15 +1530,17 @@ class Worker:
         _idle_streak = 0  # consecutive idle-at-prompt checks (for abort recovery)
         _IDLE_RESUBMIT_STREAK = 5  # ~10s at 2s intervals before re-submitting
 
-        # Count lines containing the marker.  Uses substring match (not strict
-        # equality) because CLIs prefix output differently — Copilot uses
-        # status bullets (● ○ ◉), Claude prints bare text, etc.
-        #
-        # Safe against false positives from the input echo ("...print exactly:
-        # MARKER") because we capture _initial_marker_count at phase start
-        # (which includes the echo) and only trigger when the count INCREASES.
+        # Count lines whose core content matches the marker exactly.
+        # Strips ANSI codes + common CLI prefix chars (bullets, arrows)
+        # before comparing.  Previous substring match caused false positives
+        # when the CLI mentioned the marker in informational text
+        # (e.g. "I'll print [PLANNING_COMPLETE] when done").
         def _count_marker_lines(text: str) -> int:
-            return sum(1 for line in text.splitlines() if marker in line)
+            count = 0
+            for line in text.splitlines():
+                if _strip_marker_prefix(line) == marker:
+                    count += 1
+            return count
 
         _initial_marker_count = 0
         if marker and self._use_tmux:
@@ -1540,8 +1564,8 @@ class Worker:
                 return False
 
             # Periodically scan capture-pane for the marker.
-            # Input echo embeds the marker inside a sentence; Claude's real
-            # output prints it alone — _count_marker_lines only matches the latter.
+            # _count_marker_lines uses exact match (after stripping ANSI + CLI
+            # prefixes) — immune to substring false positives from informational text.
             if marker and self._use_tmux:
                 now = time.time()
                 if (now - _last_capture_check) >= _capture_interval:
@@ -2039,7 +2063,7 @@ class Worker:
                 continue
 
             # Phase marker detection (real-time via PTY — sees ALL output)
-            if self._phase_marker and clean == self._phase_marker:
+            if self._phase_marker and _strip_marker_prefix(line) == self._phase_marker:
                 logger.info("Phase marker detected via PTY: %s", clean)
                 self._marker_detected.set()
 
