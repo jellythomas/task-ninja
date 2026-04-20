@@ -1030,17 +1030,15 @@ class Worker:
     def _build_phase_prompt(self, prompts: list[str], marker: str | None) -> str:
         """Build the prompt block sent for a phase.
 
-        If marker is provided, appends the completion instruction so the CLI
-        prints the marker when done.  If marker is None (phase has no prompts
-        and was auto-completed), sends prompt as-is.
+        Renders template variables ({JIRA_KEY}, {PARENT_BRANCH}) in each
+        prompt.  The marker is NOT injected into the prompt — the invoked
+        skill or command is responsible for printing the completion marker
+        itself (e.g. /execute-jira-task prints [PLANNING_COMPLETE]).
         """
         rendered_prompts = [
             p.replace("{JIRA_KEY}", self.jira_key).replace("{PARENT_BRANCH}", self.pr_base_branch) for p in prompts
         ]
-        full_prompt = "\n".join(rendered_prompts)
-        if marker:
-            full_prompt += f"\n\nIMPORTANT: When you are completely done, you MUST print exactly: {marker}"
-        return full_prompt
+        return "\n".join(rendered_prompts)
 
     def _submission_echo_prefix(self, prompt_text: str) -> str:
         """Derive a short visible prefix for pre-submit composer echo checks.

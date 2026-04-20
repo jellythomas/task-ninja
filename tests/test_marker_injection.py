@@ -94,14 +94,16 @@ def test_resolve_phase_marker_single_phase_in_config_returns_marker():
 # --- _build_phase_prompt tests ---
 
 
-def test_build_phase_prompt_with_marker_contains_important_and_marker_string():
+def test_build_phase_prompt_with_marker_renders_template_without_injection():
     worker = make_worker(phases_config=TWO_PHASE_CONFIG)
     result = worker._build_phase_prompt(
         ["/planning-task {JIRA_KEY}"],
         "[PLANNING_COMPLETE]",
     )
-    assert "IMPORTANT" in result
-    assert "[PLANNING_COMPLETE]" in result
+    # Marker is NOT injected into prompt — skills handle printing it
+    assert "IMPORTANT" not in result
+    assert "[PLANNING_COMPLETE]" not in result
+    assert "/planning-task MC-1" in result
 
 
 def test_build_phase_prompt_without_marker_has_no_important_or_marker_text():
