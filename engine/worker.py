@@ -302,18 +302,13 @@ class Worker:
                 marker = self._resolve_phase_marker(phase_name)
                 ticket_state = phase_map.get(phase_name)
 
-                if not prompts:
-                    # Auto-complete blank phases — the previous phase already
-                    # handled this work (e.g. /execute-jira-task covers both
-                    # planning and developing in a single prompt).
+                if not prompts and not marker:
+                    # No prompts and no marker — truly auto-complete (e.g. review phase).
+                    # The orchestrator handles REVIEW transition when it creates the PR.
                     auto_msg = f"[worker] === Phase: {phase_name} (auto-completed, no prompts) ==="
                     await self.state.append_log(self.ticket_id, auto_msg)
                     await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, auto_msg)
 
-                    # Don't transition to REVIEW for auto-completed review phase.
-                    # The orchestrator handles the REVIEW transition + Jira sync
-                    # when it creates the PR — this avoids premature "In Review"
-                    # in Jira before the PR even exists.
                     if ticket_state and phase_name != "review":
                         await self.state.update_ticket_state(self.ticket_id, ticket_state)
                         await self.broadcaster.broadcast_ticket_update(
@@ -330,6 +325,89 @@ class Worker:
                         **{started_col: now_iso, completed_col: now_iso},
                     )
                     logger.info("Phase %s auto-completed (no prompts) for ticket %s", phase_name, self.ticket_id)
+                    continue
+
+                if not prompts:
+                    # Phase has no prompts but has a completion marker.
+                    # The skill from the previous phase handles this work and
+                    # will print the marker (e.g. /execute-jira-task prints
+                    # both PLANNING_COMPLETE and DEVELOPING_COMPLETE).
+                    self._current_phase = phase_name
+                    self._phase_marker = marker
+                    # No prompt to resubmit — disable recovery resubmission.
+                    self._last_phase_prompt = None
+                    self._phase_resubmitted = True
+
+                    wait_msg = f"[worker] === Phase: {phase_name} (waiting for marker, no new prompt) ==="
+                    await self.state.append_log(self.ticket_id, wait_msg)
+                    await self.broadcaster.broadcast_log(self.run_id, self.ticket_id, wait_msg)
+
+                    started_col = f"{phase_name}_started_at"
+                    await self.state.update_ticket(
+                        self.ticket_id, **{started_col: datetime.now(tz=timezone.utc).isoformat()}
+                    )
+                    logger.info("Phase %s started (marker-wait, no prompt) for ticket %s", phase_name, self.ticket_id)
+
+                    if ticket_state:
+                        await self.state.update_ticket_state(self.ticket_id, ticket_state)
+                        await self.broadcaster.broadcast_ticket_update(
+                            self.run_id, self.ticket_id, ticket_state
+                        )
+                        await self._sync_jira_status(phase_name)
+
+                    # Wait for marker from the already-running CLI
+                    completed = await self._wait_for_phase_completion(marker)
+
+                    if self._cancelled:
+                        break
+
+                    if completed:
+                        completed_col = f"{phase_name}_completed_at"
+                        await self.state.update_ticket(
+                            self.ticket_id,
+                            last_completed_phase=phase_name,
+                            **{completed_col: datetime.now(tz=timezone.utc).isoformat()},
+                        )
+                        logger.info(
+                            "Phase %s completed (marker detected, no prompt) for ticket %s",
+                            phase_name,
+                            self.ticket_id,
+                        )
+                    elif self._process_has_exited():
+                        ticket = await self.state.get_ticket(self.ticket_id)
+                        current_state = ticket.state if ticket else None
+                        exit_code = self._get_exit_code()
+
+                        if current_state == TicketState.DONE:
+                            logger.info(
+                                "Process exited (code=%s) during %s, ticket DONE — keeping state",
+                                exit_code,
+                                phase_name,
+                            )
+                            await self._notify_viewers_exit(exit_code)
+                            return True
+
+                        phase_done = self._is_phase_completed(ticket, current_state)
+                        if (
+                            current_state in (TicketState.PLANNING, TicketState.DEVELOPING, TicketState.REVIEW)
+                            and phase_done
+                        ):
+                            logger.info(
+                                "Process exited (code=%s) during %s, phase completed — keeping state",
+                                exit_code,
+                                phase_name,
+                            )
+                            await self._notify_viewers_exit(exit_code)
+                            return True
+
+                        error = f"CLI exited with code {exit_code} during {phase_name}"
+                        await self.state.update_ticket(self.ticket_id, error=error)
+                        await self.state.update_ticket_state(self.ticket_id, TicketState.FAILED)
+                        await self.broadcaster.broadcast_ticket_update(
+                            self.run_id, self.ticket_id, TicketState.FAILED, error=error
+                        )
+                        await self._notify_viewers_exit(exit_code)
+                        return False
                     continue
 
                 # Skip already-completed phases on retry
@@ -1015,20 +1093,14 @@ class Worker:
     }
 
     def _resolve_phase_marker(self, phase_name: str) -> str | None:
-        """Return the marker string for a phase, or None if the phase has no prompts.
+        """Return the marker string for a phase, or None if no marker is defined.
 
-        Markers are injected for any phase that has non-empty prompts, so the
-        engine can detect completion reliably instead of falling back to idle
-        detection (which triggers prematurely on CLI pauses like MCP loading or
-        API calls).  Phases with empty prompts are auto-completed by the
-        pipeline loop, so they never need markers.
+        Markers are returned for any phase listed in PHASE_MARKERS, regardless
+        of whether the phase has prompts.  For phases WITH prompts, the engine
+        detects the marker after prompt submission.  For phases WITHOUT prompts
+        (e.g. developing when the planning skill handles both), the engine
+        waits for the marker from the already-running CLI.
         """
-        phase_cfg = next(
-            (p for p in self.phases_config if p.get("phase") == phase_name),
-            None,
-        )
-        if not phase_cfg or not phase_cfg.get("prompts"):
-            return None
         return self.PHASE_MARKERS.get(phase_name)
 
     def _build_phase_prompt(self, prompts: list[str], marker: str | None) -> str:

@@ -40,7 +40,7 @@ def test_resolve_phase_marker_both_phases_filled_returns_developing_marker():
     assert worker._resolve_phase_marker("developing") == "[DEVELOPING_COMPLETE]"
 
 
-def test_resolve_phase_marker_only_developing_filled_returns_marker():
+def test_resolve_phase_marker_only_developing_filled_returns_markers():
     worker = make_worker(
         phases_config=[
             {
@@ -53,13 +53,13 @@ def test_resolve_phase_marker_only_developing_filled_returns_marker():
             },
         ]
     )
-    # Phase with prompts should get a marker even if the other phase is empty
+    # Phase with prompts gets marker
     assert worker._resolve_phase_marker("developing") == "[DEVELOPING_COMPLETE]"
-    # Phase without prompts gets no marker (auto-completed by pipeline)
-    assert worker._resolve_phase_marker("planning") is None
+    # Phase without prompts still gets marker (engine waits for it from running CLI)
+    assert worker._resolve_phase_marker("planning") == "[PLANNING_COMPLETE]"
 
 
-def test_resolve_phase_marker_only_planning_filled_returns_marker():
+def test_resolve_phase_marker_only_planning_filled_returns_markers():
     worker = make_worker(
         phases_config=[
             {
@@ -72,10 +72,10 @@ def test_resolve_phase_marker_only_planning_filled_returns_marker():
             },
         ]
     )
-    # Phase with prompts should get a marker even if the other phase is empty
+    # Phase with prompts gets marker
     assert worker._resolve_phase_marker("planning") == "[PLANNING_COMPLETE]"
-    # Phase without prompts gets no marker (auto-completed by pipeline)
-    assert worker._resolve_phase_marker("developing") is None
+    # Phase without prompts still gets marker (engine waits for it from running CLI)
+    assert worker._resolve_phase_marker("developing") == "[DEVELOPING_COMPLETE]"
 
 
 def test_resolve_phase_marker_single_phase_in_config_returns_marker():
@@ -89,6 +89,18 @@ def test_resolve_phase_marker_single_phase_in_config_returns_marker():
     )
     # Single phase with prompts should still get a marker
     assert worker._resolve_phase_marker("developing") == "[DEVELOPING_COMPLETE]"
+
+
+def test_resolve_phase_marker_review_phase_returns_none():
+    worker = make_worker(
+        phases_config=[
+            {"phase": "planning", "prompts": ["/planning-task {JIRA_KEY}"]},
+            {"phase": "developing", "prompts": []},
+            {"phase": "review", "prompts": []},
+        ]
+    )
+    # review is not in PHASE_MARKERS — returns None (auto-complete, no wait)
+    assert worker._resolve_phase_marker("review") is None
 
 
 # --- _build_phase_prompt tests ---
